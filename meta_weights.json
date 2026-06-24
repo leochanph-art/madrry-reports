@@ -1,0 +1,21 @@
+{
+ "version": "2026-06-24",
+ "generated": "2026-06-24",
+ "n_resolved": 107,
+ "denom": 153,
+ "spread_v1": 59,
+ "spread_v2": 63,
+ "weights": {
+  "Trend": 20,
+  "Proximity": 15,
+  "10MA Quality": 9,
+  "Vol Contraction": 15,
+  "Vol Expansion": 8,
+  "Flag": 9,
+  "Base Quality": 16,
+  "RS": 22,
+  "Volatility": 15,
+  "Supply Shock": 15,
+  "Risk": 9
+ }
+}
