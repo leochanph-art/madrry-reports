@@ -1,10 +1,505 @@
 {
- "generated": "2026-06-24",
+ "generated": "2026-06-25",
  "window": 40,
  "loss_mult": 0.92,
  "win_def": "fresh_52w_high",
  "loss_def": "entry*0.92 intraday-touch",
  "dedup": "first_appearance_per_ticker",
+ "study_summary": {
+  "asof": "2026-06-24",
+  "overall": {
+   "n": 128,
+   "w": 72,
+   "l": 56,
+   "wr": 56,
+   "open": 104,
+   "nodata": 12,
+   "total": 244
+  },
+  "by_meta": [
+   {
+    "k": ">=60",
+    "w": 24,
+    "l": 16,
+    "n": 40,
+    "wr": 60
+   },
+   {
+    "k": ">=50",
+    "w": 12,
+    "l": 11,
+    "n": 23,
+    "wr": 52
+   },
+   {
+    "k": ">=40",
+    "w": 19,
+    "l": 11,
+    "n": 30,
+    "wr": 63
+   },
+   {
+    "k": ">=30",
+    "w": 15,
+    "l": 12,
+    "n": 27,
+    "wr": 56
+   },
+   {
+    "k": ">=20",
+    "w": 2,
+    "l": 6,
+    "n": 8,
+    "wr": 25
+   }
+  ],
+  "by_rs": [
+   {
+    "k": "RS>=90",
+    "w": 33,
+    "l": 34,
+    "n": 67,
+    "wr": 49
+   },
+   {
+    "k": "RS>=80",
+    "w": 28,
+    "l": 16,
+    "n": 44,
+    "wr": 64
+   },
+   {
+    "k": "RS>=70",
+    "w": 8,
+    "l": 2,
+    "n": 10,
+    "wr": 80
+   },
+   {
+    "k": "RS>=0",
+    "w": 2,
+    "l": 2,
+    "n": 4,
+    "wr": 50
+   }
+  ],
+  "by_tier": [
+   {
+    "k": "A+",
+    "w": 6,
+    "l": 2,
+    "n": 8,
+    "wr": 75
+   },
+   {
+    "k": "A",
+    "w": 4,
+    "l": 5,
+    "n": 9,
+    "wr": 44
+   },
+   {
+    "k": "A-",
+    "w": 62,
+    "l": 49,
+    "n": 111,
+    "wr": 56
+   }
+  ],
+  "by_sector": [
+   {
+    "k": "Commercial Services",
+    "w": 1,
+    "l": 0,
+    "n": 1,
+    "wr": 100
+   },
+   {
+    "k": "Consumer Durables",
+    "w": 4,
+    "l": 0,
+    "n": 4,
+    "wr": 100
+   },
+   {
+    "k": "Consumer Services",
+    "w": 6,
+    "l": 0,
+    "n": 6,
+    "wr": 100
+   },
+   {
+    "k": "Distribution Services",
+    "w": 1,
+    "l": 0,
+    "n": 1,
+    "wr": 100
+   },
+   {
+    "k": "Finance",
+    "w": 11,
+    "l": 2,
+    "n": 13,
+    "wr": 85
+   },
+   {
+    "k": "Health Services",
+    "w": 4,
+    "l": 1,
+    "n": 5,
+    "wr": 80
+   },
+   {
+    "k": "Consumer Non-Durables",
+    "w": 4,
+    "l": 1,
+    "n": 5,
+    "wr": 80
+   },
+   {
+    "k": "Producer Manufacturing",
+    "w": 3,
+    "l": 1,
+    "n": 4,
+    "wr": 75
+   },
+   {
+    "k": "Health Technology",
+    "w": 13,
+    "l": 5,
+    "n": 18,
+    "wr": 72
+   },
+   {
+    "k": "Retail Trade",
+    "w": 2,
+    "l": 1,
+    "n": 3,
+    "wr": 67
+   },
+   {
+    "k": "Technology Services",
+    "w": 8,
+    "l": 6,
+    "n": 14,
+    "wr": 57
+   },
+   {
+    "k": "Industrial Services",
+    "w": 1,
+    "l": 1,
+    "n": 2,
+    "wr": 50
+   },
+   {
+    "k": "Electronic Technology",
+    "w": 12,
+    "l": 15,
+    "n": 27,
+    "wr": 44
+   },
+   {
+    "k": "Transportation",
+    "w": 2,
+    "l": 6,
+    "n": 8,
+    "wr": 25
+   },
+   {
+    "k": "Energy Minerals",
+    "w": 0,
+    "l": 8,
+    "n": 8,
+    "wr": 0
+   },
+   {
+    "k": "Non-Energy Minerals",
+    "w": 0,
+    "l": 7,
+    "n": 7,
+    "wr": 0
+   },
+   {
+    "k": "Communications",
+    "w": 0,
+    "l": 2,
+    "n": 2,
+    "wr": 0
+   }
+  ],
+  "by_htf": [
+   {
+    "k": "HTF",
+    "w": 6,
+    "l": 2,
+    "n": 8,
+    "wr": 75
+   },
+   {
+    "k": "non-HTF",
+    "w": 66,
+    "l": 54,
+    "n": 120,
+    "wr": 55
+   }
+  ],
+  "by_ants": [
+   {
+    "k": "ANTS ok",
+    "w": 38,
+    "l": 27,
+    "n": 65,
+    "wr": 58
+   },
+   {
+    "k": "no ANTS",
+    "w": 34,
+    "l": 29,
+    "n": 63,
+    "wr": 54
+   }
+  ],
+  "by_athigh": [
+   {
+    "k": "at_high",
+    "w": 14,
+    "l": 2,
+    "n": 16,
+    "wr": 88
+   },
+   {
+    "k": "below_high",
+    "w": 58,
+    "l": 54,
+    "n": 112,
+    "wr": 52
+   }
+  ],
+  "components": [
+   {
+    "comp": "RS",
+    "win_avg": 12.2,
+    "loss_avg": 8.7,
+    "edge": 3.4
+   },
+   {
+    "comp": "Proximity",
+    "win_avg": 8.7,
+    "loss_avg": 6.5,
+    "edge": 2.2
+   },
+   {
+    "comp": "Volatility",
+    "win_avg": 9.7,
+    "loss_avg": 8.6,
+    "edge": 1.0
+   },
+   {
+    "comp": "Supply Shock",
+    "win_avg": 4.1,
+    "loss_avg": 3.7,
+    "edge": 0.5
+   },
+   {
+    "comp": "Trend",
+    "win_avg": 7.8,
+    "loss_avg": 7.4,
+    "edge": 0.4
+   },
+   {
+    "comp": "Base Quality",
+    "win_avg": 14.6,
+    "loss_avg": 14.5,
+    "edge": 0.1
+   },
+   {
+    "comp": "Flag",
+    "win_avg": 10.0,
+    "loss_avg": 10.0,
+    "edge": 0.0
+   },
+   {
+    "comp": "Vol Expansion",
+    "win_avg": 0.2,
+    "loss_avg": 0.4,
+    "edge": -0.1
+   },
+   {
+    "comp": "Candle",
+    "win_avg": 0.0,
+    "loss_avg": 0.3,
+    "edge": -0.3
+   },
+   {
+    "comp": "Vol Contraction",
+    "win_avg": 7.0,
+    "loss_avg": 7.5,
+    "edge": -0.5
+   },
+   {
+    "comp": "10MA Quality",
+    "win_avg": 9.4,
+    "loss_avg": 10.4,
+    "edge": -1.1
+   },
+   {
+    "comp": "Risk",
+    "win_avg": 5.6,
+    "loss_avg": 7.1,
+    "edge": -1.4
+   }
+  ],
+  "recal": {
+   "weights": [
+    {
+     "comp": "Trend",
+     "cur": 15,
+     "new": 19,
+     "edge": 0.03
+    },
+    {
+     "comp": "Proximity",
+     "cur": 10,
+     "new": 15,
+     "edge": 0.218
+    },
+    {
+     "comp": "10MA Quality",
+     "cur": 15,
+     "new": 9,
+     "edge": -0.078
+    },
+    {
+     "comp": "Vol Contraction",
+     "cur": 15,
+     "new": 10,
+     "edge": -0.032
+    },
+    {
+     "comp": "Vol Expansion",
+     "cur": 10,
+     "new": 9,
+     "edge": -0.015
+    },
+    {
+     "comp": "Flag",
+     "cur": 10,
+     "new": 9,
+     "edge": 0.0
+    },
+    {
+     "comp": "Base Quality",
+     "cur": 15,
+     "new": 16,
+     "edge": 0.007
+    },
+    {
+     "comp": "RS",
+     "cur": 15,
+     "new": 22,
+     "edge": 0.229
+    },
+    {
+     "comp": "Volatility",
+     "cur": 10,
+     "new": 15,
+     "edge": 0.108
+    },
+    {
+     "comp": "Supply Shock",
+     "cur": 10,
+     "new": 15,
+     "edge": 0.052
+    },
+    {
+     "comp": "Risk",
+     "cur": 15,
+     "new": 9,
+     "edge": -0.097
+    }
+   ],
+   "denom_cur": 140,
+   "denom_new": 148,
+   "v1_buckets": [
+    {
+     "bucket": "60-+",
+     "w": 27,
+     "l": 13,
+     "n": 40,
+     "wr": 68
+    },
+    {
+     "bucket": "50-60",
+     "w": 32,
+     "l": 23,
+     "n": 55,
+     "wr": 58
+    },
+    {
+     "bucket": "40-50",
+     "w": 13,
+     "l": 18,
+     "n": 31,
+     "wr": 42
+    },
+    {
+     "bucket": "30-40",
+     "w": 0,
+     "l": 2,
+     "n": 2,
+     "wr": 0
+    },
+    {
+     "bucket": "0-30",
+     "w": 0,
+     "l": 0,
+     "n": 0,
+     "wr": null
+    }
+   ],
+   "v2_buckets": [
+    {
+     "bucket": "60-+",
+     "w": 47,
+     "l": 17,
+     "n": 64,
+     "wr": 73
+    },
+    {
+     "bucket": "50-60",
+     "w": 19,
+     "l": 20,
+     "n": 39,
+     "wr": 49
+    },
+    {
+     "bucket": "40-50",
+     "w": 5,
+     "l": 16,
+     "n": 21,
+     "wr": 24
+    },
+    {
+     "bucket": "30-40",
+     "w": 1,
+     "l": 3,
+     "n": 4,
+     "wr": 25
+    },
+    {
+     "bucket": "0-30",
+     "w": 0,
+     "l": 0,
+     "n": 0,
+     "wr": null
+    }
+   ],
+   "spread_v1": 62,
+   "spread_v2": 64,
+   "corr_v1": 0.2692,
+   "corr_v2": 0.4188
+  }
+ },
  "records": [
   {
    "ticker": "HUM",
@@ -89,8 +584,8 @@
    ],
    "prior_52w_high": 365.22,
    "mfe_pct": 4.5,
-   "mae_pct": -2.22,
-   "days_followed": 9,
+   "mae_pct": -3.13,
+   "days_followed": 10,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-10",
@@ -179,7 +674,7 @@
    "prior_52w_high": 91.0,
    "mfe_pct": 9.32,
    "mae_pct": -2.05,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -268,7 +763,7 @@
    "prior_52w_high": 66.55,
    "mfe_pct": 1.81,
    "mae_pct": -8.33,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -357,7 +852,7 @@
    "prior_52w_high": 29.73,
    "mfe_pct": 3.86,
    "mae_pct": -14.16,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-10",
@@ -443,7 +938,7 @@
    "prior_52w_high": 35.87,
    "mfe_pct": -0.33,
    "mae_pct": -7.84,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -527,8 +1022,8 @@
    ],
    "prior_52w_high": 110.39,
    "mfe_pct": -0.1,
-   "mae_pct": -14.13,
-   "days_followed": 9,
+   "mae_pct": -16.53,
+   "days_followed": 10,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -615,9 +1110,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 8.83,
-   "mfe_pct": 0.11,
+   "mfe_pct": 0.46,
    "mae_pct": -7.32,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -705,7 +1200,7 @@
    "prior_52w_high": 34.91,
    "mfe_pct": 1.54,
    "mae_pct": -4.94,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-10",
@@ -793,7 +1288,7 @@
    "prior_52w_high": 74.73,
    "mfe_pct": 0.4,
    "mae_pct": -11.52,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -880,7 +1375,7 @@
    "prior_52w_high": 18.48,
    "mfe_pct": 1.77,
    "mae_pct": -8.61,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -967,7 +1462,7 @@
    "prior_52w_high": 36.53,
    "mfe_pct": 4.61,
    "mae_pct": -3.31,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -1052,7 +1547,7 @@
    "prior_52w_high": 90.52,
    "mfe_pct": 2.66,
    "mae_pct": -3.29,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-10",
@@ -1137,8 +1632,8 @@
    ],
    "prior_52w_high": 203.34,
    "mfe_pct": 2.25,
-   "mae_pct": -6.9,
-   "days_followed": 9,
+   "mae_pct": -7.79,
+   "days_followed": 10,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -1222,9 +1717,9 @@
     "\ud83d\udca7 VOODOO DAY"
    ],
    "prior_52w_high": 64.54,
-   "mfe_pct": 0.55,
+   "mfe_pct": 1.4,
    "mae_pct": -8.41,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-12",
@@ -1307,7 +1802,7 @@
    "prior_52w_high": 92.55,
    "mfe_pct": 17.62,
    "mae_pct": -5.0,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -1392,7 +1887,7 @@
    "prior_52w_high": 32.52,
    "mfe_pct": 7.6,
    "mae_pct": -4.9,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -1479,7 +1974,7 @@
    "prior_52w_high": 243.32,
    "mfe_pct": 0.47,
    "mae_pct": -6.31,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -1560,13 +2055,13 @@
     "\ud83c\udfaf HUGGING 10MA"
    ],
    "prior_52w_high": 256.36,
-   "mfe_pct": 7.08,
+   "mfe_pct": 17.73,
    "mae_pct": -7.12,
-   "days_followed": 9,
-   "outcome": "open",
+   "days_followed": 10,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 10
   },
   {
    "ticker": "CALY",
@@ -1648,7 +2143,7 @@
    "prior_52w_high": 18.0,
    "mfe_pct": 12.52,
    "mae_pct": -4.32,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -1731,7 +2226,7 @@
    "prior_52w_high": 31.88,
    "mfe_pct": 5.57,
    "mae_pct": -6.65,
-   "days_followed": 9,
+   "days_followed": 10,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -1818,7 +2313,7 @@
    "prior_52w_high": 38.75,
    "mfe_pct": 0.96,
    "mae_pct": -10.67,
-   "days_followed": 8,
+   "days_followed": 9,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -1905,7 +2400,7 @@
    "prior_52w_high": 34.34,
    "mfe_pct": 5.95,
    "mae_pct": -3.91,
-   "days_followed": 8,
+   "days_followed": 9,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-12",
@@ -1992,7 +2487,7 @@
    "prior_52w_high": 46.99,
    "mfe_pct": 0.53,
    "mae_pct": -11.21,
-   "days_followed": 8,
+   "days_followed": 9,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -2078,9 +2573,9 @@
     "\ud83d\udca7 Dry vs Prev Day (43%)"
    ],
    "prior_52w_high": 9.14,
-   "mfe_pct": 1.87,
+   "mfe_pct": 4.29,
    "mae_pct": -9.02,
-   "days_followed": 8,
+   "days_followed": 9,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -2165,9 +2660,9 @@
     "\ud83d\udca7 Dry vs Prev Day (64%)"
    ],
    "prior_52w_high": 89.29,
-   "mfe_pct": 1.23,
+   "mfe_pct": 2.26,
    "mae_pct": -3.31,
-   "days_followed": 8,
+   "days_followed": 9,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -2249,8 +2744,8 @@
    ],
    "prior_52w_high": 62.52,
    "mfe_pct": 14.56,
-   "mae_pct": 0.55,
-   "days_followed": 8,
+   "mae_pct": -3.67,
+   "days_followed": 9,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -2332,7 +2827,7 @@
    "prior_52w_high": 103.28,
    "mfe_pct": 13.7,
    "mae_pct": -2.2,
-   "days_followed": 8,
+   "days_followed": 9,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -2419,8 +2914,8 @@
    ],
    "prior_52w_high": 232.0,
    "mfe_pct": 1.56,
-   "mae_pct": -13.5,
-   "days_followed": 7,
+   "mae_pct": -14.28,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-12",
@@ -2506,8 +3001,8 @@
    ],
    "prior_52w_high": 39.93,
    "mfe_pct": 8.36,
-   "mae_pct": -2.97,
-   "days_followed": 7,
+   "mae_pct": -4.08,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -2594,7 +3089,7 @@
    "prior_52w_high": 179.8,
    "mfe_pct": 11.47,
    "mae_pct": 1.25,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -2681,9 +3176,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 93.7,
-   "mfe_pct": 8.58,
+   "mfe_pct": 12.28,
    "mae_pct": -1.49,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-12",
@@ -2770,7 +3265,7 @@
    "prior_52w_high": 18.05,
    "mfe_pct": 3.51,
    "mae_pct": -3.34,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-15",
@@ -2856,7 +3351,7 @@
    "prior_52w_high": 238.48,
    "mfe_pct": 0.66,
    "mae_pct": -14.04,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -2943,7 +3438,7 @@
    "prior_52w_high": 89.0,
    "mfe_pct": 16.23,
    "mae_pct": -2.93,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -3029,7 +3524,7 @@
    "prior_52w_high": 54.4,
    "mfe_pct": 28.28,
    "mae_pct": -1.27,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-15",
@@ -3118,7 +3613,7 @@
    "prior_52w_high": 45.27,
    "mfe_pct": 1.8,
    "mae_pct": -9.84,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -3207,7 +3702,7 @@
    "prior_52w_high": 54.76,
    "mfe_pct": 0.13,
    "mae_pct": -3.45,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-12",
@@ -3292,9 +3787,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 134.28,
-   "mfe_pct": 1.15,
+   "mfe_pct": 5.69,
    "mae_pct": -6.35,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-15",
@@ -3381,7 +3876,7 @@
    "prior_52w_high": 17.23,
    "mfe_pct": 4.44,
    "mae_pct": -3.06,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-12",
@@ -3468,7 +3963,7 @@
    "prior_52w_high": 129.45,
    "mfe_pct": 2.93,
    "mae_pct": -6.41,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -3553,8 +4048,8 @@
    ],
    "prior_52w_high": 9.74,
    "mfe_pct": 1.57,
-   "mae_pct": -13.91,
-   "days_followed": 7,
+   "mae_pct": -15.85,
+   "days_followed": 8,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -3642,7 +4137,7 @@
    "prior_52w_high": 16.245,
    "mfe_pct": 3.21,
    "mae_pct": -2.02,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-12",
@@ -3730,7 +4225,7 @@
    "prior_52w_high": 293.54,
    "mfe_pct": 0.69,
    "mae_pct": -8.97,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -3817,8 +4312,8 @@
    ],
    "prior_52w_high": 39.27,
    "mfe_pct": 0.99,
-   "mae_pct": -8.7,
-   "days_followed": 7,
+   "mae_pct": -9.42,
+   "days_followed": 8,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -3903,8 +4398,8 @@
    ],
    "prior_52w_high": 252.03,
    "mfe_pct": 0.25,
-   "mae_pct": -12.6,
-   "days_followed": 7,
+   "mae_pct": -12.97,
+   "days_followed": 8,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -3989,13 +4484,13 @@
     "\ud83d\udca7 Dry vs Prev Day (54%)"
    ],
    "prior_52w_high": 177.22,
-   "mfe_pct": 1.02,
+   "mfe_pct": 6.88,
    "mae_pct": -5.22,
-   "days_followed": 7,
-   "outcome": "open",
+   "days_followed": 8,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 8
   },
   {
    "ticker": "XMTR",
@@ -4077,7 +4572,7 @@
    "prior_52w_high": 99.86,
    "mfe_pct": 9.63,
    "mae_pct": -1.94,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -4163,7 +4658,7 @@
    "prior_52w_high": 20.48,
    "mfe_pct": 0.76,
    "mae_pct": -8.94,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -4246,7 +4741,7 @@
    "prior_52w_high": 60.43,
    "mfe_pct": 14.06,
    "mae_pct": -7.32,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -4331,9 +4826,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 35.33,
-   "mfe_pct": 8.17,
+   "mfe_pct": 13.2,
    "mae_pct": -2.49,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -4416,7 +4911,7 @@
    "prior_52w_high": 276.815,
    "mfe_pct": 4.4,
    "mae_pct": -7.25,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -4497,9 +4992,9 @@
     "\ud83c\udfaf HUGGING 10MA"
    ],
    "prior_52w_high": 18.93,
-   "mfe_pct": 7.21,
+   "mfe_pct": 7.3,
    "mae_pct": -3.45,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -4582,7 +5077,7 @@
    "prior_52w_high": 17.78,
    "mfe_pct": 4.03,
    "mae_pct": -7.8,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -4668,7 +5163,7 @@
    "prior_52w_high": 70.0,
    "mfe_pct": 1.73,
    "mae_pct": -12.05,
-   "days_followed": 7,
+   "days_followed": 8,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -4754,9 +5249,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 16.73,
-   "mfe_pct": 3.11,
+   "mfe_pct": 6.57,
    "mae_pct": -2.71,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -4843,9 +5338,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 38.87,
-   "mfe_pct": 0.87,
+   "mfe_pct": 2.31,
    "mae_pct": -4.88,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -4931,12 +5426,12 @@
    ],
    "prior_52w_high": 149.11,
    "mfe_pct": 5.6,
-   "mae_pct": -6.47,
-   "days_followed": 6,
-   "outcome": "open",
+   "mae_pct": -9.02,
+   "days_followed": 7,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 7
   },
   {
    "ticker": "NXPI",
@@ -5020,8 +5515,8 @@
    ],
    "prior_52w_high": 339.95,
    "mfe_pct": 6.57,
-   "mae_pct": -3.67,
-   "days_followed": 6,
+   "mae_pct": -6.08,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -5109,8 +5604,8 @@
    ],
    "prior_52w_high": 71.9,
    "mfe_pct": 6.6,
-   "mae_pct": -0.75,
-   "days_followed": 6,
+   "mae_pct": -2.08,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -5193,8 +5688,8 @@
    ],
    "prior_52w_high": 192.83,
    "mfe_pct": 0.92,
-   "mae_pct": -6.64,
-   "days_followed": 6,
+   "mae_pct": -7.23,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -5278,7 +5773,7 @@
    "prior_52w_high": 474.03,
    "mfe_pct": 3.9,
    "mae_pct": -13.06,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -5362,7 +5857,7 @@
    "prior_52w_high": 90.9,
    "mfe_pct": 6.61,
    "mae_pct": -7.81,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -5443,9 +5938,9 @@
     "\ud83d\udca7 VOODOO DAY"
    ],
    "prior_52w_high": 142.35,
-   "mfe_pct": 1.93,
+   "mfe_pct": 2.47,
    "mae_pct": -9.83,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -5534,7 +6029,7 @@
    "prior_52w_high": 331.51,
    "mfe_pct": 10.19,
    "mae_pct": -1.28,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -5623,7 +6118,7 @@
    "prior_52w_high": 439.7,
    "mfe_pct": 5.58,
    "mae_pct": -4.53,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -5710,8 +6205,8 @@
    ],
    "prior_52w_high": 134.92,
    "mfe_pct": 11.58,
-   "mae_pct": -4.95,
-   "days_followed": 6,
+   "mae_pct": -6.29,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -5796,9 +6291,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 43.31,
-   "mfe_pct": 5.42,
+   "mfe_pct": 6.26,
    "mae_pct": -3.8,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -5886,7 +6381,7 @@
    "prior_52w_high": 166.5,
    "mfe_pct": 10.6,
    "mae_pct": -1.26,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -5973,8 +6468,8 @@
    ],
    "prior_52w_high": 41.82,
    "mfe_pct": -3.97,
-   "mae_pct": -15.74,
-   "days_followed": 6,
+   "mae_pct": -18.79,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -6061,8 +6556,8 @@
    ],
    "prior_52w_high": 418.9,
    "mfe_pct": 4.31,
-   "mae_pct": -5.22,
-   "days_followed": 6,
+   "mae_pct": -5.98,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -6150,7 +6645,7 @@
    "prior_52w_high": 785.66,
    "mfe_pct": 1.41,
    "mae_pct": -5.89,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -6237,8 +6732,8 @@
    ],
    "prior_52w_high": 57.49,
    "mfe_pct": -4.87,
-   "mae_pct": -16.66,
-   "days_followed": 6,
+   "mae_pct": -20.39,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-15",
@@ -6323,8 +6818,8 @@
    ],
    "prior_52w_high": 16.81,
    "mfe_pct": 6.22,
-   "mae_pct": -8.56,
-   "days_followed": 6,
+   "mae_pct": -13.64,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -6412,7 +6907,7 @@
    "prior_52w_high": 17.72,
    "mfe_pct": 3.01,
    "mae_pct": -10.33,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -6499,7 +6994,7 @@
    "prior_52w_high": 17.97,
    "mfe_pct": 5.54,
    "mae_pct": -3.66,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -6585,7 +7080,7 @@
    "prior_52w_high": 36.285,
    "mfe_pct": 14.2,
    "mae_pct": -3.52,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -6671,8 +7166,8 @@
    ],
    "prior_52w_high": 19.85,
    "mfe_pct": 5.25,
-   "mae_pct": -1.27,
-   "days_followed": 6,
+   "mae_pct": -2.49,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -6761,7 +7256,7 @@
    "prior_52w_high": 294.18,
    "mfe_pct": 11.79,
    "mae_pct": 0.06,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -6847,8 +7342,8 @@
    ],
    "prior_52w_high": 29.61,
    "mfe_pct": 2.02,
-   "mae_pct": -8.69,
-   "days_followed": 6,
+   "mae_pct": -12.45,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-15",
@@ -6935,8 +7430,8 @@
    ],
    "prior_52w_high": 1714.09,
    "mfe_pct": 4.26,
-   "mae_pct": -12.21,
-   "days_followed": 6,
+   "mae_pct": -12.85,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -7021,7 +7516,7 @@
    "prior_52w_high": 75.98,
    "mfe_pct": -7.41,
    "mae_pct": -28.21,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-15",
@@ -7107,7 +7602,7 @@
    "prior_52w_high": 155.82,
    "mfe_pct": 6.4,
    "mae_pct": -5.64,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -7193,7 +7688,7 @@
    "prior_52w_high": 32.24,
    "mfe_pct": -0.87,
    "mae_pct": -5.35,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -7275,8 +7770,8 @@
    "status_labels": [],
    "prior_52w_high": 51.25,
    "mfe_pct": 8.98,
-   "mae_pct": -6.15,
-   "days_followed": 6,
+   "mae_pct": -7.67,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -7362,8 +7857,8 @@
    ],
    "prior_52w_high": 72.5,
    "mfe_pct": 0.76,
-   "mae_pct": -13.44,
-   "days_followed": 6,
+   "mae_pct": -15.11,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -7447,9 +7942,9 @@
     "\ud83c\udfaf HUGGING 10MA"
    ],
    "prior_52w_high": 40.765,
-   "mfe_pct": 11.22,
+   "mfe_pct": 20.05,
    "mae_pct": -12.81,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -7535,8 +8030,8 @@
    ],
    "prior_52w_high": 105.91,
    "mfe_pct": 8.59,
-   "mae_pct": -3.89,
-   "days_followed": 6,
+   "mae_pct": -6.28,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -7621,7 +8116,7 @@
    "prior_52w_high": 18.92,
    "mfe_pct": 1.1,
    "mae_pct": -26.01,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -7705,8 +8200,8 @@
    ],
    "prior_52w_high": 81.42,
    "mfe_pct": 2.94,
-   "mae_pct": -9.09,
-   "days_followed": 6,
+   "mae_pct": -11.77,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -7791,8 +8286,8 @@
    ],
    "prior_52w_high": 11.87,
    "mfe_pct": -5.86,
-   "mae_pct": -17.94,
-   "days_followed": 6,
+   "mae_pct": -21.18,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-15",
@@ -7876,7 +8371,7 @@
    "prior_52w_high": 47.18,
    "mfe_pct": -1.01,
    "mae_pct": -18.43,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -7960,9 +8455,9 @@
     "\ud83d\udca7 Dry vs Prev Day (65%)"
    ],
    "prior_52w_high": 67.01,
-   "mfe_pct": 4.63,
+   "mfe_pct": 8.73,
    "mae_pct": -1.92,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-15",
@@ -8048,8 +8543,8 @@
    ],
    "prior_52w_high": 416.69,
    "mfe_pct": 3.46,
-   "mae_pct": -3.22,
-   "days_followed": 6,
+   "mae_pct": -4.7,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -8133,7 +8628,7 @@
    "prior_52w_high": 37.13,
    "mfe_pct": 5.83,
    "mae_pct": -5.52,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -8219,7 +8714,7 @@
    "prior_52w_high": 41.1,
    "mfe_pct": 15.03,
    "mae_pct": -5.28,
-   "days_followed": 6,
+   "days_followed": 7,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -8305,13 +8800,13 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 13.52,
-   "mfe_pct": -0.07,
+   "mfe_pct": 0.82,
    "mae_pct": -5.72,
-   "days_followed": 5,
-   "outcome": "open",
+   "days_followed": 6,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 6
   },
   {
    "ticker": "QCOM",
@@ -8394,8 +8889,8 @@
    ],
    "prior_52w_high": 259.92,
    "mfe_pct": 3.04,
-   "mae_pct": -12.41,
-   "days_followed": 5,
+   "mae_pct": -15.69,
+   "days_followed": 6,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -8480,9 +8975,9 @@
     "\ud83d\udca7 VOODOO DAY"
    ],
    "prior_52w_high": 80.2,
-   "mfe_pct": 13.04,
+   "mfe_pct": 15.88,
    "mae_pct": 0.94,
-   "days_followed": 5,
+   "days_followed": 6,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -8573,8 +9068,8 @@
    ],
    "prior_52w_high": 30.9,
    "mfe_pct": -0.26,
-   "mae_pct": -6.2,
-   "days_followed": 5,
+   "mae_pct": -6.46,
+   "days_followed": 6,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -8661,13 +9156,13 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 41.0,
-   "mfe_pct": 2.54,
+   "mfe_pct": 6.72,
    "mae_pct": -3.59,
-   "days_followed": 5,
-   "outcome": "open",
+   "days_followed": 6,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 6
   },
   {
    "ticker": "ST",
@@ -8750,12 +9245,12 @@
    ],
    "prior_52w_high": 53.89,
    "mfe_pct": -0.87,
-   "mae_pct": -7.56,
-   "days_followed": 5,
-   "outcome": "open",
+   "mae_pct": -9.89,
+   "days_followed": 6,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 6
   },
   {
    "ticker": "LEGN",
@@ -8833,7 +9328,7 @@
    "prior_52w_high": 45.297,
    "mfe_pct": -2.91,
    "mae_pct": -24.39,
-   "days_followed": 5,
+   "days_followed": 6,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -8921,7 +9416,7 @@
    "prior_52w_high": 150.46,
    "mfe_pct": 3.61,
    "mae_pct": -6.69,
-   "days_followed": 5,
+   "days_followed": 6,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -9009,8 +9504,8 @@
    ],
    "prior_52w_high": 426.98,
    "mfe_pct": -0.71,
-   "mae_pct": -4.58,
-   "days_followed": 5,
+   "mae_pct": -6.02,
+   "days_followed": 6,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -9093,9 +9588,9 @@
     "\ud83d\udee1\ufe0f MA Cluster (Premium)"
    ],
    "prior_52w_high": 211.79,
-   "mfe_pct": 11.73,
+   "mfe_pct": 14.2,
    "mae_pct": -9.13,
-   "days_followed": 5,
+   "days_followed": 6,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -9181,7 +9676,7 @@
    "prior_52w_high": 246.68,
    "mfe_pct": 2.33,
    "mae_pct": -3.82,
-   "days_followed": 5,
+   "days_followed": 6,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -9267,7 +9762,7 @@
    "prior_52w_high": 27.72,
    "mfe_pct": -2.5,
    "mae_pct": -8.34,
-   "days_followed": 5,
+   "days_followed": 6,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -9351,9 +9846,9 @@
     "\ud83d\udca7 Dry vs Prev Day (63%)"
    ],
    "prior_52w_high": 64.18,
-   "mfe_pct": 5.71,
+   "mfe_pct": 7.63,
    "mae_pct": -1.04,
-   "days_followed": 5,
+   "days_followed": 6,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -9439,7 +9934,7 @@
    "prior_52w_high": 211.8,
    "mfe_pct": 2.2,
    "mae_pct": -1.82,
-   "days_followed": 5,
+   "days_followed": 6,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -9525,7 +10020,7 @@
    "prior_52w_high": 370.175,
    "mfe_pct": 3.86,
    "mae_pct": -3.81,
-   "days_followed": 5,
+   "days_followed": 6,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -9611,7 +10106,7 @@
    "prior_52w_high": 83.0,
    "mfe_pct": 3.29,
    "mae_pct": -2.6,
-   "days_followed": 5,
+   "days_followed": 6,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-16",
@@ -9703,8 +10198,8 @@
    ],
    "prior_52w_high": 185.99,
    "mfe_pct": 7.65,
-   "mae_pct": -13.0,
-   "days_followed": 4,
+   "mae_pct": -16.17,
+   "days_followed": 5,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -9794,9 +10289,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 29.81,
-   "mfe_pct": 5.36,
+   "mfe_pct": 6.37,
    "mae_pct": -3.47,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -9889,7 +10384,7 @@
    "prior_52w_high": 150.07,
    "mfe_pct": 1.48,
    "mae_pct": -4.92,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -9977,7 +10472,7 @@
    "prior_52w_high": 302.95,
    "mfe_pct": 4.23,
    "mae_pct": -2.57,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -10065,8 +10560,8 @@
    ],
    "prior_52w_high": 67.2,
    "mfe_pct": 2.71,
-   "mae_pct": -3.87,
-   "days_followed": 4,
+   "mae_pct": -5.96,
+   "days_followed": 5,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -10154,7 +10649,7 @@
    "prior_52w_high": 82.26,
    "mfe_pct": 8.13,
    "mae_pct": -2.89,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -10237,7 +10732,7 @@
    "prior_52w_high": 278.705,
    "mfe_pct": -0.26,
    "mae_pct": -9.01,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -10321,7 +10816,7 @@
    "prior_52w_high": 17.68,
    "mfe_pct": 0.59,
    "mae_pct": -7.88,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -10408,7 +10903,7 @@
    "prior_52w_high": 50.33,
    "mfe_pct": -1.05,
    "mae_pct": -9.05,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -10495,7 +10990,7 @@
    "prior_52w_high": 265.61,
    "mfe_pct": -0.12,
    "mae_pct": -5.43,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -10584,7 +11079,7 @@
    "prior_52w_high": 51.89,
    "mfe_pct": -0.08,
    "mae_pct": -7.57,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -10672,7 +11167,7 @@
    "prior_52w_high": 51.59,
    "mfe_pct": -2.52,
    "mae_pct": -6.88,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -10760,7 +11255,7 @@
    "prior_52w_high": 421.6,
    "mfe_pct": 0.78,
    "mae_pct": -4.42,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -10845,9 +11340,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 63.76,
-   "mfe_pct": 4.79,
+   "mfe_pct": 5.47,
    "mae_pct": -5.32,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -10933,12 +11428,12 @@
    ],
    "prior_52w_high": 78.82,
    "mfe_pct": -0.34,
-   "mae_pct": -7.02,
-   "days_followed": 4,
-   "outcome": "open",
+   "mae_pct": -9.28,
+   "days_followed": 5,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 5
   },
   {
    "ticker": "AMBQ",
@@ -11020,8 +11515,8 @@
    ],
    "prior_52w_high": 89.33,
    "mfe_pct": 6.44,
-   "mae_pct": -8.38,
-   "days_followed": 4,
+   "mae_pct": -8.8,
+   "days_followed": 5,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -11108,9 +11603,9 @@
     "\ud83d\udca7 Dry vs Prev Day (60%)"
    ],
    "prior_52w_high": 34.96,
-   "mfe_pct": 1.55,
+   "mfe_pct": 1.96,
    "mae_pct": -3.15,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -11196,9 +11691,9 @@
     "\ud83d\udca7 Dry vs Prev Day (65%)"
    ],
    "prior_52w_high": 75.25,
-   "mfe_pct": 1.73,
+   "mfe_pct": 1.92,
    "mae_pct": -5.7,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -11284,8 +11779,8 @@
    ],
    "prior_52w_high": 36.99,
    "mfe_pct": -2.75,
-   "mae_pct": -8.6,
-   "days_followed": 4,
+   "mae_pct": -9.44,
+   "days_followed": 5,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -11369,8 +11864,8 @@
    ],
    "prior_52w_high": 34.34,
    "mfe_pct": 0.7,
-   "mae_pct": -9.86,
-   "days_followed": 4,
+   "mae_pct": -11.45,
+   "days_followed": 5,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -11454,9 +11949,9 @@
     "\ud83c\udfaf HUGGING 10MA"
    ],
    "prior_52w_high": 26.25,
-   "mfe_pct": 60.62,
+   "mfe_pct": 82.67,
    "mae_pct": -2.38,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -11542,7 +12037,7 @@
    "prior_52w_high": 19.75,
    "mfe_pct": 3.42,
    "mae_pct": -1.98,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -11627,12 +12122,12 @@
    ],
    "prior_52w_high": 122.17,
    "mfe_pct": 2.78,
-   "mae_pct": -6.51,
-   "days_followed": 4,
-   "outcome": "open",
+   "mae_pct": -10.4,
+   "days_followed": 5,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 5
   },
   {
    "ticker": "ZVRA",
@@ -11711,9 +12206,9 @@
     "\ud83c\udfaf HUGGING 10MA"
    ],
    "prior_52w_high": 14.27,
-   "mfe_pct": 2.49,
+   "mfe_pct": 3.42,
    "mae_pct": -3.03,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -11795,7 +12290,7 @@
    "prior_52w_high": 10.93,
    "mfe_pct": -0.32,
    "mae_pct": -12.85,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -11881,9 +12376,9 @@
     "\ud83d\udca7 Dry vs Prev Day (53%)"
    ],
    "prior_52w_high": 1182.73,
-   "mfe_pct": -2.13,
+   "mfe_pct": -1.03,
    "mae_pct": -5.89,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -11969,8 +12464,8 @@
    ],
    "prior_52w_high": 33.33,
    "mfe_pct": -0.85,
-   "mae_pct": -17.37,
-   "days_followed": 4,
+   "mae_pct": -22.1,
+   "days_followed": 5,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -12058,7 +12553,7 @@
    "prior_52w_high": 126.5,
    "mfe_pct": -2.6,
    "mae_pct": -10.43,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-17",
@@ -12141,9 +12636,9 @@
     "\ud83d\udca7 Dry vs Prev Day (58%)"
    ],
    "prior_52w_high": 81.0,
-   "mfe_pct": 2.79,
+   "mfe_pct": 2.96,
    "mae_pct": -3.55,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -12226,7 +12721,7 @@
    "prior_52w_high": 31.25,
    "mfe_pct": -0.3,
    "mae_pct": -6.84,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -12307,9 +12802,9 @@
     "\ud83d\udca7 Dry vs Prev Day (65%)"
    ],
    "prior_52w_high": 53.5,
-   "mfe_pct": 5.53,
+   "mfe_pct": 6.4,
    "mae_pct": -4.19,
-   "days_followed": 4,
+   "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -12399,7 +12894,7 @@
    "prior_52w_high": 398.13,
    "mfe_pct": 17.7,
    "mae_pct": 2.68,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -12487,13 +12982,13 @@
     "\ud83d\udca7 Dry vs Prev Day (63%)"
    ],
    "prior_52w_high": 53.82,
-   "mfe_pct": 1.38,
+   "mfe_pct": 4.11,
    "mae_pct": -4.57,
-   "days_followed": 3,
-   "outcome": "open",
+   "days_followed": 4,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 4
   },
   {
    "ticker": "EVC",
@@ -12574,9 +13069,9 @@
     "\ud83d\udca7 VOODOO DAY"
    ],
    "prior_52w_high": 10.12,
-   "mfe_pct": 12.84,
+   "mfe_pct": 17.18,
    "mae_pct": -3.52,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -12662,7 +13157,7 @@
    "prior_52w_high": 94.73,
    "mfe_pct": -1.15,
    "mae_pct": -7.83,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -12748,13 +13243,13 @@
     "\ud83d\udca7 Dry vs Prev Day (48%)"
    ],
    "prior_52w_high": 134.09,
-   "mfe_pct": 3.06,
+   "mfe_pct": 3.92,
    "mae_pct": -2.19,
-   "days_followed": 3,
-   "outcome": "open",
+   "days_followed": 4,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 4
   },
   {
    "ticker": "INGM",
@@ -12837,8 +13332,8 @@
    ],
    "prior_52w_high": 31.69,
    "mfe_pct": -3.41,
-   "mae_pct": -7.78,
-   "days_followed": 3,
+   "mae_pct": -7.88,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -12926,7 +13421,7 @@
    "prior_52w_high": 12.12,
    "mfe_pct": 1.97,
    "mae_pct": -1.06,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-18",
@@ -13015,7 +13510,7 @@
    "prior_52w_high": 107.99,
    "mfe_pct": 2.01,
    "mae_pct": -2.73,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -13106,7 +13601,7 @@
    "prior_52w_high": 58.71,
    "mfe_pct": -0.58,
    "mae_pct": -2.43,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -13194,7 +13689,7 @@
    "prior_52w_high": 24.82,
    "mfe_pct": -0.88,
    "mae_pct": -5.59,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -13280,7 +13775,7 @@
    "prior_52w_high": 14.38,
    "mfe_pct": 0.22,
    "mae_pct": -5.09,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -13365,7 +13860,7 @@
    "prior_52w_high": 66.98,
    "mfe_pct": 6.93,
    "mae_pct": -6.24,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -13448,9 +13943,9 @@
     "\ud83d\udca7 Dry vs Prev Day (37%)"
    ],
    "prior_52w_high": 70.72,
-   "mfe_pct": 3.58,
+   "mfe_pct": 4.96,
    "mae_pct": -4.36,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -13541,7 +14036,7 @@
    "prior_52w_high": 26.32,
    "mfe_pct": 6.79,
    "mae_pct": -2.99,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -13626,9 +14121,9 @@
     "\ud83d\udca7 Dry vs Prev Day (34%)"
    ],
    "prior_52w_high": 129.35,
-   "mfe_pct": 5.52,
+   "mfe_pct": 6.62,
    "mae_pct": -3.28,
-   "days_followed": 3,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -13709,12 +14204,12 @@
    ],
    "prior_52w_high": 320.95,
    "mfe_pct": 0.19,
-   "mae_pct": -6.65,
-   "days_followed": 3,
-   "outcome": "open",
+   "mae_pct": -8.25,
+   "days_followed": 4,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 4
   },
   {
    "ticker": "MU",
@@ -13800,8 +14295,8 @@
    ],
    "prior_52w_high": 1149.4301,
    "mfe_pct": 7.02,
-   "mae_pct": -8.42,
-   "days_followed": 2,
+   "mae_pct": -12.6,
+   "days_followed": 3,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -13889,8 +14384,8 @@
    ],
    "prior_52w_high": 110.2,
    "mfe_pct": 0.87,
-   "mae_pct": -3.15,
-   "days_followed": 2,
+   "mae_pct": -3.95,
+   "days_followed": 3,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -13977,9 +14472,9 @@
     "\ud83d\udca7 Dry vs Prev Day (51%)"
    ],
    "prior_52w_high": 15.37,
-   "mfe_pct": 1.21,
+   "mfe_pct": 1.95,
    "mae_pct": -1.21,
-   "days_followed": 2,
+   "days_followed": 3,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -14063,9 +14558,9 @@
     "\ud83d\udca7 Dry vs Prev Day (64%)"
    ],
    "prior_52w_high": 45.83,
-   "mfe_pct": 0.11,
-   "mae_pct": -4.31,
-   "days_followed": 2,
+   "mfe_pct": 0.15,
+   "mae_pct": -9.97,
+   "days_followed": 3,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -14153,9 +14648,9 @@
     "\ud83d\udca7 Dry vs Prev Day (43%)"
    ],
    "prior_52w_high": 41.03,
-   "mfe_pct": 0.86,
+   "mfe_pct": 2.94,
    "mae_pct": -2.26,
-   "days_followed": 2,
+   "days_followed": 3,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -14245,7 +14740,7 @@
    "prior_52w_high": 119.13,
    "mfe_pct": -0.13,
    "mae_pct": -3.69,
-   "days_followed": 2,
+   "days_followed": 3,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -14332,9 +14827,9 @@
     "\ud83d\udca7 Dry vs Prev Day (65%)"
    ],
    "prior_52w_high": 168.74,
-   "mfe_pct": -1.16,
-   "mae_pct": -4.36,
-   "days_followed": 2,
+   "mfe_pct": -1.07,
+   "mae_pct": -5.01,
+   "days_followed": 3,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -14419,13 +14914,13 @@
     "\ud83d\udca7 Dry vs Prev Day (48%)"
    ],
    "prior_52w_high": 234.42,
-   "mfe_pct": -0.82,
+   "mfe_pct": 3.99,
    "mae_pct": -3.53,
-   "days_followed": 2,
-   "outcome": "open",
+   "days_followed": 3,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 3
   },
   {
    "ticker": "KNX",
@@ -14508,7 +15003,7 @@
    "prior_52w_high": 82.86,
    "mfe_pct": 1.36,
    "mae_pct": -2.42,
-   "days_followed": 2,
+   "days_followed": 3,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -14594,8 +15089,8 @@
    ],
    "prior_52w_high": 32.15,
    "mfe_pct": -2.85,
-   "mae_pct": -13.25,
-   "days_followed": 2,
+   "mae_pct": -21.67,
+   "days_followed": 3,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -14682,9 +15177,9 @@
     "\ud83d\udca7 Dry vs Prev Day (63%)"
    ],
    "prior_52w_high": 79.19,
-   "mfe_pct": -0.07,
+   "mfe_pct": 2.35,
    "mae_pct": -4.04,
-   "days_followed": 2,
+   "days_followed": 3,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -14770,8 +15265,8 @@
    ],
    "prior_52w_high": 19.6,
    "mfe_pct": -0.62,
-   "mae_pct": -4.69,
-   "days_followed": 2,
+   "mae_pct": -5.41,
+   "days_followed": 3,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -14855,9 +15350,9 @@
     "\ud83d\udca7 Dry vs Prev Day (54%)"
    ],
    "prior_52w_high": 160.36,
-   "mfe_pct": 0.62,
+   "mfe_pct": 1.46,
    "mae_pct": -4.73,
-   "days_followed": 2,
+   "days_followed": 3,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -14943,7 +15438,7 @@
    "prior_52w_high": 15.45,
    "mfe_pct": 10.73,
    "mae_pct": -7.72,
-   "days_followed": 2,
+   "days_followed": 3,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-22",
@@ -15028,7 +15523,7 @@
    "prior_52w_high": 28.97,
    "mfe_pct": -3.7,
    "mae_pct": -18.8,
-   "days_followed": 2,
+   "days_followed": 3,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -15112,8 +15607,8 @@
    ],
    "prior_52w_high": 16.7,
    "mfe_pct": -0.7,
-   "mae_pct": -3.91,
-   "days_followed": 2,
+   "mae_pct": -5.51,
+   "days_followed": 3,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -15202,8 +15697,8 @@
    ],
    "prior_52w_high": 69.47,
    "mfe_pct": 6.93,
-   "mae_pct": -11.12,
-   "days_followed": 2,
+   "mae_pct": -17.5,
+   "days_followed": 3,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -15290,9 +15785,9 @@
     "\ud83d\udca7 Dry vs Prev Day (34%)"
    ],
    "prior_52w_high": 103.12,
-   "mfe_pct": -1.13,
-   "mae_pct": -2.35,
-   "days_followed": 1,
+   "mfe_pct": -0.78,
+   "mae_pct": -3.29,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -15377,9 +15872,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 83.92,
-   "mfe_pct": -2.18,
+   "mfe_pct": -1.74,
    "mae_pct": -6.0,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -15466,8 +15961,8 @@
    ],
    "prior_52w_high": 174.66,
    "mfe_pct": 0.88,
-   "mae_pct": -1.44,
-   "days_followed": 1,
+   "mae_pct": -3.42,
+   "days_followed": 2,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -15551,13 +16046,13 @@
     "\ud83d\udca7 Dry vs Prev Day (25%)"
    ],
    "prior_52w_high": 105.2,
-   "mfe_pct": -0.77,
+   "mfe_pct": 0.54,
    "mae_pct": -3.41,
-   "days_followed": 1,
-   "outcome": "open",
+   "days_followed": 2,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 2
   },
   {
    "ticker": "SCCO",
@@ -15640,8 +16135,8 @@
    ],
    "prior_52w_high": 221.6733,
    "mfe_pct": -4.73,
-   "mae_pct": -8.11,
-   "days_followed": 1,
+   "mae_pct": -11.63,
+   "days_followed": 2,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -15727,8 +16222,8 @@
    ],
    "prior_52w_high": 788.75,
    "mfe_pct": -2.99,
-   "mae_pct": -6.75,
-   "days_followed": 1,
+   "mae_pct": -7.44,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -15813,9 +16308,9 @@
     "\ud83d\udca7 Dry vs Prev Day (11%)"
    ],
    "prior_52w_high": 288.68,
-   "mfe_pct": -0.75,
+   "mfe_pct": 2.16,
    "mae_pct": -5.92,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -15901,8 +16396,8 @@
    ],
    "prior_52w_high": 85.73,
    "mfe_pct": -1.84,
-   "mae_pct": -5.44,
-   "days_followed": 1,
+   "mae_pct": -7.86,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -15986,9 +16481,9 @@
     "\ud83d\udca7 Dry vs Prev Day (49%)"
    ],
    "prior_52w_high": 43.08,
-   "mfe_pct": 0.5,
+   "mfe_pct": 3.03,
    "mae_pct": -3.29,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -16070,8 +16565,8 @@
    ],
    "prior_52w_high": 22.03,
    "mfe_pct": -4.3,
-   "mae_pct": -11.97,
-   "days_followed": 1,
+   "mae_pct": -21.56,
+   "days_followed": 2,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -16154,8 +16649,8 @@
    ],
    "prior_52w_high": 12.54,
    "mfe_pct": -0.96,
-   "mae_pct": -4.4,
-   "days_followed": 1,
+   "mae_pct": -5.45,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -16243,9 +16738,9 @@
     "\ud83d\udca7 Dry vs Prev Day (49%)"
    ],
    "prior_52w_high": 291.01,
-   "mfe_pct": 2.66,
+   "mfe_pct": 3.17,
    "mae_pct": -3.18,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -16331,9 +16826,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 43.81,
-   "mfe_pct": 0.56,
+   "mfe_pct": 0.59,
    "mae_pct": -3.8,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -16423,7 +16918,7 @@
    "prior_52w_high": 101.51,
    "mfe_pct": -0.67,
    "mae_pct": -5.04,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -16511,9 +17006,9 @@
     "\ud83d\udca7 Dry vs Prev Day (20%)"
    ],
    "prior_52w_high": 23.1,
-   "mfe_pct": -2.08,
+   "mfe_pct": 0.84,
    "mae_pct": -3.05,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -16600,9 +17095,9 @@
     "\ud83d\udca7 Dry vs Prev Day (32%)"
    ],
    "prior_52w_high": 9.44,
-   "mfe_pct": -1.3,
-   "mae_pct": -2.6,
-   "days_followed": 1,
+   "mfe_pct": -0.33,
+   "mae_pct": -4.44,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -16689,9 +17184,9 @@
     "\ud83d\udca7 Dry vs Prev Day (55%)"
    ],
    "prior_52w_high": 57.98,
-   "mfe_pct": 0.31,
+   "mfe_pct": 0.86,
    "mae_pct": -1.09,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -16780,8 +17275,8 @@
    ],
    "prior_52w_high": 72.28,
    "mfe_pct": -5.88,
-   "mae_pct": -9.01,
-   "days_followed": 1,
+   "mae_pct": -12.8,
+   "days_followed": 2,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -16866,9 +17361,9 @@
     "\ud83d\udca7 Dry vs Prev Day (33%)"
    ],
    "prior_52w_high": 32.29,
-   "mfe_pct": -1.82,
+   "mfe_pct": -0.93,
    "mae_pct": -5.65,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -16954,9 +17449,9 @@
     "\ud83d\udca7 Dry vs Prev Day (59%)"
    ],
    "prior_52w_high": 16.61,
-   "mfe_pct": 1.39,
+   "mfe_pct": 5.45,
    "mae_pct": -3.45,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -17041,13 +17536,13 @@
     "\ud83d\udca7 Dry vs Prev Day (35%)"
    ],
    "prior_52w_high": 87.39,
-   "mfe_pct": 0.28,
+   "mfe_pct": 4.59,
    "mae_pct": -2.86,
-   "days_followed": 1,
-   "outcome": "open",
+   "days_followed": 2,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 2
   },
   {
    "ticker": "MSGE",
@@ -17129,9 +17624,9 @@
     "\ud83d\udca7 Dry vs Prev Day (55%)"
    ],
    "prior_52w_high": 75.7,
-   "mfe_pct": 1.36,
+   "mfe_pct": 2.57,
    "mae_pct": -1.49,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -17218,7 +17713,7 @@
    "prior_52w_high": 144.25,
    "mfe_pct": -2.9,
    "mae_pct": -7.17,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -17303,9 +17798,9 @@
     "\ud83d\udca7 Dry vs Prev Day (62%)"
    ],
    "prior_52w_high": 206.86,
-   "mfe_pct": 0.46,
+   "mfe_pct": 1.13,
    "mae_pct": -2.98,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -17391,9 +17886,9 @@
     "\ud83d\udca7 Dry vs Prev Day (58%)"
    ],
    "prior_52w_high": 24.39,
-   "mfe_pct": -1.8,
+   "mfe_pct": 1.37,
    "mae_pct": -4.45,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -17477,13 +17972,13 @@
     "\ud83d\udca7 Dry vs Prev Day (41%)"
    ],
    "prior_52w_high": 76.515,
-   "mfe_pct": 0.59,
+   "mfe_pct": 7.28,
    "mae_pct": -2.52,
-   "days_followed": 1,
-   "outcome": "open",
+   "days_followed": 2,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 2
   },
   {
    "ticker": "SN",
@@ -17563,13 +18058,13 @@
     "\ud83d\udca7 Dry vs Prev Day (59%)"
    ],
    "prior_52w_high": 141.81,
-   "mfe_pct": -3.0,
+   "mfe_pct": 0.1,
    "mae_pct": -5.26,
-   "days_followed": 1,
-   "outcome": "open",
+   "days_followed": 2,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 2
   },
   {
    "ticker": "TRS",
@@ -17651,8 +18146,8 @@
    ],
    "prior_52w_high": 44.87,
    "mfe_pct": -1.25,
-   "mae_pct": -4.29,
-   "days_followed": 1,
+   "mae_pct": -4.74,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -17739,8 +18234,8 @@
    ],
    "prior_52w_high": 34.42,
    "mfe_pct": -0.29,
-   "mae_pct": -3.62,
-   "days_followed": 1,
+   "mae_pct": -6.46,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -17824,9 +18319,9 @@
     "\ud83d\udca7 Dry vs Prev Day (42%)"
    ],
    "prior_52w_high": 46.63,
-   "mfe_pct": 3.4,
+   "mfe_pct": 10.7,
    "mae_pct": -2.7,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -17910,13 +18405,13 @@
     "\ud83d\udca7 Dry vs Prev Day (33%)"
    ],
    "prior_52w_high": 34.39,
-   "mfe_pct": -0.35,
+   "mfe_pct": 0.01,
    "mae_pct": -5.51,
-   "days_followed": 1,
-   "outcome": "open",
+   "days_followed": 2,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 2
   },
   {
    "ticker": "MIDD",
@@ -17997,9 +18492,9 @@
     "\ud83d\udca7 Dry vs Prev Day (25%)"
    ],
    "prior_52w_high": 173.42,
-   "mfe_pct": -3.36,
+   "mfe_pct": -1.7,
    "mae_pct": -5.89,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -18084,8 +18579,8 @@
    ],
    "prior_52w_high": 38.28,
    "mfe_pct": -0.45,
-   "mae_pct": -3.9,
-   "days_followed": 1,
+   "mae_pct": -4.73,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -18170,9 +18665,9 @@
     "\ud83d\udca7 Dry vs Prev Day (55%)"
    ],
    "prior_52w_high": 428.93,
-   "mfe_pct": -1.41,
+   "mfe_pct": 2.05,
    "mae_pct": -5.3,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -18253,9 +18748,9 @@
     "\ud83d\udca7 Dry vs Prev Day (44%)"
    ],
    "prior_52w_high": 64.25,
-   "mfe_pct": -0.03,
+   "mfe_pct": 0.95,
    "mae_pct": -7.84,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -18342,7 +18837,7 @@
    "prior_52w_high": 27.69,
    "mfe_pct": 0.36,
    "mae_pct": -4.59,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -18423,9 +18918,9 @@
     "\ud83d\udca7 Dry vs Prev Day (57%)"
    ],
    "prior_52w_high": 18.67,
-   "mfe_pct": 2.67,
+   "mfe_pct": 10.49,
    "mae_pct": -5.22,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -18508,12 +19003,12 @@
    ],
    "prior_52w_high": 163.13,
    "mfe_pct": -3.22,
-   "mae_pct": -7.62,
-   "days_followed": 1,
-   "outcome": "open",
+   "mae_pct": -11.22,
+   "days_followed": 2,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 2
   },
   {
    "ticker": "TNGX",
@@ -18590,9 +19085,9 @@
     "\ud83d\udca7 Dry vs Prev Day (52%)"
    ],
    "prior_52w_high": 34.39,
-   "mfe_pct": 0.14,
+   "mfe_pct": 2.86,
    "mae_pct": -3.58,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -18674,9 +19169,9 @@
     "\ud83d\udca7 Dry vs Prev Day (4%)"
    ],
    "prior_52w_high": 17.4,
-   "mfe_pct": -5.21,
+   "mfe_pct": -3.15,
    "mae_pct": -7.95,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -18760,9 +19255,9 @@
     "\ud83d\udca7 Dry vs Prev Day (37%)"
    ],
    "prior_52w_high": 12.938,
-   "mfe_pct": -1.41,
+   "mfe_pct": -0.6,
    "mae_pct": -5.73,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -18848,7 +19343,7 @@
    "prior_52w_high": 205.31,
    "mfe_pct": -0.4,
    "mae_pct": -5.24,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -18934,9 +19429,9 @@
     "\ud83d\udca7 Dry vs Prev Day (42%)"
    ],
    "prior_52w_high": 151.57,
-   "mfe_pct": 0.76,
+   "mfe_pct": 2.34,
    "mae_pct": -2.51,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-06-23",
@@ -19021,8 +19516,8 @@
    ],
    "prior_52w_high": 28.59,
    "mfe_pct": -2.27,
-   "mae_pct": -5.73,
-   "days_followed": 1,
+   "mae_pct": -5.75,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -19107,8 +19602,8 @@
    ],
    "prior_52w_high": 236.35,
    "mfe_pct": -2.73,
-   "mae_pct": -6.71,
-   "days_followed": 1,
+   "mae_pct": -7.4,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -19191,9 +19686,9 @@
     "\ud83d\udca7 Dry vs Prev Day (9%)"
    ],
    "prior_52w_high": 166.86,
-   "mfe_pct": -2.28,
+   "mfe_pct": -1.89,
    "mae_pct": -7.46,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -19277,9 +19772,9 @@
     "\ud83d\udca7 Dry vs Prev Day (25%)"
    ],
    "prior_52w_high": 30.9,
-   "mfe_pct": -2.16,
+   "mfe_pct": -0.25,
    "mae_pct": -5.74,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -19361,9 +19856,9 @@
     "\ud83d\udca7 Dry vs Prev Day (49%)"
    ],
    "prior_52w_high": 29.83,
-   "mfe_pct": -0.4,
+   "mfe_pct": 5.18,
    "mae_pct": -3.02,
-   "days_followed": 1,
+   "days_followed": 2,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -19375,19 +19870,19 @@
    "tier": "A-",
    "entry": 30.44,
    "loss_line": 28.0048,
-   "meta_score": 41.0,
+   "meta_score": 43.9,
    "meta_components": {
     "Trend": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 20
     },
     "Proximity": {
-     "pts": 10,
-     "max": 10
+     "pts": 15,
+     "max": 15
     },
     "10MA Quality": {
-     "pts": 12,
-     "max": 15
+     "pts": 7,
+     "max": 9
     },
     "Vol Contraction": {
      "pts": 0,
@@ -19395,31 +19890,31 @@
     },
     "Vol Expansion": {
      "pts": 0,
-     "max": 10
+     "max": 8
     },
     "Candle": {
      "pts": 0,
-     "max": 10
+     "max": 9
     },
     "Base Quality": {
-     "pts": 15,
-     "max": 15
+     "pts": 16,
+     "max": 16
     },
     "RS": {
+     "pts": 22,
+     "max": 22
+    },
+    "Volatility": {
      "pts": 15,
      "max": 15
     },
-    "Volatility": {
-     "pts": 10,
-     "max": 10
-    },
     "Supply Shock": {
-     "pts": 5,
-     "max": 10
+     "pts": 8,
+     "max": 15
     },
     "Risk": {
-     "pts": 10,
-     "max": 15
+     "pts": 6,
+     "max": 9
     }
    },
    "rs_rating": 88,
@@ -19443,31 +19938,39 @@
    "nh_3m": 12,
    "days_since_high": 1,
    "status_labels": [
+    "\u26a1 STRONG MOMENTUM",
     "\ud83c\udfaf HUGGING 10MA",
     "\ud83d\udd25 MARKET LEADER",
     "\ud83d\udca7 Dry vs Prev Day (59%)"
    ],
-   "outcome": "nodata"
+   "prior_52w_high": 30.96,
+   "mfe_pct": -0.3,
+   "mae_pct": -3.68,
+   "days_followed": 1,
+   "outcome": "open",
+   "same_bar_ambiguous": false,
+   "resolve_date": null,
+   "days_to_resolve": null
   },
   {
-   "ticker": "MD",
+   "ticker": "CNK",
    "pick_date": "2026-06-23",
    "tier": "A-",
-   "entry": 24.3,
-   "loss_line": 22.356,
-   "meta_score": 49.0,
+   "entry": 34.26,
+   "loss_line": 31.5192,
+   "meta_score": 51.2,
    "meta_components": {
     "Trend": {
-     "pts": 5,
-     "max": 15
+     "pts": 13,
+     "max": 20
     },
     "Proximity": {
-     "pts": 10,
-     "max": 10
+     "pts": 15,
+     "max": 15
     },
     "10MA Quality": {
-     "pts": 12,
-     "max": 15
+     "pts": 7,
+     "max": 9
     },
     "Vol Contraction": {
      "pts": 10,
@@ -19475,31 +19978,118 @@
     },
     "Vol Expansion": {
      "pts": 0,
-     "max": 10
+     "max": 8
     },
-    "Flag": {
-     "pts": 10,
-     "max": 10
+    "Candle": {
+     "pts": 0,
+     "max": 9
     },
     "Base Quality": {
-     "pts": 15,
-     "max": 15
+     "pts": 16,
+     "max": 16
     },
     "RS": {
+     "pts": 22,
+     "max": 22
+    },
+    "Volatility": {
      "pts": 15,
      "max": 15
     },
-    "Volatility": {
-     "pts": 6,
-     "max": 10
-    },
     "Supply Shock": {
-     "pts": 5,
-     "max": 10
+     "pts": 8,
+     "max": 15
     },
     "Risk": {
+     "pts": 6,
+     "max": 9
+    }
+   },
+   "rs_rating": 76,
+   "ind_rs": 31,
+   "rs_new_high": false,
+   "sector": "Consumer Services",
+   "theme": "Movies/Entertainment",
+   "ind_name": "Entertainment",
+   "is_htf": false,
+   "power_score": 27.0,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 0,
+   "ants_3m_peak": 0,
+   "ants_rs_rising": true,
+   "adr": 2.6,
+   "dist_52w": 2.6,
+   "at_high": false,
+   "nh_1m": 4,
+   "nh_3m": 4,
+   "days_since_high": 7,
+   "status_labels": [
+    "\u26a1 STRONG MOMENTUM",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udd25 MARKET LEADER"
+   ],
+   "prior_52w_high": 34.73,
+   "mfe_pct": -0.6,
+   "mae_pct": -3.82,
+   "days_followed": 1,
+   "outcome": "open",
+   "same_bar_ambiguous": false,
+   "resolve_date": null,
+   "days_to_resolve": null
+  },
+  {
+   "ticker": "MD",
+   "pick_date": "2026-06-23",
+   "tier": "A-",
+   "entry": 24.3,
+   "loss_line": 22.356,
+   "meta_score": 49.8,
+   "meta_components": {
+    "Trend": {
+     "pts": 7,
+     "max": 20
+    },
+    "Proximity": {
+     "pts": 15,
+     "max": 15
+    },
+    "10MA Quality": {
+     "pts": 7,
+     "max": 9
+    },
+    "Vol Contraction": {
      "pts": 10,
      "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 8
+    },
+    "Flag": {
+     "pts": 9,
+     "max": 9
+    },
+    "Base Quality": {
+     "pts": 16,
+     "max": 16
+    },
+    "RS": {
+     "pts": 22,
+     "max": 22
+    },
+    "Volatility": {
+     "pts": 9,
+     "max": 15
+    },
+    "Supply Shock": {
+     "pts": 8,
+     "max": 15
+    },
+    "Risk": {
+     "pts": 6,
+     "max": 9
     }
    },
    "rs_rating": 81,
@@ -19530,87 +20120,14 @@
     "\ud83d\udd25 MARKET LEADER",
     "\ud83d\udca7 Dry vs Prev Day (63%)"
    ],
-   "outcome": "nodata"
-  },
-  {
-   "ticker": "CNK",
-   "pick_date": "2026-06-23",
-   "tier": "A-",
-   "entry": 34.26,
-   "loss_line": 31.5192,
-   "meta_score": 48.5,
-   "meta_components": {
-    "Trend": {
-     "pts": 10,
-     "max": 15
-    },
-    "Proximity": {
-     "pts": 10,
-     "max": 10
-    },
-    "10MA Quality": {
-     "pts": 12,
-     "max": 15
-    },
-    "Vol Contraction": {
-     "pts": 10,
-     "max": 15
-    },
-    "Vol Expansion": {
-     "pts": 0,
-     "max": 10
-    },
-    "Candle": {
-     "pts": 0,
-     "max": 10
-    },
-    "Base Quality": {
-     "pts": 15,
-     "max": 15
-    },
-    "RS": {
-     "pts": 15,
-     "max": 15
-    },
-    "Volatility": {
-     "pts": 10,
-     "max": 10
-    },
-    "Supply Shock": {
-     "pts": 5,
-     "max": 10
-    },
-    "Risk": {
-     "pts": 10,
-     "max": 15
-    }
-   },
-   "rs_rating": 76,
-   "ind_rs": 31,
-   "rs_new_high": false,
-   "sector": "Consumer Services",
-   "theme": "Movies/Entertainment",
-   "ind_name": "Entertainment",
-   "is_htf": false,
-   "power_score": 27.0,
-   "ants_label": "NONE",
-   "ants_level": 0,
-   "ants_ok": true,
-   "ants_3m_days": 0,
-   "ants_3m_peak": 0,
-   "ants_rs_rising": true,
-   "adr": 2.6,
-   "dist_52w": 2.6,
-   "at_high": false,
-   "nh_1m": 4,
-   "nh_3m": 4,
-   "days_since_high": 7,
-   "status_labels": [
-    "\u26a1 STRONG MOMENTUM",
-    "\ud83c\udfaf HUGGING 10MA",
-    "\ud83d\udd25 MARKET LEADER"
-   ],
-   "outcome": "nodata"
+   "prior_52w_high": 24.99,
+   "mfe_pct": 0.91,
+   "mae_pct": -3.38,
+   "days_followed": 1,
+   "outcome": "open",
+   "same_bar_ambiguous": false,
+   "resolve_date": null,
+   "days_to_resolve": null
   },
   {
    "ticker": "COHR",
@@ -19618,19 +20135,19 @@
    "tier": "A-",
    "entry": 399.24,
    "loss_line": 367.3008,
-   "meta_score": 33.0,
+   "meta_score": 31.1,
    "meta_components": {
     "Trend": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 20
     },
     "Proximity": {
-     "pts": 3,
-     "max": 10
+     "pts": 4,
+     "max": 15
     },
     "10MA Quality": {
-     "pts": 12,
-     "max": 15
+     "pts": 7,
+     "max": 9
     },
     "Vol Contraction": {
      "pts": 0,
@@ -19638,31 +20155,31 @@
     },
     "Vol Expansion": {
      "pts": 0,
-     "max": 10
+     "max": 8
     },
     "Candle": {
-     "pts": 5,
-     "max": 10
+     "pts": 4,
+     "max": 9
     },
     "Base Quality": {
-     "pts": 15,
-     "max": 15
+     "pts": 16,
+     "max": 16
     },
     "RS": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 22
     },
     "Volatility": {
-     "pts": 6,
-     "max": 10
+     "pts": 9,
+     "max": 15
     },
     "Supply Shock": {
-     "pts": 5,
-     "max": 10
+     "pts": 8,
+     "max": 15
     },
     "Risk": {
-     "pts": 10,
-     "max": 15
+     "pts": 6,
+     "max": 9
     }
    },
    "rs_rating": 97,
@@ -19690,7 +20207,14 @@
     "\ud83c\udfaf HUGGING 10MA",
     "\ud83d\udca7 Dry vs Prev Day (65%)"
    ],
-   "outcome": "nodata"
+   "prior_52w_high": 440.0,
+   "mfe_pct": -0.56,
+   "mae_pct": -8.5,
+   "days_followed": 1,
+   "outcome": "loss",
+   "same_bar_ambiguous": false,
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 1
   },
   {
    "ticker": "FTDR",
@@ -19698,19 +20222,19 @@
    "tier": "A-",
    "entry": 73.46,
    "loss_line": 67.5832,
-   "meta_score": 39.0,
+   "meta_score": 43.0,
    "meta_components": {
     "Trend": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 20
     },
     "Proximity": {
-     "pts": 10,
-     "max": 10
+     "pts": 15,
+     "max": 15
     },
     "10MA Quality": {
-     "pts": 8,
-     "max": 15
+     "pts": 5,
+     "max": 9
     },
     "Vol Contraction": {
      "pts": 0,
@@ -19718,31 +20242,31 @@
     },
     "Vol Expansion": {
      "pts": 0,
-     "max": 10
+     "max": 8
     },
     "Candle": {
      "pts": 0,
-     "max": 10
+     "max": 9
     },
     "Base Quality": {
-     "pts": 15,
-     "max": 15
+     "pts": 16,
+     "max": 16
     },
     "RS": {
+     "pts": 22,
+     "max": 22
+    },
+    "Volatility": {
      "pts": 15,
      "max": 15
     },
-    "Volatility": {
-     "pts": 10,
-     "max": 10
-    },
     "Supply Shock": {
-     "pts": 5,
-     "max": 10
+     "pts": 8,
+     "max": 15
     },
     "Risk": {
-     "pts": 10,
-     "max": 15
+     "pts": 6,
+     "max": 9
     }
    },
    "rs_rating": 73,
@@ -19766,10 +20290,18 @@
    "nh_3m": 4,
    "days_since_high": 0,
    "status_labels": [
+    "\u26a1 STRONG MOMENTUM",
     "\ud83d\udd25 MARKET LEADER",
     "\ud83d\udca7 Dry vs Prev Day (54%)"
    ],
-   "outcome": "nodata"
+   "prior_52w_high": 73.36,
+   "mfe_pct": 1.97,
+   "mae_pct": -1.08,
+   "days_followed": 1,
+   "outcome": "win",
+   "same_bar_ambiguous": false,
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 1
   },
   {
    "ticker": "KTB",
@@ -19777,19 +20309,19 @@
    "tier": "A-",
    "entry": 77.42,
    "loss_line": 71.2264,
-   "meta_score": 37.5,
+   "meta_score": 33.9,
    "meta_components": {
     "Trend": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 20
     },
     "Proximity": {
-     "pts": 3,
-     "max": 10
+     "pts": 4,
+     "max": 15
     },
     "10MA Quality": {
-     "pts": 12,
-     "max": 15
+     "pts": 7,
+     "max": 9
     },
     "Vol Contraction": {
      "pts": 10,
@@ -19797,31 +20329,31 @@
     },
     "Vol Expansion": {
      "pts": 0,
-     "max": 10
+     "max": 8
     },
     "Flag": {
-     "pts": 10,
-     "max": 10
+     "pts": 9,
+     "max": 9
     },
     "Base Quality": {
-     "pts": 15,
-     "max": 15
+     "pts": 16,
+     "max": 16
     },
     "RS": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 22
     },
     "Volatility": {
      "pts": 0,
-     "max": 10
+     "max": 15
     },
     "Supply Shock": {
-     "pts": 5,
-     "max": 10
+     "pts": 8,
+     "max": 15
     },
     "Risk": {
-     "pts": 10,
-     "max": 15
+     "pts": 6,
+     "max": 9
     }
    },
    "rs_rating": 63,
@@ -19849,7 +20381,14 @@
     "\ud83c\udf00 TIGHT FLAG",
     "\ud83d\udca7 Dry vs Prev Day (60%)"
    ],
-   "outcome": "nodata"
+   "prior_52w_high": 87.0,
+   "mfe_pct": 1.91,
+   "mae_pct": -0.35,
+   "days_followed": 1,
+   "outcome": "open",
+   "same_bar_ambiguous": false,
+   "resolve_date": null,
+   "days_to_resolve": null
   },
   {
    "ticker": "EAT",
@@ -19857,19 +20396,19 @@
    "tier": "A-",
    "entry": 166.05,
    "loss_line": 152.766,
-   "meta_score": 33.5,
+   "meta_score": 33.0,
    "meta_components": {
     "Trend": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 20
     },
     "Proximity": {
-     "pts": 3,
-     "max": 10
+     "pts": 4,
+     "max": 15
     },
     "10MA Quality": {
-     "pts": 8,
-     "max": 15
+     "pts": 5,
+     "max": 9
     },
     "Vol Contraction": {
      "pts": 10,
@@ -19877,31 +20416,31 @@
     },
     "Vol Expansion": {
      "pts": 0,
-     "max": 10
+     "max": 8
     },
     "Candle": {
      "pts": 0,
-     "max": 10
+     "max": 9
     },
     "Base Quality": {
-     "pts": 15,
-     "max": 15
+     "pts": 16,
+     "max": 16
     },
     "RS": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 22
     },
     "Volatility": {
-     "pts": 6,
-     "max": 10
+     "pts": 9,
+     "max": 15
     },
     "Supply Shock": {
-     "pts": 5,
-     "max": 10
+     "pts": 8,
+     "max": 15
     },
     "Risk": {
-     "pts": 10,
-     "max": 15
+     "pts": 6,
+     "max": 9
     }
    },
    "rs_rating": 56,
@@ -19925,7 +20464,14 @@
    "nh_3m": 0,
    "days_since_high": 2,
    "status_labels": [],
-   "outcome": "nodata"
+   "prior_52w_high": 187.12,
+   "mfe_pct": 3.52,
+   "mae_pct": -0.66,
+   "days_followed": 1,
+   "outcome": "open",
+   "same_bar_ambiguous": false,
+   "resolve_date": null,
+   "days_to_resolve": null
   },
   {
    "ticker": "VC",
@@ -19933,19 +20479,19 @@
    "tier": "A-",
    "entry": 121.1,
    "loss_line": 111.412,
-   "meta_score": 32.5,
+   "meta_score": 32.1,
    "meta_components": {
     "Trend": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 20
     },
     "Proximity": {
-     "pts": 3,
-     "max": 10
+     "pts": 4,
+     "max": 15
     },
     "10MA Quality": {
-     "pts": 12,
-     "max": 15
+     "pts": 7,
+     "max": 9
     },
     "Vol Contraction": {
      "pts": 0,
@@ -19953,31 +20499,31 @@
     },
     "Vol Expansion": {
      "pts": 0,
-     "max": 10
+     "max": 8
     },
     "Candle": {
      "pts": 0,
-     "max": 10
+     "max": 9
     },
     "Base Quality": {
+     "pts": 16,
+     "max": 16
+    },
+    "RS": {
+     "pts": 7,
+     "max": 22
+    },
+    "Volatility": {
      "pts": 15,
      "max": 15
     },
-    "RS": {
-     "pts": 5,
-     "max": 15
-    },
-    "Volatility": {
-     "pts": 10,
-     "max": 10
-    },
     "Supply Shock": {
-     "pts": 5,
-     "max": 10
+     "pts": 8,
+     "max": 15
     },
     "Risk": {
-     "pts": 10,
-     "max": 15
+     "pts": 6,
+     "max": 9
     }
    },
    "rs_rating": 73,
@@ -20005,7 +20551,14 @@
     "\ud83c\udfaf HUGGING 10MA",
     "\ud83d\udca7 Dry vs Prev Day (58%)"
    ],
-   "outcome": "nodata"
+   "prior_52w_high": 129.1,
+   "mfe_pct": -2.32,
+   "mae_pct": -4.86,
+   "days_followed": 1,
+   "outcome": "open",
+   "same_bar_ambiguous": false,
+   "resolve_date": null,
+   "days_to_resolve": null
   },
   {
    "ticker": "TSEM",
@@ -20013,19 +20566,19 @@
    "tier": "A-",
    "entry": 293.44,
    "loss_line": 269.9648,
-   "meta_score": 28.0,
+   "meta_score": 28.3,
    "meta_components": {
     "Trend": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 20
     },
     "Proximity": {
-     "pts": 3,
-     "max": 10
+     "pts": 4,
+     "max": 15
     },
     "10MA Quality": {
-     "pts": 12,
-     "max": 15
+     "pts": 7,
+     "max": 9
     },
     "Vol Contraction": {
      "pts": 0,
@@ -20033,31 +20586,31 @@
     },
     "Vol Expansion": {
      "pts": 0,
-     "max": 10
+     "max": 8
     },
     "Candle": {
-     "pts": 5,
-     "max": 10
+     "pts": 4,
+     "max": 9
     },
     "Base Quality": {
-     "pts": 15,
-     "max": 15
+     "pts": 16,
+     "max": 16
     },
     "RS": {
-     "pts": 5,
-     "max": 15
+     "pts": 7,
+     "max": 22
     },
     "Volatility": {
-     "pts": 6,
-     "max": 10
+     "pts": 9,
+     "max": 15
     },
     "Supply Shock": {
-     "pts": 5,
-     "max": 10
+     "pts": 8,
+     "max": 15
     },
     "Risk": {
      "pts": 0,
-     "max": 15
+     "max": 9
     }
    },
    "rs_rating": 98,
@@ -20084,500 +20637,970 @@
     "\ud83c\udfaf HUGGING 10MA",
     "\ud83d\udca7 Dry vs Prev Day (61%)"
    ],
+   "prior_52w_high": 319.94,
+   "mfe_pct": -2.88,
+   "mae_pct": -8.51,
+   "days_followed": 1,
+   "outcome": "loss",
+   "same_bar_ambiguous": false,
+   "resolve_date": "2026-06-24",
+   "days_to_resolve": 1
+  },
+  {
+   "ticker": "AXSM",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 246.86,
+   "loss_line": 227.1112,
+   "meta_score": 25.6,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 5,
+     "max": 10
+    },
+    "Flag": {
+     "pts": 10,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 10,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 10,
+     "max": 15
+    }
+   },
+   "rs_rating": 93,
+   "ind_rs": 83,
+   "rs_new_high": false,
+   "sector": "Health Technology",
+   "theme": "Biotech",
+   "ind_name": "Biotechnology",
+   "is_htf": false,
+   "power_score": 39.4,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 0,
+   "ants_3m_peak": 0,
+   "ants_rs_rising": true,
+   "adr": 4.36,
+   "dist_52w": 8.6,
+   "at_high": false,
+   "nh_1m": 7,
+   "nh_3m": 12,
+   "days_since_high": 7,
+   "status_labels": [
+    "\ud83d\udee1\ufe0f MA Cluster (Premium)",
+    "\u26a1 STRONG MOMENTUM",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83c\udf00 TIGHT FLAG",
+    "\ud83d\udca5 SUPPLY SHOCK",
+    "\ud83d\udca7 Dry vs Prev Day (64%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "NUE",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 244.29,
+   "loss_line": 224.7468,
+   "meta_score": 27.5,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 3,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Flag": {
+     "pts": 10,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 0,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 91,
+   "ind_rs": 79,
+   "rs_new_high": false,
+   "sector": "Non-Energy Minerals",
+   "theme": "Steel",
+   "ind_name": "Steel",
+   "is_htf": false,
+   "power_score": 33.5,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 12,
+   "ants_3m_peak": 5,
+   "ants_rs_rising": false,
+   "adr": 2.43,
+   "dist_52w": 11.2,
+   "at_high": false,
+   "nh_1m": 10,
+   "nh_3m": 20,
+   "days_since_high": 7,
+   "status_labels": [
+    "\ud83d\udee1\ufe0f MA Cluster (Premium)",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83c\udf00 TIGHT FLAG",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK",
+    "\ud83d\udca7 Dry vs Prev Day (52%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "CTOS",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 11.62,
+   "loss_line": 10.6904,
+   "meta_score": 26.9,
+   "meta_components": {
+    "Trend": {
+     "pts": 10,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 10,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 8,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 15,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 0,
+     "max": 15
+    }
+   },
+   "rs_rating": 94,
+   "ind_rs": 88,
+   "rs_new_high": true,
+   "sector": "Finance",
+   "theme": "Finance/Rental/Leasing",
+   "ind_name": "Rental & Leasing Services",
+   "is_htf": false,
+   "power_score": 62.7,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 4,
+   "ants_3m_peak": 5,
+   "ants_rs_rising": true,
+   "adr": 2.88,
+   "dist_52w": 1.1,
+   "at_high": false,
+   "nh_1m": 8,
+   "nh_3m": 19,
+   "days_since_high": 2,
+   "status_labels": [
+    "\ud83d\udd25 MARKET LEADER",
+    "\ud83d\udca7 Dry vs Prev Day (63%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "NVT",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 171.82,
+   "loss_line": 158.0744,
+   "meta_score": 18.3,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 10,
+     "max": 15
+    }
+   },
+   "rs_rating": 92,
+   "ind_rs": 90,
+   "rs_new_high": false,
+   "sector": "Electronic Technology",
+   "theme": "Electronic Components",
+   "ind_name": "Electrical Equipment & Parts",
+   "is_htf": false,
+   "power_score": 36.2,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 0,
+   "ants_3m_peak": 0,
+   "ants_rs_rising": true,
+   "adr": 4.53,
+   "dist_52w": 9.2,
+   "at_high": false,
+   "nh_1m": 3,
+   "nh_3m": 17,
+   "days_since_high": 2,
+   "status_labels": [
+    "\ud83d\udee1\ufe0f MA Cluster (Premium)",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udca7 Dry vs Prev Day (59%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "TSM",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 443.96,
+   "loss_line": 408.4432,
+   "meta_score": 16.1,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 10,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 0,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 89,
+   "ind_rs": 99,
+   "rs_new_high": false,
+   "sector": "Electronic Technology",
+   "theme": "Semiconductors",
+   "ind_name": "Semiconductors",
+   "is_htf": false,
+   "power_score": 31.9,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 0,
+   "ants_3m_peak": 0,
+   "ants_rs_rising": true,
+   "adr": 2.61,
+   "dist_52w": 7.5,
+   "at_high": false,
+   "nh_1m": 5,
+   "nh_3m": 10,
+   "days_since_high": 2,
+   "status_labels": [
+    "\ud83d\udee1\ufe0f MA Cluster (Premium)",
+    "\u26a1 STRONG MOMENTUM",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK",
+    "\ud83d\udca7 Dry vs Prev Day (48%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "KLAC",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 245.4,
+   "loss_line": 225.768,
+   "meta_score": 4.9,
+   "meta_components": {
+    "Trend": {
+     "pts": 10,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 3,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 0,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 10,
+     "max": 15
+    }
+   },
+   "rs_rating": 95,
+   "ind_rs": 99,
+   "rs_new_high": null,
+   "sector": "Electronic Technology",
+   "theme": "Semiconductors",
+   "ind_name": "Semiconductor Equipment & Materials",
+   "is_htf": false,
+   "power_score": 64.4,
+   "ants_label": null,
+   "ants_level": null,
+   "ants_ok": null,
+   "ants_3m_days": null,
+   "ants_3m_peak": null,
+   "ants_rs_rising": null,
+   "adr": 4.38,
+   "dist_52w": 10.9,
+   "at_high": false,
+   "nh_1m": null,
+   "nh_3m": null,
+   "days_since_high": 2,
+   "status_labels": [
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udca7 Dry vs Prev Day (61%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "TER",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 433.1,
+   "loss_line": 398.452,
+   "meta_score": 1.9,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 10,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 10,
+     "max": 15
+    }
+   },
+   "rs_rating": 97,
+   "ind_rs": 99,
+   "rs_new_high": null,
+   "sector": "Electronic Technology",
+   "theme": "Electronic Production Equipment",
+   "ind_name": "Semiconductor Equipment & Materials",
+   "is_htf": false,
+   "power_score": 79.2,
+   "ants_label": null,
+   "ants_level": null,
+   "ants_ok": null,
+   "ants_3m_days": null,
+   "ants_3m_peak": null,
+   "ants_rs_rising": null,
+   "adr": 4.65,
+   "dist_52w": 7.0,
+   "at_high": false,
+   "nh_1m": null,
+   "nh_3m": null,
+   "days_since_high": 2,
+   "status_labels": [
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udca7 Dry vs Prev Day (42%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "USFD",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 95.64,
+   "loss_line": 87.9888,
+   "meta_score": 36.0,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 8,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 10,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 0,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 0,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 65,
+   "ind_rs": 60,
+   "rs_new_high": null,
+   "sector": "Distribution Services",
+   "theme": "Food Distributors",
+   "ind_name": "Food Distribution",
+   "is_htf": false,
+   "power_score": 15.5,
+   "ants_label": null,
+   "ants_level": null,
+   "ants_ok": null,
+   "ants_3m_days": null,
+   "ants_3m_peak": null,
+   "ants_rs_rising": null,
+   "adr": 2.57,
+   "dist_52w": 6.6,
+   "at_high": false,
+   "nh_1m": null,
+   "nh_3m": null,
+   "days_since_high": 0,
+   "status_labels": [
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "WWD",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 438.93,
+   "loss_line": 403.8156,
+   "meta_score": 28.0,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 10,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 8,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 10,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 15,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 0,
+     "max": 15
+    }
+   },
+   "rs_rating": 87,
+   "ind_rs": 57,
+   "rs_new_high": null,
+   "sector": "Producer Manufacturing",
+   "theme": "Industrial Machinery",
+   "ind_name": "Aerospace & Defense",
+   "is_htf": false,
+   "power_score": 29.4,
+   "ants_label": null,
+   "ants_level": null,
+   "ants_ok": null,
+   "ants_3m_days": null,
+   "ants_3m_peak": null,
+   "ants_rs_rising": null,
+   "adr": 3.43,
+   "dist_52w": 2.8,
+   "at_high": false,
+   "nh_1m": null,
+   "nh_3m": null,
+   "days_since_high": 4,
+   "status_labels": [
+    "\ud83d\udd25 MARKET LEADER",
+    "\ud83d\udca7 Dry vs Prev Day (44%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "TOELY",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 220.47,
+   "loss_line": 202.8324,
+   "meta_score": 21.9,
+   "meta_components": {
+    "Trend": {
+     "pts": 10,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 3,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 5,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 5,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 10,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": "N/A",
+   "ind_rs": null,
+   "rs_new_high": null,
+   "sector": "Producer Manufacturing",
+   "theme": "Industrial Machinery",
+   "ind_name": null,
+   "is_htf": false,
+   "power_score": 75.6,
+   "ants_label": null,
+   "ants_level": null,
+   "ants_ok": null,
+   "ants_3m_days": null,
+   "ants_3m_peak": null,
+   "ants_rs_rising": null,
+   "adr": 5.85,
+   "dist_52w": 11.2,
+   "at_high": false,
+   "nh_1m": null,
+   "nh_3m": null,
+   "days_since_high": 2,
+   "status_labels": [
+    "\u26a1 STRONG MOMENTUM",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK",
+    "\ud83d\udca7 Dry vs Prev Day (20%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "DELL",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 440.48,
+   "loss_line": 405.2416,
+   "meta_score": 4.9,
+   "meta_components": {
+    "Trend": {
+     "pts": 15,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 8,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 10,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 8,
+     "max": 15
+    },
+    "RS": {
+     "pts": 10,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 0,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 0,
+     "max": 15
+    }
+   },
+   "rs_rating": 98,
+   "ind_rs": 95,
+   "rs_new_high": null,
+   "sector": "Electronic Technology",
+   "theme": "AI Servers / Hardware",
+   "ind_name": "Computer Hardware",
+   "is_htf": false,
+   "power_score": 139.7,
+   "ants_label": null,
+   "ants_level": null,
+   "ants_ok": null,
+   "ants_3m_days": null,
+   "ants_3m_peak": null,
+   "ants_rs_rising": null,
+   "adr": 5.27,
+   "dist_52w": 7.5,
+   "at_high": false,
+   "nh_1m": null,
+   "nh_3m": null,
+   "days_since_high": 16,
+   "status_labels": [],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "ENTG",
+   "pick_date": "2026-06-24",
+   "tier": "A-",
+   "entry": 173.59,
+   "loss_line": 159.7028,
+   "meta_score": 2.6,
+   "meta_components": {
+    "Trend": {
+     "pts": 10,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 8,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 0,
+     "max": 15
+    }
+   },
+   "rs_rating": 93,
+   "ind_rs": 99,
+   "rs_new_high": null,
+   "sector": "Producer Manufacturing",
+   "theme": "Industrial Machinery",
+   "ind_name": "Semiconductor Equipment & Materials",
+   "is_htf": false,
+   "power_score": 56.6,
+   "ants_label": null,
+   "ants_level": null,
+   "ants_ok": null,
+   "ants_3m_days": null,
+   "ants_3m_peak": null,
+   "ants_rs_rising": null,
+   "adr": 4.81,
+   "dist_52w": 8.3,
+   "at_high": false,
+   "nh_1m": null,
+   "nh_3m": null,
+   "days_since_high": 2,
+   "status_labels": [
+    "\ud83d\udca7 Dry vs Prev Day (58%)"
+   ],
    "outcome": "nodata"
   }
- ],
- "study_summary": {
-  "asof": "2026-06-23",
-  "overall": {
-   "n": 107,
-   "w": 59,
-   "l": 48,
-   "wr": 55,
-   "open": 116,
-   "nodata": 9,
-   "total": 232
-  },
-  "by_meta": [
-   {
-    "k": ">=60",
-    "w": 21,
-    "l": 14,
-    "n": 35,
-    "wr": 60
-   },
-   {
-    "k": ">=50",
-    "w": 12,
-    "l": 11,
-    "n": 23,
-    "wr": 52
-   },
-   {
-    "k": ">=40",
-    "w": 14,
-    "l": 10,
-    "n": 24,
-    "wr": 58
-   },
-   {
-    "k": ">=30",
-    "w": 10,
-    "l": 10,
-    "n": 20,
-    "wr": 50
-   },
-   {
-    "k": ">=20",
-    "w": 2,
-    "l": 3,
-    "n": 5,
-    "wr": 40
-   }
-  ],
-  "by_rs": [
-   {
-    "k": "RS>=90",
-    "w": 30,
-    "l": 28,
-    "n": 58,
-    "wr": 52
-   },
-   {
-    "k": "RS>=80",
-    "w": 22,
-    "l": 14,
-    "n": 36,
-    "wr": 61
-   },
-   {
-    "k": "RS>=70",
-    "w": 5,
-    "l": 2,
-    "n": 7,
-    "wr": 71
-   },
-   {
-    "k": "RS>=0",
-    "w": 1,
-    "l": 2,
-    "n": 3,
-    "wr": 33
-   }
-  ],
-  "by_tier": [
-   {
-    "k": "A+",
-    "w": 6,
-    "l": 2,
-    "n": 8,
-    "wr": 75
-   },
-   {
-    "k": "A",
-    "w": 3,
-    "l": 4,
-    "n": 7,
-    "wr": 43
-   },
-   {
-    "k": "A-",
-    "w": 50,
-    "l": 42,
-    "n": 92,
-    "wr": 54
-   }
-  ],
-  "by_sector": [
-   {
-    "k": "Commercial Services",
-    "w": 1,
-    "l": 0,
-    "n": 1,
-    "wr": 100
-   },
-   {
-    "k": "Consumer Durables",
-    "w": 2,
-    "l": 0,
-    "n": 2,
-    "wr": 100
-   },
-   {
-    "k": "Producer Manufacturing",
-    "w": 3,
-    "l": 0,
-    "n": 3,
-    "wr": 100
-   },
-   {
-    "k": "Consumer Services",
-    "w": 6,
-    "l": 0,
-    "n": 6,
-    "wr": 100
-   },
-   {
-    "k": "Distribution Services",
-    "w": 1,
-    "l": 0,
-    "n": 1,
-    "wr": 100
-   },
-   {
-    "k": "Health Services",
-    "w": 4,
-    "l": 1,
-    "n": 5,
-    "wr": 80
-   },
-   {
-    "k": "Finance",
-    "w": 8,
-    "l": 2,
-    "n": 10,
-    "wr": 80
-   },
-   {
-    "k": "Consumer Non-Durables",
-    "w": 3,
-    "l": 1,
-    "n": 4,
-    "wr": 75
-   },
-   {
-    "k": "Health Technology",
-    "w": 10,
-    "l": 5,
-    "n": 15,
-    "wr": 67
-   },
-   {
-    "k": "Electronic Technology",
-    "w": 12,
-    "l": 8,
-    "n": 20,
-    "wr": 60
-   },
-   {
-    "k": "Technology Services",
-    "w": 7,
-    "l": 6,
-    "n": 13,
-    "wr": 54
-   },
-   {
-    "k": "Industrial Services",
-    "w": 1,
-    "l": 1,
-    "n": 2,
-    "wr": 50
-   },
-   {
-    "k": "Transportation",
-    "w": 1,
-    "l": 6,
-    "n": 7,
-    "wr": 14
-   },
-   {
-    "k": "Energy Minerals",
-    "w": 0,
-    "l": 8,
-    "n": 8,
-    "wr": 0
-   },
-   {
-    "k": "Non-Energy Minerals",
-    "w": 0,
-    "l": 7,
-    "n": 7,
-    "wr": 0
-   },
-   {
-    "k": "Retail Trade",
-    "w": 0,
-    "l": 1,
-    "n": 1,
-    "wr": 0
-   },
-   {
-    "k": "Communications",
-    "w": 0,
-    "l": 2,
-    "n": 2,
-    "wr": 0
-   }
-  ],
-  "by_htf": [
-   {
-    "k": "HTF",
-    "w": 6,
-    "l": 2,
-    "n": 8,
-    "wr": 75
-   },
-   {
-    "k": "non-HTF",
-    "w": 53,
-    "l": 46,
-    "n": 99,
-    "wr": 54
-   }
-  ],
-  "by_ants": [
-   {
-    "k": "ANTS ok",
-    "w": 31,
-    "l": 22,
-    "n": 53,
-    "wr": 58
-   },
-   {
-    "k": "no ANTS",
-    "w": 28,
-    "l": 26,
-    "n": 54,
-    "wr": 52
-   }
-  ],
-  "by_athigh": [
-   {
-    "k": "at_high",
-    "w": 13,
-    "l": 2,
-    "n": 15,
-    "wr": 87
-   },
-   {
-    "k": "below_high",
-    "w": 46,
-    "l": 46,
-    "n": 92,
-    "wr": 50
-   }
-  ],
-  "components": [
-   {
-    "comp": "RS",
-    "win_avg": 12.3,
-    "loss_avg": 9.0,
-    "edge": 3.3
-   },
-   {
-    "comp": "Proximity",
-    "win_avg": 8.6,
-    "loss_avg": 6.5,
-    "edge": 2.0
-   },
-   {
-    "comp": "Volatility",
-    "win_avg": 9.7,
-    "loss_avg": 8.6,
-    "edge": 1.0
-   },
-   {
-    "comp": "Trend",
-    "win_avg": 8.1,
-    "loss_avg": 7.6,
-    "edge": 0.5
-   },
-   {
-    "comp": "Supply Shock",
-    "win_avg": 4.0,
-    "loss_avg": 3.4,
-    "edge": 0.5
-   },
-   {
-    "comp": "Base Quality",
-    "win_avg": 14.5,
-    "loss_avg": 14.4,
-    "edge": 0.1
-   },
-   {
-    "comp": "Vol Contraction",
-    "win_avg": 7.6,
-    "loss_avg": 7.6,
-    "edge": 0.0
-   },
-   {
-    "comp": "Flag",
-    "win_avg": 10.0,
-    "loss_avg": 10.0,
-    "edge": 0.0
-   },
-   {
-    "comp": "Candle",
-    "win_avg": 0.0,
-    "loss_avg": 0.1,
-    "edge": -0.1
-   },
-   {
-    "comp": "Vol Expansion",
-    "win_avg": 0.2,
-    "loss_avg": 0.4,
-    "edge": -0.2
-   },
-   {
-    "comp": "10MA Quality",
-    "win_avg": 9.3,
-    "loss_avg": 10.6,
-    "edge": -1.3
-   },
-   {
-    "comp": "Risk",
-    "win_avg": 5.0,
-    "loss_avg": 6.8,
-    "edge": -1.8
-   }
-  ],
-  "recal": {
-   "weights": [
-    {
-     "comp": "Trend",
-     "cur": 20,
-     "new": 27,
-     "edge": 0.035
-    },
-    {
-     "comp": "Proximity",
-     "cur": 15,
-     "new": 22,
-     "edge": 0.204
-    },
-    {
-     "comp": "10MA Quality",
-     "cur": 9,
-     "new": 6,
-     "edge": -0.087
-    },
-    {
-     "comp": "Vol Contraction",
-     "cur": 15,
-     "new": 15,
-     "edge": 0.002
-    },
-    {
-     "comp": "Vol Expansion",
-     "cur": 8,
-     "new": 6,
-     "edge": -0.025
-    },
-    {
-     "comp": "Flag",
-     "cur": 9,
-     "new": 8,
-     "edge": 0.0
-    },
-    {
-     "comp": "Base Quality",
-     "cur": 16,
-     "new": 17,
-     "edge": 0.007
-    },
-    {
-     "comp": "RS",
-     "cur": 22,
-     "new": 33,
-     "edge": 0.222
-    },
-    {
-     "comp": "Volatility",
-     "cur": 15,
-     "new": 22,
-     "edge": 0.104
-    },
-    {
-     "comp": "Supply Shock",
-     "cur": 15,
-     "new": 22,
-     "edge": 0.055
-    },
-    {
-     "comp": "Risk",
-     "cur": 9,
-     "new": 6,
-     "edge": -0.118
-    }
-   ],
-   "denom_cur": 153,
-   "denom_new": 184,
-   "v1_buckets": [
-    {
-     "bucket": "60-+",
-     "w": 38,
-     "l": 13,
-     "n": 51,
-     "wr": 75
-    },
-    {
-     "bucket": "50-60",
-     "w": 18,
-     "l": 20,
-     "n": 38,
-     "wr": 47
-    },
-    {
-     "bucket": "40-50",
-     "w": 3,
-     "l": 13,
-     "n": 16,
-     "wr": 19
-    },
-    {
-     "bucket": "30-40",
-     "w": 0,
-     "l": 2,
-     "n": 2,
-     "wr": 0
-    },
-    {
-     "bucket": "0-30",
-     "w": 0,
-     "l": 0,
-     "n": 0,
-     "wr": null
-    }
-   ],
-   "v2_buckets": [
-    {
-     "bucket": "60-+",
-     "w": 47,
-     "l": 16,
-     "n": 63,
-     "wr": 75
-    },
-    {
-     "bucket": "50-60",
-     "w": 10,
-     "l": 19,
-     "n": 29,
-     "wr": 34
-    },
-    {
-     "bucket": "40-50",
-     "w": 2,
-     "l": 11,
-     "n": 13,
-     "wr": 15
-    },
-    {
-     "bucket": "30-40",
-     "w": 0,
-     "l": 2,
-     "n": 2,
-     "wr": 0
-    },
-    {
-     "bucket": "0-30",
-     "w": 0,
-     "l": 0,
-     "n": 0,
-     "wr": null
-    }
-   ],
-   "spread_v1": 62,
-   "spread_v2": 62
-  }
- }
+ ]
 }
