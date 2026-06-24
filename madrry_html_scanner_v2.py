@@ -87,7 +87,24 @@ def _load_meta_weights() -> Dict[str, float]:
 
 
 META_WEIGHTS = _load_meta_weights()
-META_DENOM = sum(META_WEIGHTS.values())   # "Candle" excluded (not a key)
+META_DENOM = sum(META_WEIGHTS.values()) or 1   # "Candle" excluded; `or 1` guards a 0-denom crash
+
+# ---- META v4 (enhanced signed-feature score) — ranking driver, with fallback ----
+try:
+    from madrry_meta_v4 import meta_v4_score as _meta_v4_score
+except Exception:  # noqa: BLE001 — missing model/module => legacy score
+    def _meta_v4_score(_df):
+        return None
+
+
+def _ranking_meta_score(hist_df, legacy_score, market_modifier):
+    """v4 enhanced score if available — raw 0-100 percentile of P(+2ADR win); it is a
+    calibrated probability rank, so NOT regime-dampened. Falls back to the legacy
+    M.E.T.A. score (×market_modifier, capped) when the v4 model is unavailable."""
+    v4 = _meta_v4_score(hist_df)
+    if v4 is not None:
+        return v4
+    return round(min(legacy_score * market_modifier, 100.0), 1)
 
 
 def _meta_award(details: List[str], comp: str, frac: float, label: str,
@@ -1907,7 +1924,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 "mcap": c["mcap"], "float_shares": c["float_shares_raw"],
             }
             meta_score_data = calculate_meta_momentum_score(meta_input, hist_df)
-            meta_score = round(min(meta_score_data["score"] * market_modifier, 100.0), 1)
+            meta_score = _ranking_meta_score(hist_df, meta_score_data["score"], market_modifier)
             c["status_labels"].extend(meta_score_data["badges"])
             trendline_data = calculate_trendline_analysis(c["ticker"], hist_df)
 
@@ -2207,7 +2224,7 @@ def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
             "mcap": (m.get("mcap", 0) or 0) / 1e9, "float_shares": m.get("float_shares", 0),
         }
         meta_score_data = calculate_meta_momentum_score(meta_input, df)
-        meta_score = round(min(meta_score_data["score"] * market_modifier, 100.0), 1)
+        meta_score = _ranking_meta_score(df, meta_score_data["score"], market_modifier)
 
         spark = make_sparkline(df["Close"].iloc[-40:].tolist()) if len(df) >= 2 else ""
         footprint = analyze_footprint(df)
@@ -2577,7 +2594,7 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
             "ticker": t, "close": close, "adr": adr, "perf_1m": round(info["p1m"], 1),
             "perf_3m": round(info["p3m"], 1), "base_weeks": fp.get("base_weeks", 0.0),
             "base_depth": fp.get("base_depth"), "higher_lows": fp.get("higher_lows", 0),
-            "ext9": fp.get("ext9"), "ext50": ext50, "meta_score": round(ms["score"], 1),
+            "ext9": fp.get("ext9"), "ext50": ext50, "meta_score": _ranking_meta_score(df, ms["score"], 1.0),
             "rs_rating": rs if isinstance(rs, int) else "N/A", "sector": info["sector"],
             "theme": get_theme(t, info["industry"]), "tag": tag, "label": label,
             "entry": entry, "stop": stop, "risk_pct": risk_pct,
@@ -3551,7 +3568,7 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
         }
         try:
             md = calculate_meta_momentum_score(meta_input, df)
-            r["_meta_score"] = round(min(md["score"] * market_modifier, 100.0), 1)
+            r["_meta_score"] = _ranking_meta_score(df, md["score"], market_modifier)
             r["_meta_details"] = md["details"]
         except Exception:  # noqa: BLE001
             pass

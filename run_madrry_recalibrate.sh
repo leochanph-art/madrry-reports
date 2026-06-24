@@ -9,18 +9,21 @@ WS="/Users/boundbythese/.openclaw/workspace"
 LOG="/tmp/madrry_recalibrate.log"
 cd "$WS" || exit 1
 
+# Redact any GitHub token that might surface in git output (same as the morning loop).
+scrub() { sed -E 's#ghp_[A-Za-z0-9]+#***TOKEN***#g'; }
+
 echo "=== $(date '+%F %T') weekend recalibration start ===" >> "$LOG"
 
 # Refresh the labels first (re-grade open names against the latest prices).
 python3 "$WS/madrry_tier_a_tracker.py"      >> "$LOG" 2>&1 || \
     echo "tracker errored (continuing with existing labels)" >> "$LOG"
 
-# Re-fit weights (gate + caps live inside the script).
+# Re-fit weights (corr gate + caps live inside the script; in-sample/advisory).
 python3 "$WS/madrry_recalibrate_meta.py"    >> "$LOG" 2>&1
 
 # Commit whatever changed (weights, history, tracking db) so it is reviewable.
-git -C "$WS" add meta_weights.json meta_weights_history.jsonl tier_a_tracking.json 2>>"$LOG"
-git -C "$WS" commit -m "Weekend META recalibration $(date +%Y-%m-%d)" >> "$LOG" 2>&1 \
-    && git -C "$WS" push origin madrry-reports >> "$LOG" 2>&1
+git -C "$WS" add meta_weights.json meta_weights_history.jsonl tier_a_tracking.json 2>&1 | scrub >> "$LOG"
+git -C "$WS" commit -m "Weekend META recalibration $(date +%Y-%m-%d)" 2>&1 | scrub >> "$LOG"
+git -C "$WS" push origin madrry-reports 2>&1 | scrub >> "$LOG"
 
 echo "=== $(date '+%F %T') weekend recalibration done ===" >> "$LOG"

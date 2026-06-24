@@ -28,6 +28,7 @@ DB_PATH = os.path.join(WORKSPACE, "tier_a_tracking.json")
 WEIGHTS_PATH = os.path.join(WORKSPACE, "meta_weights.json")
 HISTORY_PATH = os.path.join(WORKSPACE, "meta_weights_history.jsonl")
 MIN_RESOLVED = 30          # don't tune live scoring on fewer than this many W/L
+CORR_MARGIN = 0.02         # min IN-SAMPLE corr(score,win) gain to apply new weights
 
 
 def main():
@@ -41,18 +42,24 @@ def main():
     recal = T._compute_recal(records)
     weights = {w["comp"]: w["new"] for w in recal["weights"]}
 
+    c1, c2 = recal.get("corr_v1", 0.0), recal.get("corr_v2", 0.0)
     print(f"resolved win/loss names: {n}  (gate: >= {MIN_RESOLVED})")
-    print(f"weight spread  v1={recal['spread_v1']}  v2={recal['spread_v2']} pts")
+    print(f"GATE metric  corr(score,win):  v1={c1:+.4f}  v2={c2:+.4f}  "
+          f"(need v2 >= v1 + {CORR_MARGIN})   [IN-SAMPLE — advisory]")
+    print(f"display only spread  v1={recal['spread_v1']}  v2={recal['spread_v2']} pts "
+          f"(empty-bottom-bucket caveat applies)")
     for w in recal["weights"]:
         print(f"  {w['comp']:<16} {w['cur']:>3} -> {w['new']:>3}  (edge {w['edge']:+.2f})")
 
     if n < MIN_RESOLVED:
         print(f"\nGATE NOT MET ({n} < {MIN_RESOLVED}) — keeping current weights.")
         return 0
-    if recal["spread_v2"] <= recal["spread_v1"]:
-        print("\nProposed weights do not separate STRICTLY better than current "
-              f"({recal['spread_v2']} <= {recal['spread_v1']}) — keeping current "
-              "(prevents drift/overfit on a static sample).")
+    # Boundary-free gate: require a non-trivial IN-SAMPLE corr improvement.
+    # (A proper decision needs an out-of-sample holdout; this is a safety floor,
+    #  not a validation. The Sunday cron is intentionally disabled until then.)
+    if c2 < c1 + CORR_MARGIN:
+        print(f"\nProposed weights do not improve corr(score,win) by >= {CORR_MARGIN} "
+              f"({c2:+.4f} vs {c1:+.4f}) — keeping current weights.")
         return 0
 
     payload = {
@@ -60,8 +67,11 @@ def main():
         "generated": date.today().isoformat(),
         "n_resolved": n,
         "denom": recal["denom_new"],
-        "spread_v1": recal["spread_v1"],
-        "spread_v2": recal["spread_v2"],
+        "corr_v1": c1,
+        "corr_v2": c2,
+        "spread_v1_display": recal["spread_v1"],
+        "spread_v2_display": recal["spread_v2"],
+        "in_sample": True,
         "weights": weights,
     }
     if dry:

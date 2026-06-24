@@ -1,0 +1,8 @@
+meta_features_10y.npz
+meta_dataset_10y.npz
+*.npz
+upload_report.py
+latest_setups*.json
+.DS_Store
+__pycache__/
+*.pyc

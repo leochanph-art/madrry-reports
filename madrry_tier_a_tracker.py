@@ -382,11 +382,28 @@ def _compute_recal(records, lam=1.4, blend=0.5):
         return out
 
     def spread(maxes, denom):
+        # DISPLAY ONLY — top(>=50) minus bottom(<30) win-rate. NOT the apply gate:
+        # for a high-META Tier-A pool the <30 bucket is usually empty, so this
+        # collapses to top-bucket win-rate (it does not measure separation).
         top = [r for r in resolved if score(r, maxes, denom) >= 50]
         bot = [r for r in resolved if score(r, maxes, denom) < 30]
         tw = sum(r["outcome"] == "win" for r in top) / len(top) if top else 0
         bw = sum(r["outcome"] == "win" for r in bot) / len(bot) if bot else 0
         return round(100 * (tw - bw))
+
+    def corr(maxes, denom):
+        # Point-biserial corr(score, win) over ALL resolved — boundary-free
+        # discrimination metric. This is the apply gate (no empty-bucket trap).
+        # NOTE: still IN-SAMPLE (fit and measured on the same names); a proper
+        # decision needs an out-of-sample holdout. Treat as advisory only.
+        xs = [score(r, maxes, denom) for r in resolved]
+        ys = [1.0 if r["outcome"] == "win" else 0.0 for r in resolved]
+        if len(xs) < 3:
+            return 0.0
+        sx, sy = np.std(xs), np.std(ys)
+        if sx == 0 or sy == 0:
+            return 0.0
+        return round(float(np.corrcoef(xs, ys)[0, 1]), 4)
 
     weights = [{"comp": c, "cur": base[c], "new": new_int[c],
                 "edge": round(edge.get(c, 0.0), 3)}
@@ -395,7 +412,11 @@ def _compute_recal(records, lam=1.4, blend=0.5):
         "weights": weights, "denom_cur": denom_cur, "denom_new": denom_new,
         "v1_buckets": buckets("v1", base, denom_cur),
         "v2_buckets": buckets("v2", new_int, denom_new),
-        "spread_v1": spread(CUR_MAX, denom_cur), "spread_v2": spread(new_int, denom_new),
+        # spread_* are DISPLAY-ONLY and now consistently scored with `base`
+        # (was a CUR_MAX-numerator / live-denom hybrid bug).
+        "spread_v1": spread(base, denom_cur), "spread_v2": spread(new_int, denom_new),
+        # corr_* is the real gate metric.
+        "corr_v1": corr(base, denom_cur), "corr_v2": corr(new_int, denom_new),
     }
 
 

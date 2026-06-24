@@ -1,21 +1,17 @@
 {
- "version": "2026-06-24",
- "generated": "2026-06-24",
- "n_resolved": 107,
- "denom": 153,
- "spread_v1": 59,
- "spread_v2": 63,
+ "version": "default-legacy-display-2026-06-25",
+ "note": "Legacy component score now only drives the META details panel + badges + v4 fallback; v4 (meta_v4_model.json) is the ranking score. Defaults restored for clean display.",
  "weights": {
-  "Trend": 20,
-  "Proximity": 15,
-  "10MA Quality": 9,
+  "Trend": 15,
+  "Proximity": 10,
+  "10MA Quality": 15,
   "Vol Contraction": 15,
-  "Vol Expansion": 8,
-  "Flag": 9,
-  "Base Quality": 16,
-  "RS": 22,
-  "Volatility": 15,
-  "Supply Shock": 15,
-  "Risk": 9
+  "Vol Expansion": 10,
+  "Flag": 10,
+  "Base Quality": 15,
+  "RS": 15,
+  "Volatility": 10,
+  "Supply Shock": 10,
+  "Risk": 15
  }
 }
