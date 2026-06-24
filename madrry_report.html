@@ -80,6 +80,11 @@
     .diag-panel ul { margin:4px 0 0 18px; padding:0; font-size:var(--fs-table); color:var(--red); }
 
     .section-title { padding:10px 15px; margin-top:32px; margin-bottom:0; border-radius:8px 8px 0 0; font-size:var(--fs-title); font-weight:600; text-transform:uppercase; letter-spacing:0.05em; background-color:var(--surface); }
+    .section-title.collapsible { cursor:pointer; user-select:none; }
+    .section-title.collapsible::after { content:'▾'; float:right; opacity:0.65; font-weight:400; }
+    .section-title.collapsed { border-radius:8px; }
+    .section-title.collapsed::after { content:'▸'; }
+    .section-title.collapsed + .table-container { display:none; }
     .bg-aplus { color:var(--green); border-bottom:3px solid var(--green); }
     .bg-a { color:var(--yellow); border-bottom:3px solid var(--yellow); }
     .bg-aminus { color:var(--red); border-bottom:3px solid var(--red); }
@@ -168,7 +173,7 @@
     .ext-asof { color:var(--text-3); font-size:var(--fs-caption); margin:6px 0 12px; }
     .ext-asof code { color:var(--text-2); background:var(--raised); padding:1px 5px; border-radius:4px; font-family:var(--mono); }
     .grade-badge { font-family:var(--mono); font-weight:700; font-size:var(--fs-body); padding:3px 9px; border-radius:4px; display:inline-block; }
-</style></head><body><h1>MADRRY Watchlist</h1><p class='header-sub'>2026-06-24 16:49:38 | QM + BIBLE + M.E.T.A. (Trendline + 3-Day Flag) + U&amp;R SNIPER + Martin Playbook (AVWAP · Base · Extension)</p>
+</style></head><body><h1>MADRRY Watchlist</h1><p class='header-sub'>2026-06-24 17:08:58 | QM + BIBLE + M.E.T.A. (Trendline + 3-Day Flag) + U&amp;R SNIPER + Martin Playbook (AVWAP · Base · Extension)</p>
     <div class="runbar">
         <span class="chip red"><b>RED</b> Regime · <span style='color:var(--red);'>Breakouts OFF</span></span>
         <span class="chip">A+ <b>0</b></span>
@@ -178,10 +183,10 @@
         <span class="chip">U&amp;R <b>7</b></span>
         <span class="chip red">Short <b>6</b></span>
         <span class="chip">Mkt Mod <b>0.7x</b></span>
-        <span class="chip">Run <b>64.2s</b></span>
+        <span class="chip">Run <b>66.9s</b></span>
         <button class="chip livebtn" onclick="refreshPrices(this)">🔄 Refresh Prices</button>
         <span class="chip" id="liveStamp" style="color:#8b949e;">prices frozen at scan — tap 🔄 for live</span>
-    </div><div class='regime' style='border-color:#ff7b72;background:rgba(218,54,51,0.12);'><div class='reg-head'><span style='color:#ff7b72;'>🚦 REGIME: RED</span><span class='reg-score'>3 red / 2 amber · Breakouts SUPPRESSED — 3 red tells; raise cash / wait for the right side.</span></div><div class='reg-sigs'><span class='reg-sig' style='border-color:#ff7b72;color:#ff7b72;'><span class='dot dot-r'></span>Trend ✗ (QQQ &amp; SPY 10&lt;21)</span><span class='reg-sig' style='border-color:#3fb950;color:#3fb950;'><span class='dot dot-g'></span>Breadth &gt;50MA 59%</span><span class='reg-sig' style='border-color:#3fb950;color:#3fb950;'><span class='dot dot-g'></span>&gt;200MA 61%</span><span class='reg-sig' style='border-color:#ff7b72;color:#ff7b72;'><span class='dot dot-r'></span>Distribution 6d</span><span class='reg-sig' style='border-color:#3fb950;color:#3fb950;'><span class='dot dot-g'></span>Climax QQQ +2% · P53</span><span class='reg-sig' style='border-color:#3fb950;color:#3fb950;'><span class='dot dot-g'></span>Leaders &lt;50DMA 0% · noNH 0%</span><span class='reg-sig' style='border-color:#3fb950;color:#3fb950;'><span class='dot dot-g'></span>Range: holding</span><span class='reg-sig' style='border-color:#f2cc60;color:#f2cc60;'><span class='dot dot-y'></span>T2108 45% ▲1</span><span class='reg-sig' style='border-color:#f2cc60;color:#f2cc60;'><span class='dot dot-y'></span>Breakout win 46% (n50)</span><span class='reg-sig' style='border-color:#ff7b72;color:#ff7b72;'><span class='dot dot-r'></span>Sectors: 2/4 leaders weak · 4/12 soft</span><span class='reg-sig' style='border-color:#79c0ff;color:#79c0ff;'><span class='dot dot-i'></span>VIX 19.13 (-2%) · calm &lt;20 不計分</span></div><div class='reg-note'>Early-warning tells: leaders rolling over, topping breakdown, T2108 + divergence, breakout win-rate, sector RS. A perfect setup in a RED tape is a losing trade — 環境優先，型態其次.</div></div><div class="market-panel"><div class="market-title">🌐 MARKET OVERVIEW (The Bibles + QM)</div><div class="market-grid">
+    </div><div class='regime' style='border-color:#ff7b72;background:rgba(218,54,51,0.12);'><div class='reg-head'><span style='color:#ff7b72;'>🚦 REGIME: RED</span><span class='reg-score'>3 red / 2 amber · Breakouts SUPPRESSED — 3 red tells; raise cash / wait for the right side.</span></div><div class='reg-sigs'><span class='reg-sig' style='border-color:#ff7b72;color:#ff7b72;'><span class='dot dot-r'></span>Trend ✗ (QQQ &amp; SPY 10&lt;21)</span><span class='reg-sig' style='border-color:#3fb950;color:#3fb950;'><span class='dot dot-g'></span>Breadth &gt;50MA 59%</span><span class='reg-sig' style='border-color:#3fb950;color:#3fb950;'><span class='dot dot-g'></span>&gt;200MA 61%</span><span class='reg-sig' style='border-color:#ff7b72;color:#ff7b72;'><span class='dot dot-r'></span>Distribution 6d</span><span class='reg-sig' style='border-color:#3fb950;color:#3fb950;'><span class='dot dot-g'></span>Climax QQQ +2% · P53</span><span class='reg-sig' style='border-color:#3fb950;color:#3fb950;'><span class='dot dot-g'></span>Leaders &lt;50DMA 0% · noNH 0%</span><span class='reg-sig' style='border-color:#3fb950;color:#3fb950;'><span class='dot dot-g'></span>Range: holding</span><span class='reg-sig' style='border-color:#f2cc60;color:#f2cc60;'><span class='dot dot-y'></span>T2108 45% ▲1</span><span class='reg-sig' style='border-color:#f2cc60;color:#f2cc60;'><span class='dot dot-y'></span>Breakout win 46% (n50)</span><span class='reg-sig' style='border-color:#ff7b72;color:#ff7b72;'><span class='dot dot-r'></span>Sectors: 2/4 leaders weak · 4/12 soft</span><span class='reg-sig' style='border-color:#79c0ff;color:#79c0ff;'><span class='dot dot-i'></span>VIX 19.25 (-1%) · calm &lt;20 不計分</span></div><div class='reg-note'>Early-warning tells: leaders rolling over, topping breakdown, T2108 + divergence, breakout win-rate, sector RS. A perfect setup in a RED tape is a losing trade — 環境優先，型態其次.</div></div><div class="market-panel"><div class="market-title">🌐 MARKET OVERVIEW (The Bibles + QM)</div><div class="market-grid">
             <div class="market-card">
                 <h3>QQQ <span class='lp' data-tkr='QQQ' data-snap='713.6500244140625' style='float:right'>$713.65</span></h3>
                 <div style="font-size:var(--fs-caption);margin-bottom:4px;"><span class="val-red">-3.29% (-24.30)</span> <span style="color:#8b949e;">vs prev close</span></div>
@@ -5353,6 +5358,17 @@ async function refreshPrices(btn) {
       btns.forEach(function (x) { x.classList.toggle('active', x === b); });
       panels.forEach(function (p) { p.classList.toggle('active', p.id === 'tab-' + t); });
     });
+  });
+})();
+
+(function () {
+  // --- collapsible MADRRY tier sections: click a section title to fold its table ---
+  document.querySelectorAll('.section-title').forEach(function (t) {
+    var next = t.nextElementSibling;
+    if (!next || !next.classList.contains('table-container')) return;
+    t.classList.add('collapsible');
+    t.setAttribute('title', 'Click to collapse / expand');
+    t.addEventListener('click', function () { t.classList.toggle('collapsed'); });
   });
 })();
 </script>
