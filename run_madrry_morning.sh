@@ -47,8 +47,18 @@ if verify; then
     python3 "$WS/madrry_tier_a_tracker.py" >> "$LOG" 2>&1 || \
         echo "tier-A tracker errored (non-fatal)" >> "$LOG"
 
+    # v4 forward tracker: freeze each pick's 45 v4 features + grade on the +2ADR
+    # basis -> v4_tracking.json (the live, survivorship-free dataset for the re-fit).
+    echo "--- $(date '+%F %T') v4 tracker ---" >> "$LOG"
+    python3 "$WS/madrry_v4_tracker.py" >> "$LOG" 2>&1 || \
+        echo "v4 tracker errored (non-fatal)" >> "$LOG"
+
     zip -j /tmp/madrry_report.zip "$WS/madrry_report.html" >/dev/null 2>&1
-    git -C "$WS" add madrry_report.html tier_a_tracking.json 2>&1 | scrub >> "$LOG"
+    # Per-file add so a missing/late artifact never aborts the whole publish (git add
+    # is atomic on a bad pathspec — one absent file would stage NOTHING).
+    for f in madrry_report.html tier_a_tracking.json v4_tracking.json; do
+        [ -f "$WS/$f" ] && git -C "$WS" add "$f" 2>&1 | scrub >> "$LOG"
+    done
     git -C "$WS" commit -m "Daily report $(date +%Y-%m-%d) (auto)" 2>&1 | scrub >> "$LOG"
     git -C "$WS" push origin madrry-reports    2>&1 | scrub >> "$LOG"
     notify "MEDIA:/tmp/madrry_report.zip"
