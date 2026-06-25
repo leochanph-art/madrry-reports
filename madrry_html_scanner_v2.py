@@ -1782,9 +1782,8 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             {"left": "type", "operation": "in_range", "right": ["stock", "dr"]},
             {"left": "close", "operation": "greater", "right": 7},
             {"left": "volume", "operation": "greater", "right": 500000},
-            {"left": "SMA20", "operation": "greater", "right": "SMA50"},
-            {"left": "SMA50", "operation": "greater", "right": "SMA200"},
             {"left": "close", "operation": "greater", "right": "SMA200"},
+            {"left": "market_cap_basic", "operation": "egreater", "right": 2000000000},
         ],
         "columns": [
             "name", "close", "open", "volume", "average_volume_30d_calc",
@@ -1828,9 +1827,6 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 continue
 
             ma_cluster_pct = abs(ema9 - ema21) / ema21 * 100
-            is_ma_valid = (ema9 > ema21) or (ma_cluster_pct <= 2.5 and close >= ema9)
-            if not is_ma_valid:
-                continue
 
             dist_fast = abs(close - ema9) / ema9
             dist_slow = abs(close - ema21) / ema21
@@ -1880,8 +1876,8 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             # 70% of previous day" branch needs daily history, which the cheap
             # TradingView feed doesn't carry. So Gate 2 no longer pre-filters on
             # volume — that way a day-over-day dry-up is never dropped early.
-            common_base = (not is_squat) and dist_52w <= 25.0 and adr >= 2.4
-            if not (common_base and is_tight_1d and min_dist <= 0.08 and risk_pct <= 7.0):
+            common_base = dist_52w <= 25.0 and adr >= 2.0
+            if not (common_base and is_tight_1d and min_dist <= 0.10):
                 continue
 
             status_labels = []
@@ -1937,13 +1933,18 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             # session. Needs daily history (the cheap TV feed can't supply it),
             # so it is evaluated here and used as an OR-branch in the A- gate.
             vol_dried_vs_prev = False
-            vol_vs_prev_pct = None
+            vol_vs_prev_pct = None      # today's volume as % of the PREVIOUS day
+            vol_pct_50 = None           # today's volume as % of the 50-day avg volume
             if hist_df is not None and len(hist_df) >= 2:
-                prev_vol = float(hist_df["Volume"].iloc[-2])
                 today_vol = float(hist_df["Volume"].iloc[-1])
+                prev_vol = float(hist_df["Volume"].iloc[-2])
                 if prev_vol > 0:
                     vol_vs_prev_pct = today_vol / prev_vol * 100
-                    vol_dried_vs_prev = vol_vs_prev_pct <= 65.0   # match the A- envelope gate (audit)
+                    vol_dried_vs_prev = vol_vs_prev_pct <= 65.0
+                if len(hist_df) >= 50:
+                    vol_50ma = float(hist_df["Volume"].iloc[-50:].mean())
+                    if vol_50ma > 0:
+                        vol_pct_50 = today_vol / vol_50ma * 100
             if vol_dried_vs_prev and c["vol_pct_raw"] > 55:
                 c["status_labels"].append(f"💧 Dry vs Prev Day ({vol_vs_prev_pct:.0f}%)")
 
@@ -1982,13 +1983,17 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             min_dist = c["min_dist"]
             vol_pct = c["vol_pct_raw"]
             risk_pct = c["risk_pct"]
-            # A- volume envelope (tightened): contracted vs the 30-day average OR
-            # dried hard vs yesterday — BOTH legs at <=65%. A+/A keep <=55%.
-            vol_env_ok = (vol_pct <= 65) or (vol_vs_prev_pct is not None and vol_vs_prev_pct <= 65)
+            # Volume dry-up gates (risk no longer gates tiers).
+            #   A+/A : today's vol <= 55% of the PREVIOUS day  OR  <= 55% of the 50-day avg.
+            #   A-   : today's vol <= the previous day          OR  <= the 50-day avg (not expanding).
+            vol55 = ((vol_vs_prev_pct is not None and vol_vs_prev_pct <= 55) or
+                     (vol_pct_50 is not None and vol_pct_50 <= 55))
+            vol_aminus = ((vol_vs_prev_pct is not None and vol_vs_prev_pct <= 100) or
+                          (vol_pct_50 is not None and vol_pct_50 <= 100))
 
-            is_a_plus = (is_tight_flag_3d and min_dist <= 0.04 and vol_pct <= 55 and risk_pct <= 3.5)
-            is_a = (is_tight_1d and min_dist <= 0.04 and vol_pct <= 55 and risk_pct <= 5.0 and not is_a_plus)
-            is_a_minus = (is_tight_1d and min_dist <= 0.06 and vol_env_ok and risk_pct <= 6.0
+            is_a_plus = (is_tight_flag_3d and min_dist <= 0.02 and vol55)
+            is_a = (is_tight_1d and min_dist <= 0.04 and vol55 and not is_a_plus)
+            is_a_minus = (is_tight_1d and min_dist <= 0.06 and vol_aminus
                           and not is_a_plus and not is_a)
 
             if is_a_plus:
@@ -2011,20 +2016,17 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         tier_a_overflow = sorted_a_pool[25:]
         for s in tier_a_overflow:
             s["status_labels"].append("⭐ Elite Pool (Demoted by Score)")
-        # A- is the catch-all "extended / messy" bucket and the most crowded, so
-        # rank it by Multiple-Edge stack FIRST (same signal Top Picks uses), then
-        # by M.E.T.A. score — this floats the genuinely strong setups to the top
-        # before the 25-row cap, instead of letting a thin name bury a 5-edge one.
-        # A+ overflow joins the tracked pool too (never silently dropped).
+        # A- is the catch-all "extended / messy" bucket. A+ overflow joins the tracked
+        # pool too (never silently dropped). Default sort: M.E.T.A. (v4) score high->low,
+        # shown UNCAPPED. (_edges is still computed for the per-row edge badges.)
         combined_aminus = tier_a_minus + tier_a_overflow + aplus_overflow
         n_aminus_total = len(combined_aminus)
         for s in combined_aminus:
             s["_edges"] = _edge_count(s)
-        # Keep the FULL ranked A- pool for win-rate tracking; display only top 25.
         tier_a_minus_full = sorted(combined_aminus,
-                                   key=lambda x: (x["_edges"], x["meta_score"]), reverse=True)
-        tier_a_minus = tier_a_minus_full[:25]
-        log.info("Coil qualifying (pre-cap): A+=%d A=%d A-=%d (+%d demoted from A = %d into A-, capped at 25)",
+                                   key=lambda x: x["meta_score"], reverse=True)
+        tier_a_minus = tier_a_minus_full          # uncapped — show all A-
+        log.info("Coil qualifying (pre-cap): A+=%d A=%d A-=%d (+%d demoted from A = %d into A-, A- UNCAPPED)",
                  n_aplus_raw, n_a_raw, n_aminus_raw, len(tier_a_overflow), n_aminus_total)
 
     return tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full
@@ -5304,12 +5306,13 @@ def run_scanners_and_generate_html() -> str:
         nh52_pullbacks, nh52_monitored = scan_nh52_pullbacks(nh52_hist, rs_map, diag, data_date)
         save_nh52_history(nh52_hist)
     # Tag the displayed coil A-list with 52wk-high persistence + at-new-high.
+    # Enrich the FULL A- pool (not just the top 25) so every displayed A- row has badges.
     with timed(diag, "persistence"):
-        attach_persistence(tier_a_plus + tier_a + tier_a_minus, diag)
+        attach_persistence(tier_a_plus + tier_a + tier_a_minus_full, diag)
     # ANTS (David Ryan accumulation) — tags coil A-list before Top-Picks/order-plan
     # so the display column + Top-Picks boost see them. Does NOT affect IBKR drafts.
     with timed(diag, "ants"):
-        attach_ants(tier_a_plus + tier_a + tier_a_minus, diag)
+        attach_ants(tier_a_plus + tier_a + tier_a_minus_full, diag)
     # Industry-group RS (Fred6725 rs_industries) — display-only leadership tag.
     attach_industry_rs(tier_a_plus + tier_a + tier_a_minus_full
                        + nh_data.get("green", []) + ep_matches + ur_matches, industry_rs["by_ticker"])
@@ -5350,7 +5353,7 @@ def run_scanners_and_generate_html() -> str:
     new_highs_html = generate_new_highs_section(nh_data)
     nh52_monitor_html = generate_nh52_monitor_section(nh52_pullbacks, nh52_monitored)
     counts = {
-        "a_plus": len(tier_a_plus), "a": len(tier_a), "a_minus": len(tier_a_minus),
+        "a_plus": len(tier_a_plus), "a": len(tier_a), "a_minus": len(tier_a_minus_full),
         "hve": len(ep_matches), "ur": len(ur_matches), "short": len(short_matches),
     }
     runtime = time.time() - t0
@@ -5391,7 +5394,7 @@ def run_scanners_and_generate_html() -> str:
         tracking_html,
         generate_coil_table(tier_a_plus, "🏆 TIER A+ (PERFECT COIL + HIGH MOMENTUM · incl. 🚩 HTF) - TRIGGER READY", "bg-aplus"),
         generate_coil_table(tier_a, "🔥 TIER A (DEVELOPING WATCHLIST)", "bg-a"),
-        generate_coil_table(tier_a_minus, "🚀 TIER A- (EXTENDED / MESSY)", "bg-aminus"),
+        generate_coil_table(tier_a_minus_full, "🚀 TIER A- (EXTENDED / MESSY) - ALL", "bg-aminus"),
         generate_hve_table(ep_matches),
         generate_ur_table(ur_matches),
         generate_short_table(short_matches),
