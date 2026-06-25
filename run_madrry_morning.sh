@@ -53,11 +53,21 @@ if verify; then
     python3 "$WS/madrry_v4_tracker.py" >> "$LOG" 2>&1 || \
         echo "v4 tracker errored (non-fatal)" >> "$LOG"
 
+    # WEEKLY v4 re-fit — ONLY on Saturday's run (which covers Friday's close, i.e. the
+    # full trading week just ended). Gated/promote-only-if-better; any new model lands
+    # NOW so the NEXT scan (Monday's data, Tue run) already ranks with the updated score.
+    if [ "$(date +%u)" = "6" ]; then
+        echo "--- $(date '+%F %T') v4 WEEKLY re-fit (Saturday) ---" >> "$LOG"
+        python3 "$WS/madrry_v4_refit.py" >> "$LOG" 2>&1 || \
+            echo "v4 weekly re-fit errored (non-fatal)" >> "$LOG"
+    fi
+
     zip -j /tmp/madrry_report.zip "$WS/madrry_report.html" >/dev/null 2>&1
     # Per-file add so a missing/late artifact never aborts the whole publish (git add
     # is atomic on a bad pathspec — one absent file would stage NOTHING).
-    for f in madrry_report.html tier_a_tracking.json v4_tracking.json; do
-        [ -f "$WS/$f" ] && git -C "$WS" add "$f" 2>&1 | scrub >> "$LOG"
+    for f in madrry_report.html tier_a_tracking.json v4_tracking.json \
+             meta_v4_model.json meta_v4_refit_history.jsonl model_archive; do
+        [ -e "$WS/$f" ] && git -C "$WS" add "$f" 2>&1 | scrub >> "$LOG"
     done
     git -C "$WS" commit -m "Daily report $(date +%Y-%m-%d) (auto)" 2>&1 | scrub >> "$LOG"
     git -C "$WS" push origin madrry-reports    2>&1 | scrub >> "$LOG"

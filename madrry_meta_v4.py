@@ -142,7 +142,9 @@ def meta_v4_score(df: pd.DataFrame):
         f = compute_features(df)
         x = np.array([f.get(k, 0.0) for k in m["features"]], float)
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-        z = (x - np.array(m["mean"])) / np.array(m["scale"])
+        scale = np.array(m["scale"], float)
+        scale[scale == 0] = 1.0                      # guard against a 0-scale div-by-zero
+        z = (x - np.array(m["mean"])) / scale
         logit = float(np.dot(z, m["coef"]) + m["intercept"])
         prob = 1.0/(1.0+np.exp(-logit))
         return round(float(np.interp(prob, m["calib_pctile"], np.linspace(0, 100, 101))), 1)
