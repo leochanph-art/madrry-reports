@@ -56,6 +56,7 @@ LATEST_SETUPS_PATH = os.path.join(WORKSPACE, "latest_setups.json")
 HVE_HISTORY_PATH = os.path.join(WORKSPACE, "hve_history.json")
 BREADTH_HISTORY_PATH = os.path.join(WORKSPACE, "breadth_history.json")
 EXT_PCTILE_PATH = os.path.join(WORKSPACE, "spy_qqq_extension_percentiles.csv")
+FORWARD_BASERATE_PATH = os.path.join(WORKSPACE, "forward_baserates.json")
 BREAKOUT_LOG_PATH = os.path.join(WORKSPACE, "breakout_log.json")
 TIER_A_TRACKING_PATH = os.path.join(WORKSPACE, "tier_a_tracking.json")
 META_WEIGHTS_PATH = os.path.join(WORKSPACE, "meta_weights.json")
@@ -95,6 +96,208 @@ try:
 except Exception:  # noqa: BLE001 — missing model/module => legacy score
     def _meta_v4_score(_df):
         return None
+
+# ---- Fundamentals (past-2Q + next-2Q revenue/EPS) for the tap-to-expand narrative.
+# Self-contained, disk-cached, never fatal. If the module is missing the helper is a
+# no-op that returns the plain narrative unchanged.
+try:
+    import madrry_fundamentals as _fund
+except Exception:  # noqa: BLE001
+    _fund = None
+
+
+def _narrative(ticker: str, inner_html: str) -> str:
+    """Wrap a row's narrative (theme/sector/industry) so tapping it reveals the
+    fundamentals panel. Falls back to the bare narrative if data/module unavailable."""
+    if _fund is None:
+        return inner_html
+    try:
+        return _fund.details_html(ticker, inner_html)
+    except Exception:
+        return inner_html
+
+
+def _prefetch_fundamentals(tickers, budget_s: float = 90.0) -> None:
+    """Warm the fundamentals cache for every ticker in the report. Called once for the
+    main MADRRY batch (90s) and again, smaller, inside the Minervini/Trilogy generators
+    — each call gets its OWN wall-clock budget, so keep the secondary ones short to bound
+    the total fundamentals spend (most of their tickers are already cache-warm anyway)."""
+    if _fund is None:
+        return
+    tk = [t for t in tickers if t]
+    try:
+        _fund.prefetch(tk, workers=8, budget_s=budget_s)
+    except Exception:
+        pass
+    # Tier 2 (best-in-industry net-margin percentile): one batched scan per UNIQUE industry,
+    # cached per day + idempotent, so the secondary Minervini/Trilogy calls are ~free. Own
+    # short budget; failure just omits the "top X% in industry" clause.
+    try:
+        _fund.prefetch_industry_margins(tk, budget_s=min(30.0, budget_s / 3.0))
+    except Exception:
+        pass
+
+
+REVISIONS_TOP_N = 12          # warm estimate-revision counts for this many top picks only
+
+
+def _prefetch_revisions(tickers, budget_s: float = 25.0) -> None:
+    """Tier 3 — warm analyst estimate-revision counts for a SMALL top-picks list. Per-ticker
+    yfinance (NOT batched), so deliberately limited; never fatal."""
+    if _fund is None:
+        return
+    try:
+        _fund.prefetch_revisions([t for t in tickers if t], budget_s=budget_s)
+    except Exception:
+        pass
+
+
+# --- sortable derived columns: price-to-MA distance + forward-quarter revenue YoY ---
+def _ma_dist_data(closes) -> dict:
+    """Price % extension above(+)/below(−) its trailing 10/20/50-day SMA, from a daily
+    close series. Returns {10: pct|None, 20: pct|None, 50: pct|None} (None where fewer
+    than `period` bars are available). Computed from the SAME close list the sparkline
+    uses, so every table gets a uniform daily-SMA distance regardless of its own MA set."""
+    vals = [float(c) for c in closes
+            if c is not None and not (isinstance(c, float) and math.isnan(c))]
+    out = {10: None, 20: None, 50: None}
+    if not vals:
+        return out
+    px = vals[-1]
+    for p in (10, 20, 50):
+        if len(vals) >= p:
+            ma = sum(vals[-p:]) / p
+            out[p] = ((px - ma) / ma * 100.0) if ma else None
+    return out
+
+
+def _adr20(df, n: int = 20) -> float:
+    """Average Daily Range over the last `n` sessions, as a percent — the canonical
+    Qullamaggie ADR%:  100 × (mean(High / Low) − 1).
+
+    This is THE single ADR definition for the whole report. It matches TradingView's
+    native `ADRP` field (read directly on the tabs that scan TV — watchlist, new-highs)
+    and the HTF engine's adr20, so "ADR" means the same slow 20-day range trait
+    everywhere. It is used to COMPUTE ADR on the tabs fed by EXTERNAL history
+    (Minervini / Trilogy), where no TradingView row exists. It is NOT TradingView's
+    1-day `Volatility.D` — so the tightness gate (today's range ≤ ADR) compares today
+    against the 20-day norm, not against itself.
+    Returns 0.0 when history is too short/invalid (caller keeps its fallback)."""
+    try:
+        if df is None or len(df) < 2:
+            return 0.0
+        lo = df["Low"].astype(float).replace(0, np.nan)
+        ratio = (df["High"].astype(float) / lo).iloc[-n:]
+        v = float((ratio.mean() - 1.0) * 100.0)
+        return v if v == v else 0.0          # NaN guard (== self is False for NaN)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _ma_cells(d: Optional[dict]) -> str:
+    """Three sortable <td>s — distance from the 10/20/50-day SMA. Display is the
+    ABSOLUTE % with a ▲(above)/▼(below) arrow; data-sort is the absolute distance so
+    clicking ascending puts the names TIGHTEST to the line first (the pullback/entry
+    use-case). Missing → '—' with data-sort 9999 (parks last on ascending)."""
+    d = d or {}
+    cells = []
+    for p in (10, 20, 50):
+        v = d.get(p)
+        if v is None:
+            cells.append("<td class='num ma-cell' data-sort='9999'>—</td>")
+        else:
+            ab = abs(v)
+            arrow = "▲" if v >= 0 else "▼"
+            col = "var(--green)" if v >= 0 else "var(--red)"
+            cells.append(
+                f"<td class='num ma-cell' data-sort='{ab:.4f}'>{ab:.1f}"
+                f"<span style='color:{col};font-size:var(--fs-micro);'>{arrow}</span></td>")
+    return "".join(cells)
+
+
+def _fwd_yoy_cell(ticker: str) -> str:
+    """Sortable <td> — the FIRST forward (estimate) revenue quarter's YoY growth, read
+    from the fundamentals cache (warmed by _prefetch_fundamentals). data-sort = the %
+    so clicking descending puts the fastest-growing names first; missing → '—' with
+    data-sort −999 (parks last on descending). Never raises."""
+    y, lbl = None, ""
+    if _fund is not None:
+        try:
+            rec = _fund.get(ticker)
+            if rec:
+                for r in rec.get("rev", []):
+                    if r.get("est") and r.get("yoy") is not None:
+                        y, lbl = r["yoy"], r.get("lbl", "")
+                        break
+        except Exception:
+            y = None
+    if y is None:
+        return "<td class='num fy-cell' data-sort='-999'>—</td>"
+    pct = y * 100.0
+    col = "var(--green)" if pct > 0.5 else ("var(--red)" if pct < -0.5 else "var(--text-3)")
+    sign = "+" if pct >= 0 else ""
+    sub = (f"<br><span style='font-size:var(--fs-micro);color:var(--text-3);'>{esc(lbl)}</span>"
+           if lbl else "")
+    return (f"<td class='num fy-cell' data-sort='{pct:.2f}'>"
+            f"<span style='color:{col};font-weight:600;'>{sign}{pct:.0f}%</span>{sub}</td>")
+
+
+def _eps_accel_cell(ticker: str) -> str:
+    """Sortable <td> — O'Neil earnings ACCELERATION: the TREND in quarterly EPS YoY growth
+    (a rising growth RATE = accelerating, the CANSLIM 'C' refined). Headline = an
+    acceleration arrow + the latest reported quarter's EPS YoY%; sub-line = the recent YoY
+    path (+ a ✦TTM mark when trailing-12-month EPS is at a new high). data-sort = the change
+    in YoY rate in pp, so clicking descending puts the fastest accelerators first; missing →
+    '—' parked last (data-sort −9999). Reads the fundamentals cache; never raises."""
+    a = None
+    if _fund is not None:
+        try:
+            rec = _fund.get(ticker)
+            a = rec.get("eps_accel") if rec else None
+        except Exception:
+            a = None
+    score = a.get("accel_score") if a else None
+    verdict = a.get("verdict") if a else None
+    if score is None or verdict is None:
+        return "<td class='num accel-cell' data-sort='-9999'>—</td>"
+    if verdict == "accel":
+        arrow, acol = ("▲▲" if score >= 20 else "▲"), "var(--green)"
+    elif verdict == "decel":
+        arrow, acol = ("▼▼" if score <= -20 else "▼"), "var(--red)"
+    else:
+        arrow, acol = "→", "var(--text-3)"
+    qs = [q for q in (a.get("quarters") or []) if q.get("yoy") is not None]
+    latest = qs[-1]["yoy"] * 100.0 if qs else None
+    if latest is None:
+        ynum = ""
+    else:
+        ycol = "var(--green)" if latest > 0.5 else ("var(--red)" if latest < -0.5 else "var(--text-3)")
+        ynum = (f" <span style='color:{ycol};font-weight:600;'>"
+                f"{'+' if latest >= 0 else ''}{latest:.0f}%</span>")
+    path = "→".join(f"{q['yoy'] * 100:.0f}" for q in qs[-3:]) if qs else ""
+    ttm = " <span style='color:var(--green);'>✦TTM</span>" if a.get("ttm_new_high") else ""
+    if path:
+        sub = (f"<br><span style='font-size:var(--fs-micro);color:var(--text-3);'>"
+               f"{esc(path)}%{ttm}</span>")
+    elif ttm:
+        sub = f"<br><span style='font-size:var(--fs-micro);'>{ttm}</span>"
+    else:
+        sub = ""
+    return (f"<td class='num accel-cell' data-sort='{score:.2f}'>"
+            f"<span style='color:{acol};font-weight:700;'>{arrow}</span>{ynum}{sub}</td>")
+
+
+# The FIVE sortable/reorderable column headers shared by every main stock table. The body
+# cells are produced by _ma_cells(row['_ma_dist']) + _fwd_yoy_cell(ticker) + _eps_accel_cell(
+# ticker), inserted at the SAME position so column N's header and cells move together on
+# reorder. Adding/removing one here REQUIRES the matching body cell at all four sites.
+_MA_YOY_HEADERS = (
+    "<th class='num' data-col='d10' title='Distance from the 10-day SMA (|price−SMA|/SMA). Click ascending = tightest to the line first'>vs 10MA</th>"
+    "<th class='num' data-col='d20' title='Distance from the 20-day SMA. Click ascending = tightest first'>vs 20MA</th>"
+    "<th class='num' data-col='d50' title='Distance from the 50-day SMA. Click ascending = tightest first'>vs 50MA</th>"
+    "<th class='num' data-col='fyoy' title='Next forward-quarter revenue YoY (consensus). Click descending = fastest-growing first'>Fwd YoY</th>"
+    "<th class='num' data-col='accel' title='Earnings ACCELERATION (O&#39;Neil / CANSLIM C): the trend in quarterly EPS YoY growth &mdash; &#9650;&#9650;/&#9650; the growth RATE is rising, &#8594; steady, &#9660; slowing. Headline = latest reported-quarter EPS YoY%; &#10022;TTM = trailing-12-month EPS at a new high. Click descending = fastest accelerators first'>EPS Accel</th>"
+)
 
 
 def _ranking_meta_score(hist_df, legacy_score, market_modifier):
@@ -638,7 +841,10 @@ def fetch_histories_batch(tickers: List[str], period: str = "1y", min_rows: int 
 
 def _fetch_one_index(ticker: str) -> Optional[dict]:
     """Fetch + compute one market-health card (used in a thread pool)."""
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=3mo"
+    # 14mo (not 3mo) so we carry ≥200 bars for the SMA200 bull/bear regime that
+    # the forward-base-rate lookup conditions on. The 10/20/50-SMA, dist-days and
+    # asof/TV-patch logic all read only the tail, so the longer range is inert to them.
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=14mo"
     data = _request_json(url, headers={"User-Agent": "Mozilla/5.0"}, label=f"market:{ticker}", retries=3)
     result = data["chart"]["result"][0]
     closes = result["indicators"]["quote"][0]["close"]
@@ -683,10 +889,13 @@ def _fetch_one_index(ticker: str) -> Optional[dict]:
     sma20 = sum(x[0] for x in valid[-20:]) / 20
     sma21 = sum(x[0] for x in valid[-21:]) / 21
     sma50 = sum(x[0] for x in valid[-50:]) / 50
+    # SMA200 + bull/bear regime for the forward-base-rate lookup (None if <200 bars).
+    sma200 = (sum(x[0] for x in valid[-200:]) / 200) if len(valid) >= 200 else None
+    above_200 = (c > sma200) if sma200 is not None else None
     ext_10 = ((c - sma10) / sma10) * 100
     ext_20 = ((c - sma20) / sma20) * 100
     ext_50 = ((c - sma50) / sma50) * 100
-    spark = make_sparkline([x[0] for x in valid[-40:]])
+    spark = make_price_spark([x[0] for x in valid], 40)
 
     # Recent consolidation range (≈20 sessions, excluding the last 3) for the
     # topping-breakdown signal.
@@ -720,6 +929,8 @@ def _fetch_one_index(ticker: str) -> Optional[dict]:
         "ext_10": ext_10,
         "ext_20": ext_20,
         "ext_50": ext_50,
+        "sma200": sma200,
+        "above_200": above_200,
         "dist_days": dist_days,
         "spark": spark,
         "range_low": rng_lo,
@@ -1298,30 +1509,137 @@ def get_theme(ticker, industry):
     return ind
 
 
-def make_sparkline(closes: Iterable[float], width: int = 88, height: int = 26, pad: int = 2) -> str:
-    """Inline SVG sparkline from a price series (reuses already-fetched history)."""
+# MA overlay colours (distinct, GitHub-dark friendly) + the periods we draw.
+# 50-MA deliberately the darkest/most-muted (slowest line, should recede).
+_MA_SPEC = [(10, "#58a6ff"), (20, "#e3b341"), (50, "#8957e5")]   # blue / amber / dark-purple
+# Darker, thinner variants for the small external-engine sparklines (Minervini /
+# Trilogy) so the MA lines sit clearly BEHIND the bright green/red price line.
+_MA_SPEC_DARK = [(10, "#1158c7"), (20, "#9e6a00"), (50, "#5a2da0")]  # dark blue / amber / purple
+_MA_SPEC_10W = [(10, "#1158c7")]                                     # single 10-week MA (Trilogy)
+
+
+def _trailing_sma(vals: List[float], period: int) -> List[Optional[float]]:
+    """Simple trailing MA aligned to `vals`; None where < period bars precede it.
+    O(n) running sum."""
+    out: List[Optional[float]] = []
+    s = 0.0
+    for i, v in enumerate(vals):
+        s += v
+        if i >= period:
+            s -= vals[i - period]
+        out.append(s / period if i >= period - 1 else None)
+    return out
+
+
+def _polyline_segments(xy: List[Tuple[float, Optional[float]]], color: str, sw: float) -> str:
+    """Draw a polyline that breaks across None gaps (so undefined MA bars don't
+    connect). Returns concatenated <polyline> elements."""
+    segs, cur = [], []
+    for x, y in xy:
+        if y is None:
+            if len(cur) >= 2:
+                segs.append(cur)
+            cur = []
+        else:
+            cur.append(f"{x:.1f},{y:.1f}")
+    if len(cur) >= 2:
+        segs.append(cur)
+    return "".join(
+        f'<polyline points="{" ".join(s)}" fill="none" stroke="{color}" '
+        f'stroke-width="{sw}" stroke-linejoin="round" stroke-linecap="round" opacity="0.75"/>'
+        for s in segs)
+
+
+def make_sparkline(closes: Iterable[float], width: int = 88, height: int = 26, pad: int = 2,
+                   window: Optional[int] = None, show_ma: bool = False,
+                   price_sw: float = 1.5, ma_sw: float = 1.1, label_fs: int = 7,
+                   ma_spec: Optional[List[Tuple[int, str]]] = None, ma_labels: bool = True) -> str:
+    """Inline SVG sparkline from a price series (reuses already-fetched history).
+
+    show_ma=True overlays 10/20/50-period MAs (computed on the FULL series passed,
+    so the 50-MA is valid across the whole window) and displays only the last
+    `window` bars. Each MA gets a colour + a small end-label so it reads clearly.
+    Backward-compatible: with show_ma=False / window=None it draws the single price
+    line exactly as before (used by the external-engine weekly/low sparklines)."""
     vals = [float(c) for c in closes if c is not None and not (isinstance(c, float) and math.isnan(c))]
     if len(vals) < 2:
         return ""
-    lo, hi = min(vals), max(vals)
-    rng = (hi - lo) or 1.0
-    n = len(vals)
-    inner_w = width - 2 * pad
+    spec = ma_spec if ma_spec is not None else _MA_SPEC
+
+    # MA series over the FULL history, THEN slice to the display window (so the
+    # 50-MA exists at the left edge of the window instead of being blank).
+    ma_full = {p: _trailing_sma(vals, p) for p, _ in spec} if show_ma else {}
+    if window and len(vals) > window:
+        disp = vals[-window:]
+        ma_disp = {p: ma_full[p][-window:] for p in ma_full}
+    else:
+        disp = vals
+        ma_disp = {p: ma_full[p][-len(disp):] for p in ma_full}
+    n = len(disp)
+
+    label_w = (label_fs * 2 + 4) if (show_ma and ma_labels) else 0
+    inner_w = width - 2 * pad - label_w
     inner_h = height - 2 * pad
-    pts = []
-    for i, v in enumerate(vals):
-        x = pad + (i / (n - 1)) * inner_w
-        y = pad + (1 - (v - lo) / rng) * inner_h
-        pts.append(f"{x:.1f},{y:.1f}")
-    color = "#3fb950" if vals[-1] >= vals[0] else "#ff7b72"
-    last_x, last_y = pts[-1].split(",")
-    return (
-        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
-        f'style="vertical-align:middle;">'
-        f'<polyline points="{" ".join(pts)}" fill="none" stroke="{color}" '
-        f'stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>'
-        f'<circle cx="{last_x}" cy="{last_y}" r="1.8" fill="{color}"/></svg>'
-    )
+
+    # scale over the displayed price PLUS every defined MA point, so all lines fit
+    ys = list(disp)
+    for p in ma_disp:
+        ys += [v for v in ma_disp[p] if v is not None]
+    lo, hi = min(ys), max(ys)
+    rng = (hi - lo) or 1.0
+
+    def X(i):
+        return pad + (i / (n - 1)) * inner_w
+
+    def Y(v):
+        return pad + (1 - (v - lo) / rng) * inner_h
+
+    parts = []
+    labels = []   # (y, period, colour) collected, then de-collided so none overlap
+    # MA lines first (under the price), longest period at the back
+    for p, col in spec:
+        if p not in ma_disp:
+            continue
+        xy = [(X(i), (Y(v) if v is not None else None)) for i, v in enumerate(ma_disp[p])]
+        parts.append(_polyline_segments(xy, col, ma_sw))
+        # Label only an MA that actually drew a line (>=2 defined in-window points).
+        # A 1-point MA renders no polyline (_polyline_segments needs >=2), so without
+        # this gate its end-label would float orphaned with no visible line.
+        drawn = [t for t in xy if t[1] is not None]
+        if len(drawn) >= 2 and ma_labels:
+            labels.append([min(max(drawn[-1][1], pad + label_fs), height - pad), p, col])
+    # spread labels vertically so converging MAs stay legible
+    gap = label_fs + 1
+    labels.sort()
+    for k in range(1, len(labels)):
+        if labels[k][0] - labels[k - 1][0] < gap:
+            labels[k][0] = labels[k - 1][0] + gap
+    overflow = labels[-1][0] - (height - 1) if labels else 0
+    if overflow > 0:                       # shift the whole stack up if it ran past the bottom
+        for lab in labels:
+            lab[0] -= overflow
+    for y, p, col in labels:
+        parts.append(
+            f'<text x="{width - label_w + 2:.1f}" y="{y:.1f}" font-size="{label_fs}" '
+            f'font-family="ui-monospace,monospace" fill="{col}">{p}</text>')
+
+    color = "#3fb950" if disp[-1] >= disp[0] else "#ff7b72"
+    ppts = " ".join(f"{X(i):.1f},{Y(v):.1f}" for i, v in enumerate(disp))
+    parts.append(
+        f'<polyline points="{ppts}" fill="none" stroke="{color}" '
+        f'stroke-width="{price_sw}" stroke-linejoin="round" stroke-linecap="round"/>')
+    parts.append(f'<circle cx="{X(n - 1):.1f}" cy="{Y(disp[-1]):.1f}" r="{price_sw * 1.25:.1f}" fill="{color}"/>')
+
+    return (f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+            f'style="vertical-align:middle;">' + "".join(parts) + "</svg>")
+
+
+def make_price_spark(closes: Iterable[float], window: int = 40) -> str:
+    """MADRRY price-column sparkline: last `window` daily closes with 10/20/50-MA
+    overlays. Larger canvas (uses the wide Price column), THICK price line, THIN
+    muted MA lines so the price stands out and the MAs don't crowd it."""
+    return make_sparkline(closes, width=190, height=58, pad=4, window=window,
+                          show_ma=True, price_sw=2.4, ma_sw=0.8, label_fs=9)
 
 
 def make_volume_bars(volumes: Iterable[float], ups: Optional[List[bool]] = None,
@@ -1788,11 +2106,11 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         "columns": [
             "name", "close", "open", "volume", "average_volume_30d_calc",
             "EMA9", "EMA21", "SMA50", "SMA200",
-            "Volatility.D", "market_cap_basic", "Perf.1M", "Perf.3M", "Perf.6M", "Perf.Y",
+            "ADRP", "market_cap_basic", "Perf.1M", "Perf.3M", "Perf.6M", "Perf.Y",
             "sector", "industry", "high", "low", "change", "price_52_week_high",
             "float_shares_outstanding",
         ],
-        "sort": {"sortBy": "Volatility.D", "sortOrder": "desc"},
+        "sort": {"sortBy": "ADRP", "sortOrder": "desc"},
         "range": [0, 5000],
     }
 
@@ -1802,12 +2120,23 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
     tier_a_minus_full: List[dict] = []   # uncapped A- pool (for win-rate tracking)
     coil_candidates: List[dict] = []
 
+    # --- funnel instrumentation: exact survivor count after each filter stage ---
+    n_universe = None          # TradingView totalCount matching the Stage-1 filter
+    n_stage1 = 0               # rows actually fetched (range-capped at 5000)
+    drop_missing = drop_adr = drop_proximity = 0
+    n_aplus_raw = n_a_raw = n_aminus_raw = n_aminus_total = 0
+
     try:
         time.sleep(2)
         data = tv_post(payload_coil, label="coil", diag=diag)
-        for row in data.get("data", []):
+        _rows = data.get("data", []) or []
+        n_stage1 = len(_rows)
+        _univ = data.get("totalCount")
+        n_universe = _univ if isinstance(_univ, int) else None
+        for row in _rows:
             d = row.get("d")
             if not d or len(d) < 22:
+                drop_missing += 1
                 continue
             (ticker, close, opn, vol, avg_vol, ema9, ema21, sma50, sma200, adr,
              mcap, perf_1m, perf_3m, perf_6m, perf_y, sector, industry,
@@ -1815,15 +2144,19 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
 
             if any(x is None for x in (close, vol, avg_vol, ema9, ema21, sma50,
                                        sma200, adr, perf_1m, perf_3m, high, low, high_52w)):
+                drop_missing += 1
                 continue
             if opn is None:
                 opn = close
 
             p6 = perf_6m or 0
             py = perf_y or 0
-            if perf_1m < 10 and perf_3m < 30 and p6 < 50 and py < 80:
-                continue
-            if adr < 2.4:
+            # (momentum floor removed 2026-06-28 per user — no longer gates the candidate pool)
+            # `adr` is TradingView's native ADRP — the canonical 20-day ADR% (100×(mean(H/L)−1)),
+            # the same value shown on TV charts. Real ADR, not the old 1-day Volatility.D, so the
+            # >=2.0% floor here is a genuine "moves enough to trade" universe filter.
+            if adr < 2.0:
+                drop_adr += 1
                 continue
 
             ma_cluster_pct = abs(ema9 - ema21) / ema21 * 100
@@ -1834,7 +2167,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             vol_pct = (vol / avg_vol) * 100
             dist_52w = ((high_52w - close) / high_52w) * 100
             day_range = high - low
-            day_range_pct = (day_range / close) * 100
+            day_range_pct = ((high / low) - 1.0) * 100 if low else 0.0   # same basis as ADRP (High/Low)
             is_premium_cluster = ma_cluster_pct <= 2.5
 
             is_squat = False
@@ -1858,6 +2191,9 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 stop_price = round(entry_price * 0.95, 2)
             risk_pct = round(((entry_price - stop_price) / entry_price) * 100, 1)
             stop_reason = "PDL" if abs(stop_price - round(low - 0.05, 2)) < 0.001 else hugging_ma
+            # Tight single bar: today's range ≤ the stock's 20-day ADR (real now that `adr`
+            # is ADRP, not the old self-referential 1-day value). Grades A vs A- below; it is
+            # NOT a universe cut (a stock with one wide bar is still worth watching).
             is_tight_1d = day_range_pct <= adr * 1.0
 
             # Martin "pullback plan" (additive, a DIFFERENT entry from the
@@ -1877,7 +2213,11 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             # TradingView feed doesn't carry. So Gate 2 no longer pre-filters on
             # volume — that way a day-over-day dry-up is never dropped early.
             common_base = dist_52w <= 25.0 and adr >= 2.0
-            if not (common_base and is_tight_1d and min_dist <= 0.10):
+            # Universe gate = near a key MA + tradeable ADR + not over-extended. Tightness
+            # (is_tight_1d / 3-day flag) is intentionally NOT here — it discriminates the
+            # A+/A/A- tiers below, rather than hiding names that had one wide session.
+            if not (common_base and min_dist <= 0.10):
+                drop_proximity += 1
                 continue
 
             status_labels = []
@@ -1912,6 +2252,9 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         hist_map = fetch_histories_batch([c["ticker"] for c in coil_candidates], period="1y")
         for c in coil_candidates:
             hist_df = hist_map.get(c["ticker"])
+            # ADR is already TradingView's native ADRP (real 20-day ADR%) from the scan row —
+            # no history recompute needed. History below is for the sparkline, the 3-day tight
+            # flag, the volume dry-up test and the trendline.
             meta_input = {
                 "perf_1m": c["perf_1m"], "perf_3m": c["perf_3m"], "adr": c["adr"],
                 "close": c["close"], "sma10": c["ema9"], "sma20": c["ema21"],
@@ -1927,7 +2270,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             # Sparkline reuses the history we already downloaded — no extra calls.
             spark = ""
             if hist_df is not None and len(hist_df) >= 2:
-                spark = make_sparkline(hist_df["Close"].iloc[-40:].tolist())
+                spark = make_price_spark(hist_df["Close"].tolist(), 40)
 
             # Day-over-day volume dry-up: today's volume <= 70% of the prior
             # session. Needs daily history (the cheap TV feed can't supply it),
@@ -1974,6 +2317,8 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 "dist_52w": c["dist_52w"], "meta_score": meta_score,
                 "meta_details": meta_score_data["details"], "trendline_data": trendline_data,
                 "spark": spark, "footprint": footprint,
+                "_ma_dist": (_ma_dist_data(hist_df["Close"].tolist())
+                             if (hist_df is not None and len(hist_df) >= 2) else None),
                 "pb_entry": c["pb_entry"], "pb_stop": c["pb_stop"], "pb_risk": c["pb_risk"], "ema9": c["ema9"],
                 "below_20dma": below_20dma, "below_50dma": below_50dma, "days_since_high": days_since_high,
             }
@@ -1993,7 +2338,8 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
 
             is_a_plus = (is_tight_flag_3d and min_dist <= 0.02 and vol55)
             is_a = (is_tight_1d and min_dist <= 0.04 and vol55 and not is_a_plus)
-            is_a_minus = (is_tight_1d and min_dist <= 0.06 and vol_aminus
+            # A- no longer requires today's bar to be tight (removed 2026-06-28 per user)
+            is_a_minus = (min_dist <= 0.06 and vol_aminus
                           and not is_a_plus and not is_a)
 
             if is_a_plus:
@@ -2029,7 +2375,18 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         log.info("Coil qualifying (pre-cap): A+=%d A=%d A-=%d (+%d demoted from A = %d into A-, A- UNCAPPED)",
                  n_aplus_raw, n_a_raw, n_aminus_raw, len(tier_a_overflow), n_aminus_total)
 
-    return tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full
+    funnel = {
+        "universe_total": n_universe,        # TradingView count matching the Stage-1 filter
+        "stage1_fetched": n_stage1,          # rows fetched (range-capped at 5000)
+        "drop_missing": drop_missing,
+        "drop_adr": drop_adr,
+        "drop_proximity": drop_proximity,
+        "stage2_candidates": len(coil_candidates),
+        "stage3_aplus": n_aplus_raw,
+        "stage3_a": n_a_raw,
+        "stage3_aminus": n_aminus_total,
+    }
+    return tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full, funnel
 
 
 def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
@@ -2055,7 +2412,7 @@ def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
         ],
         "columns": [
             "name", "close", "open", "volume", "average_volume_30d_calc",
-            "Volatility.D", "market_cap_basic", "Perf.1M", "Perf.3M", "Perf.6M", "Perf.Y",
+            "ADRP", "market_cap_basic", "Perf.1M", "Perf.3M", "Perf.6M", "Perf.Y",
             "sector", "industry", "high", "low", "price_52_week_high",
             "float_shares_outstanding",
         ],
@@ -2228,7 +2585,7 @@ def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
         meta_score_data = calculate_meta_momentum_score(meta_input, df)
         meta_score = _ranking_meta_score(df, meta_score_data["score"], market_modifier)
 
-        spark = make_sparkline(df["Close"].iloc[-40:].tolist()) if len(df) >= 2 else ""
+        spark = make_price_spark(df["Close"].tolist(), 40) if len(df) >= 2 else ""
         footprint = analyze_footprint(df)
         trendline_data = calculate_trendline_analysis(t, df)
         theme = get_theme(t, m.get("industry", "N/A"))
@@ -2510,10 +2867,10 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
             {"left": "type", "operation": "in_range", "right": ["stock", "dr"]},
             {"left": "close", "operation": "greater", "right": 10},
             {"left": "average_volume_30d_calc", "operation": "greater", "right": 500000},
-            {"left": "Volatility.D", "operation": "greater", "right": 3},
+            {"left": "ADRP", "operation": "greater", "right": 3},
             {"left": "high", "operation": "egreater", "right": "price_52_week_high"},
         ],
-        "columns": ["name", "close", "high", "low", "Volatility.D", "Perf.1M", "Perf.3M",
+        "columns": ["name", "close", "high", "low", "ADRP", "Perf.1M", "Perf.3M",
                     "market_cap_basic", "sector", "industry", "price_52_week_high"],
         "sort": {"sortBy": "Perf.3M", "sortOrder": "desc"},
         "range": [0, 500],
@@ -2579,7 +2936,7 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
             continue
 
         close = round(float(info["close"]), 2)
-        adr = round(float(info["adr"]), 2)
+        adr = round(float(info["adr"]), 2)        # TradingView native ADRP (canonical 20-day ADR%)
         high = float(info["high"]); low = float(info["low"])
         meta_in = {"perf_1m": info["p1m"], "perf_3m": info["p3m"], "adr": adr,
                    "close": close, "sma10": _ema_last(cl, 9), "sma20": e21,
@@ -2600,7 +2957,8 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
             "rs_rating": rs if isinstance(rs, int) else "N/A", "sector": info["sector"],
             "theme": get_theme(t, info["industry"]), "tag": tag, "label": label,
             "entry": entry, "stop": stop, "risk_pct": risk_pct,
-            "spark": make_sparkline(cl.iloc[-60:].tolist()) if len(cl) >= 2 else "",
+            "spark": make_price_spark(cl.tolist(), 60) if len(cl) >= 2 else "",
+            "_ma_dist": _ma_dist_data(cl.tolist()),
             "fp_badges": fp.get("badges", []),
             "persist_tier": rec["tier"], "persist_label": rec["label"],
             "nh_1m": rec["nh_1m"], "nh_3m": rec["nh_3m"], "weeks_3m": rec["weeks_3m"],
@@ -2714,7 +3072,7 @@ def scan_nh52_pullbacks(history: dict, rs_map: dict, diag: Diagnostics,
             "last_high": e.get("last_high"), "high_count": int(e.get("high_count", 0)),
             "rs_rating": rs if isinstance(rs, int) else "N/A",
             "status": status, "tag": tag,
-            "spark": make_sparkline(cl.iloc[-60:].tolist()) if len(cl) >= 2 else "",
+            "spark": make_price_spark(cl.tolist(), 60) if len(cl) >= 2 else "",
         })
 
     order = {"GRN": 0, "RED": 1, "HOLD": 2}
@@ -3041,12 +3399,23 @@ PAGE_CSS = """
     .diag-panel .t { color:var(--red); font-weight:600; margin-bottom:6px; }
     .diag-panel ul { margin:4px 0 0 18px; padding:0; font-size:var(--fs-table); color:var(--red); }
 
-    .section-title { padding:10px 15px; margin-top:32px; margin-bottom:0; border-radius:8px 8px 0 0; font-size:var(--fs-title); font-weight:600; text-transform:uppercase; letter-spacing:0.05em; background-color:var(--surface); }
+    .section-title { position:relative; padding:10px 15px; margin-top:32px; margin-bottom:0; border-radius:8px 8px 0 0; font-size:var(--fs-title); font-weight:600; text-transform:uppercase; letter-spacing:0.05em; background-color:var(--surface); }
     .section-title.collapsible { cursor:pointer; user-select:none; }
-    .section-title.collapsible::after { content:'▾'; float:right; opacity:0.65; font-weight:400; }
+    .section-title.collapsible::after { content:'▾'; position:absolute; right:15px; top:10px; opacity:0.65; font-weight:400; }
     .section-title.collapsed { border-radius:8px; }
     .section-title.collapsed::after { content:'▸'; }
     .section-title.collapsed + .table-container { display:none; }
+    /* tier criteria are printed inline in each section title (the gate from scan_coil) */
+    .funnel { margin:24px 0 0; background:var(--surface); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+    .funnel .fn-cap { padding:8px 12px; font-size:var(--fs-caption); font-weight:700; color:var(--text); background:var(--raised); border-bottom:1px solid var(--line); }
+    .funnel .fn-stage { display:flex; align-items:center; gap:14px; padding:10px 12px; border-bottom:1px solid var(--line); }
+    .funnel .fn-stage:last-child { border-bottom:none; }
+    .funnel .fn-body { flex:1; min-width:0; }
+    .funnel .fn-title { font-size:var(--fs-caption); font-weight:600; color:var(--text); }
+    .funnel .fn-sub { color:var(--text-3); font-weight:400; }
+    .funnel .fn-crit { font-size:var(--fs-micro); color:var(--text-3); line-height:1.45; margin-top:3px; }
+    .funnel .fn-count { font-family:var(--mono); font-weight:700; font-size:var(--fs-table); color:var(--accent); white-space:nowrap; text-align:right; }
+    .funnel .fn-dot { color:var(--text-3); }
     .bg-aplus { color:var(--green); border-bottom:3px solid var(--green); }
     .bg-a { color:var(--yellow); border-bottom:3px solid var(--yellow); }
     .bg-aminus { color:var(--red); border-bottom:3px solid var(--red); }
@@ -3061,6 +3430,19 @@ PAGE_CSS = """
 
     .table-container { width:100%; overflow:auto; max-height:82vh; border-radius:0 0 8px 8px; background-color:var(--surface); margin-bottom:24px; -webkit-overflow-scrolling:touch; }
     table { width:100%; border-collapse:collapse; min-width:650px; }
+    /* expandable columns: collapsed tables show only Ticker + Price & Narrative */
+    table.cols-collapsed { min-width:0; }
+    .col-hidden { display:none !important; }
+    .colbar { position:sticky; left:0; padding:8px 8px 4px; }
+    .colbar-btn { display:inline-flex; align-items:center; gap:5px; background:var(--raised); color:var(--text-2); border:1px solid var(--line); border-radius:6px; padding:4px 11px; font-size:var(--fs-caption); font-weight:500; line-height:1.3; cursor:pointer; white-space:nowrap; }
+    .colbar-btn:hover { color:var(--text); border-color:var(--accent); }
+    .colmenu { display:none; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center; }
+    .colmenu.open { display:flex; }
+    .colchip { font-size:var(--fs-caption); border:1px solid var(--line); background:var(--surface); color:var(--text-2); border-radius:999px; padding:4px 11px; cursor:pointer; user-select:none; white-space:nowrap; }
+    .colchip.on { background:var(--tint-accent); color:var(--text); border-color:var(--accent); }
+    .colchip.locked { opacity:0.55; cursor:default; }
+    .colact { font-size:var(--fs-caption); color:var(--accent); cursor:pointer; padding:4px 6px; }
+    .colact:hover { text-decoration:underline; }
     th, td { padding:10px 8px; text-align:left; border-bottom:1px solid var(--line); font-size:var(--fs-table); }
     th.num, td.num { text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; }
     th { background-color:var(--raised); color:var(--text-2); text-transform:uppercase; letter-spacing:0.05em; font-size:var(--fs-micro); font-weight:500; position:sticky; top:0; z-index:2; cursor:pointer; user-select:none; white-space:nowrap; }
@@ -3068,6 +3450,10 @@ PAGE_CSS = """
     th:first-child { z-index:4; background:var(--raised); }
     th .arrow { opacity:0.7; font-size:var(--fs-body); }
     th.sorted { color:var(--accent); } th.sorted .arrow { opacity:1; }
+    .colmove { display:inline-block; cursor:pointer; color:var(--text-3); opacity:0.5; font-weight:700;
+               padding:0 1px; font-size:var(--fs-body); line-height:1; -webkit-user-select:none; user-select:none; }
+    .colmove:hover { color:var(--accent); opacity:1; }
+    td.ma-cell, td.fy-cell { font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap; }
 
     .ticker a { font-weight:600; font-size:1.2em; color:var(--accent); text-decoration:none; }
     .ep-ticker a { font-weight:600; font-size:1.2em; color:var(--red); text-decoration:none; }
@@ -3095,6 +3481,25 @@ PAGE_CSS = """
     details.meta summary::-webkit-details-marker { display:none; }
     details.meta[open] summary { color:var(--accent); }
     details.meta ul { margin:4px 0 0; padding-left:16px; text-align:left; color:var(--text-2); font-size:var(--fs-micro); }
+    /* Tap-to-expand fundamentals on the narrative cell (theme/sector/industry). */
+    details.fund > summary { cursor:pointer; list-style:none; display:block; }
+    details.fund > summary::-webkit-details-marker { display:none; }
+    details.fund > summary::after { content:'📊'; opacity:.45; font-size:var(--fs-micro); margin-left:4px; }
+    details.fund[open] > summary::after { content:'📊 ▴'; opacity:.7; }
+    .fund-wrap { margin-top:6px; text-align:left; }
+    /* Override the report's global table rules (width:100%, min-width:650px, td
+       padding:10px / font 13px) that would otherwise stretch this nested table
+       across the whole 650px row. Force it to size to its own compact content. */
+    .fund-tbl { border-collapse:collapse; font-family:var(--mono);
+                width:auto !important; min-width:0 !important; }
+    .fund-tbl td { padding:1px 9px 1px 0 !important; text-align:right;
+                white-space:nowrap; font-size:10px !important; border-bottom:none !important; }
+    .fund-tbl tr.fund-head td { color:var(--text-3); font-weight:500; border-bottom:1px solid var(--line) !important; }
+    .fund-tbl td:first-child { text-align:left; }
+    .fund-tbl tr.fund-act td { color:var(--text); }
+    .fund-tbl tr.fund-est td { color:var(--text-3); font-style:italic; }
+    .fund-up { color:#3fb950; } .fund-dn { color:#ff7b72; } .fund-flat, .fund-na { color:var(--text-3); }
+    .fund-src { color:var(--text-3); font-size:10px; margin-top:3px; opacity:.7; }
     .spark { margin-top:4px; }
     .livebtn { cursor:pointer; font:inherit; border:1px solid var(--bd-accent) !important; color:var(--accent-2) !important; background:var(--tint-accent) !important; min-width:9.5em; min-height:32px; }
     .livebtn:disabled { opacity:0.6; cursor:wait; }
@@ -3113,6 +3518,7 @@ PAGE_CSS = """
       .chip, .theme-chip { padding:9px 14px; }
       .livebtn { min-height:44px; }
       th { padding:13px 8px; }
+      .colmove { padding:3px 6px; font-size:var(--fs-title); opacity:0.65; }
       details.meta summary { padding:8px 8px 8px 0; font-size:var(--fs-caption); }
     }
     @media (max-width:480px) {
@@ -3132,6 +3538,16 @@ PAGE_CSS = """
     .tab-btn.active .tab-count { color:var(--accent-2); }
     .tab-panel { display:none; }
     .tab-panel.active { display:block; }
+    /* ---- nested sub-tabs (e.g. 52-Week High: New Highs | Pullback) ---- */
+    .subtabs { display:flex; gap:4px; flex-wrap:wrap; margin:2px 0 14px; border-bottom:1px solid var(--line); }
+    .subtab-btn { cursor:pointer; font:inherit; font-size:var(--fs-caption); font-weight:600; color:var(--text-3);
+                  background:transparent; border:none; border-bottom:2px solid transparent; padding:7px 13px; margin-bottom:-1px; }
+    .subtab-btn:hover { color:var(--text); }
+    .subtab-btn.active { color:var(--accent); border-bottom-color:var(--accent); }
+    .subtab-btn .tab-count { color:var(--text-3); font-weight:500; font-size:var(--fs-micro); margin-left:5px; }
+    .subtab-btn.active .tab-count { color:var(--accent-2); }
+    .subtab-panel { display:none; }
+    .subtab-panel.active { display:block; }
     .ext-asof { color:var(--text-3); font-size:var(--fs-caption); margin:6px 0 12px; }
     .ext-asof code { color:var(--text-2); background:var(--raised); padding:1px 5px; border-radius:4px; font-family:var(--mono); }
     .grade-badge { font-family:var(--mono); font-weight:700; font-size:var(--fs-body); padding:3px 9px; border-radius:4px; display:inline-block; }
@@ -3249,6 +3665,7 @@ async function refreshPrices(btn) {
     return isNaN(num) ? String(raw).toUpperCase() : num;
   }
   document.querySelectorAll('table').forEach(function (table) {
+    if (table.classList.contains('fund-tbl')) return;   // nested fundamentals mini-table: not sortable
     var headRow = table.querySelector('tr');
     if (!headRow) return;
     Array.prototype.forEach.call(headRow.children, function (th, idx) {
@@ -3256,6 +3673,9 @@ async function refreshPrices(btn) {
       th.innerHTML = th.innerHTML + ' <span class="arrow">⇅</span>';
       var asc = true;
       th.addEventListener('click', function () {
+        // live index, not the capture-time idx — columns can be reordered (see the
+        // column-reorder IIFE below), so resolve this header's CURRENT position.
+        var idx = Array.prototype.indexOf.call(headRow.children, th);
         var body = table.tBodies[0] || table;
         var rows = Array.prototype.filter.call(body.rows, function (r) { return !r.querySelector('th'); });
         rows.sort(function (a, b) {
@@ -3293,6 +3713,19 @@ async function refreshPrices(btn) {
 })();
 
 (function () {
+  // --- nested sub-tabs (scoped to their parent .tab-panel so they never toggle
+  //     the top-level engine tabs) ---
+  document.querySelectorAll('.subtab-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var t = b.getAttribute('data-subtab');
+      var scope = b.closest('.tab-panel') || document;
+      scope.querySelectorAll('.subtab-btn').forEach(function (x) { x.classList.toggle('active', x === b); });
+      scope.querySelectorAll('.subtab-panel').forEach(function (p) { p.classList.toggle('active', p.id === 'subtab-' + t); });
+    });
+  });
+})();
+
+(function () {
   // --- collapsible MADRRY tier sections: click a section title to fold its table ---
   document.querySelectorAll('.section-title').forEach(function (t) {
     var next = t.nextElementSibling;
@@ -3300,6 +3733,173 @@ async function refreshPrices(btn) {
     t.classList.add('collapsible');
     t.setAttribute('title', 'Click to collapse / expand');
     t.addEventListener('click', function () { t.classList.toggle('collapsed'); });
+  });
+})();
+
+(function () {
+  // --- user-reorderable columns: tap ‹ / › on a header to move it left / right ---
+  //     Order persists per column-SCHEMA in localStorage (key 'madrry.colorder.<schema>')
+  //     so it survives daily report regenerations and applies to every table sharing the
+  //     schema (e.g. all three MADRRY tier tables move together). The Ticker column is
+  //     pinned first — its sticky-left styling is the row anchor — so nothing moves into
+  //     position 0. Touch-friendly: plain tap targets, no native drag (which mobile
+  //     browsers don't support).
+  var PFX = 'madrry.colorder.';
+  function load(s) { try { return JSON.parse(localStorage.getItem(PFX + s)); } catch (e) { return null; } }
+  function save(s, o) { try { localStorage.setItem(PFX + s, JSON.stringify(o)); } catch (e) {} }
+  function keysOf(table) {
+    var hr = table.querySelector('tr');
+    return hr ? Array.prototype.map.call(hr.children, function (th) { return th.getAttribute('data-col'); }) : [];
+  }
+  function apply(table, order) {
+    var keys = keysOf(table);
+    if (!keys.length || keys.indexOf(null) >= 0) return;        // only fully-keyed tables
+    var desired = order.filter(function (k) { return keys.indexOf(k) >= 0; });
+    keys.forEach(function (k) { if (desired.indexOf(k) < 0) desired.push(k); });  // unknown/new cols keep place
+    if (desired.length !== keys.length) return;
+    var perm = desired.map(function (k) { return keys.indexOf(k); });
+    if (perm.every(function (v, i) { return v === i; })) return;   // already in order
+    Array.prototype.forEach.call(table.querySelectorAll('tr'), function (row) {
+      var cells = Array.prototype.slice.call(row.children);
+      if (cells.length !== keys.length) return;                   // skip colspan / placeholder rows
+      var frag = document.createDocumentFragment();
+      perm.forEach(function (oi) { frag.appendChild(cells[oi]); });
+      row.appendChild(frag);
+    });
+  }
+  function move(schema, key, dir) {
+    var tables = document.querySelectorAll("table[data-schema='" + schema + "']");
+    if (!tables.length) return;
+    var cur = keysOf(tables[0]).filter(Boolean);
+    var i = cur.indexOf(key); if (i < 0) return;
+    var j = i + dir;
+    if (j < 1 || j >= cur.length) return;                          // index 0 reserved for the ticker anchor
+    cur.splice(i, 1); cur.splice(j, 0, key);
+    save(schema, cur);
+    Array.prototype.forEach.call(tables, function (t) { apply(t, cur); });
+  }
+  function addControls(table) {
+    var schema = table.getAttribute('data-schema'); if (!schema) return;
+    var hr = table.querySelector('tr'); if (!hr) return;
+    Array.prototype.forEach.call(hr.children, function (th) {
+      var key = th.getAttribute('data-col');
+      if (!key || key === 'tk' || th.querySelector('.colmove')) return;   // ticker stays pinned first
+      var L = document.createElement('span'); L.className = 'colmove'; L.textContent = '‹'; L.title = 'Move column left';
+      var R = document.createElement('span'); R.className = 'colmove'; R.textContent = '›'; R.title = 'Move column right';
+      L.addEventListener('click', function (e) { e.stopPropagation(); move(schema, key, -1); });
+      R.addEventListener('click', function (e) { e.stopPropagation(); move(schema, key, 1); });
+      th.appendChild(L); th.appendChild(R);
+    });
+  }
+  var schemas = {};
+  document.querySelectorAll('table[data-schema]').forEach(function (t) { schemas[t.getAttribute('data-schema')] = true; });
+  Object.keys(schemas).forEach(function (s) {
+    var o = load(s);
+    if (o && o.length) document.querySelectorAll("table[data-schema='" + s + "']").forEach(function (t) { apply(t, o); });
+  });
+  document.querySelectorAll('table[data-schema]').forEach(addControls);
+})();
+
+(function () {
+  // --- column selector: pick exactly which columns each stock table shows. A
+  //     "🛠 Columns" button opens a tray of toggle chips (one per column). Selection
+  //     persists per column-SCHEMA in localStorage (key 'madrry.colsel.<schema>' = JSON
+  //     array of visible data-col keys), so it survives daily regenerations and applies
+  //     to every table sharing the schema (the MADRRY tier tables move together). Ticker
+  //     is always shown (the sticky row anchor) and can't be toggled off. Default view =
+  //     Ticker + Price & Narrative. Hiding is by data-col key, so it coexists with
+  //     click-to-sort and column reorder (both resolve positions live).
+  var PFX = 'madrry.colsel.';
+  var LOCKED = 'tk';                       // always visible, not toggleable
+  var DEFAULT = ['tk', 'price'];
+  function load(s) { try { var v = JSON.parse(localStorage.getItem(PFX + s)); return (v && v.length) ? v : null; } catch (e) { return null; } }
+  function save(s, a) { try { localStorage.setItem(PFX + s, JSON.stringify(a)); } catch (e) {} }
+  function keysOf(table) {
+    var hr = table.querySelector('tr');
+    return hr ? Array.prototype.map.call(hr.children, function (th) { return th.getAttribute('data-col'); }) : [];
+  }
+  function labelOf(th) {                    // header text minus injected sort arrow / reorder arrows
+    var c = th.cloneNode(true);
+    Array.prototype.forEach.call(c.querySelectorAll('.arrow,.colmove'), function (x) { x.remove(); });
+    return (c.textContent || '').trim();
+  }
+  function apply(table, visible) {
+    var keys = keysOf(table);
+    if (!keys.length || keys.indexOf(null) >= 0) return;
+    var allShown = keys.every(function (k) { return visible.indexOf(k) >= 0; });
+    table.classList.toggle('cols-collapsed', !allShown);   // drop the 650px min-width when trimmed
+    Array.prototype.forEach.call(table.querySelectorAll('tr'), function (row) {
+      if (row.children.length !== keys.length) return;     // skip colspan / placeholder rows
+      Array.prototype.forEach.call(row.children, function (cell, i) {
+        cell.classList.toggle('col-hidden', visible.indexOf(keys[i]) < 0);
+      });
+    });
+  }
+  // group eligible tables by schema — a table needs both a tk and a price column
+  var groups = {};
+  document.querySelectorAll('table[data-schema]').forEach(function (t) {
+    var keys = keysOf(t);
+    if (!keys.length || keys.indexOf(null) >= 0) return;
+    if (keys.indexOf('tk') < 0 || keys.indexOf('price') < 0) return;
+    var s = t.getAttribute('data-schema');
+    (groups[s] = groups[s] || []).push(t);
+  });
+  Object.keys(groups).forEach(function (schema) {
+    var tables = groups[schema];
+    var keys = keysOf(tables[0]);
+    var hr = tables[0].querySelector('tr');
+    var labels = {};
+    Array.prototype.forEach.call(hr.children, function (th) { labels[th.getAttribute('data-col')] = labelOf(th); });
+    var visible = (load(schema) || DEFAULT.slice()).filter(function (k) { return keys.indexOf(k) >= 0; });
+    if (visible.indexOf(LOCKED) < 0) visible.unshift(LOCKED);
+
+    function refresh() {
+      tables.forEach(function (t) { apply(t, visible); });
+      tables.forEach(function (t) {
+        var bar = t.parentNode.querySelector('.colbar'); if (!bar) return;
+        Array.prototype.forEach.call(bar.querySelectorAll('.colchip'), function (chip) {
+          chip.classList.toggle('on', visible.indexOf(chip.getAttribute('data-col')) >= 0);
+        });
+        var btn = bar.querySelector('.colbar-btn');
+        if (btn) btn.firstChild.nodeValue = '🛠 Columns (' + visible.length + '/' + keys.length + ') ';
+      });
+    }
+    function toggleCol(k) {
+      if (k === LOCKED) return;
+      var i = visible.indexOf(k);
+      if (i >= 0) { visible.splice(i, 1); }
+      else { visible.push(k); visible.sort(function (a, b) { return keys.indexOf(a) - keys.indexOf(b); }); }
+      save(schema, visible); refresh();
+    }
+    function setAll(a) { visible = a.slice(); if (visible.indexOf(LOCKED) < 0) visible.unshift(LOCKED); save(schema, visible); refresh(); }
+
+    tables.forEach(function (t) {
+      if (t.parentNode.querySelector('.colbar')) return;   // idempotent
+      var bar = document.createElement('div'); bar.className = 'colbar';
+      var btn = document.createElement('button'); btn.className = 'colbar-btn'; btn.type = 'button';
+      btn.setAttribute('title', 'Choose which columns to show');
+      btn.appendChild(document.createTextNode('🛠 Columns '));
+      var car = document.createElement('span'); car.textContent = '▾'; btn.appendChild(car);
+      var menu = document.createElement('div'); menu.className = 'colmenu';
+      keys.forEach(function (k) {
+        var chip = document.createElement('span');
+        chip.className = 'colchip' + (k === LOCKED ? ' locked' : '');
+        chip.setAttribute('data-col', k);
+        chip.textContent = labels[k] || k;
+        if (k === LOCKED) chip.setAttribute('title', 'Ticker is always shown');
+        else chip.addEventListener('click', function () { toggleCol(k); });
+        menu.appendChild(chip);
+      });
+      var aAll = document.createElement('span'); aAll.className = 'colact'; aAll.textContent = 'All';
+      aAll.addEventListener('click', function () { setAll(keys.slice()); });
+      var aDef = document.createElement('span'); aDef.className = 'colact'; aDef.textContent = 'Default';
+      aDef.addEventListener('click', function () { setAll(DEFAULT.filter(function (k) { return keys.indexOf(k) >= 0; })); });
+      menu.appendChild(aAll); menu.appendChild(aDef);
+      btn.addEventListener('click', function () { var o = menu.classList.toggle('open'); car.textContent = o ? '▴' : '▾'; });
+      bar.appendChild(btn); bar.appendChild(menu);
+      t.parentNode.insertBefore(bar, t);                   // colbar = first child of .table-container
+    });
+    refresh();
   });
 })();
 </script>
@@ -3348,14 +3948,56 @@ def _trendline_block(tl_data: dict) -> str:
     return "<div style='font-size:var(--fs-caption);margin-bottom:6px;font-weight:500;'>" + " | ".join(parts) + "</div>"
 
 
-def generate_coil_table(matches: List[dict], title: str, bg_class: str) -> str:
+def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
+    """How the ~10k US-stock universe narrows to the coil tiers. The survivor count
+    after each stage comes from scan_coil's per-stage instrumentation (this run's real
+    numbers — see the `funnel` dict it returns). Plain divs so the table JS ignores it."""
+    fn = fn or {}
+
+    def _n(v):
+        return f"{v:,}" if isinstance(v, int) else "—"
+
+    s1_total = fn.get("universe_total")
+    s1_fetched = fn.get("stage1_fetched")
+    s1 = _n(s1_total if isinstance(s1_total, int) else s1_fetched)
+    cap_note = ""
+    if isinstance(s1_total, int) and isinstance(s1_fetched, int) and s1_total > s1_fetched:
+        cap_note = f" <span class='fn-sub'>(top {s1_fetched:,} by ADR fetched)</span>"
+    s2 = _n(fn.get("stage2_candidates"))
+    return (
+        "<div class='funnel'>"
+        "<div class='fn-cap'>📊 HOW THIS LIST WAS BUILT — from ~10,000+ US-listed stocks</div>"
+        "<div class='fn-stage'><div class='fn-body'>"
+        "<div class='fn-title'>Stage 1 · Universe filter <span class='fn-sub'>· TradingView, server-side</span></div>"
+        "<div class='fn-crit'>type = stock / DR · close &gt; $7 · day volume &gt; 500k · close &gt; SMA200 · market cap &gt; $2B</div>"
+        f"</div><div class='fn-count'>{s1}{cap_note}</div></div>"
+        "<div class='fn-stage'><div class='fn-body'>"
+        "<div class='fn-title'>Stage 2 · Candidate gate <span class='fn-sub'>· client-side</span></div>"
+        "<div class='fn-crit'>ADR ≥ 2% · ≤25% below the 52-week high · within 10% of the 9/21 EMA</div>"
+        f"</div><div class='fn-count'>{s2}</div></div>"
+        "<div class='fn-stage'><div class='fn-body'>"
+        "<div class='fn-title'>Stage 3 · Coil tiers <span class='fn-sub'>· 1-year history · flag tightness · volume dry-up</span></div>"
+        "<div class='fn-crit'>graded into A+ / A / A− by tightness, distance to a key MA and volume contraction (criteria in each tier title)</div>"
+        f"</div><div class='fn-count'><span style='color:var(--green);'>A+ {n_aplus}</span> <span class='fn-dot'>·</span> "
+        f"<span style='color:var(--yellow);'>A {n_a}</span> <span class='fn-dot'>·</span> "
+        f"<span style='color:var(--red);'>A− {n_aminus}</span></div></div>"
+        "</div>"
+    )
+
+
+def generate_coil_table(matches: List[dict], title: str, bg_class: str,
+                        subtitle: str = "") -> str:
     if not matches:
         return ""
+    sub_html = (f"<span class='section-sub'>{esc(subtitle)}</span>"
+                if subtitle else "")
     out = [
-        f'<div class="section-title {bg_class}">{esc(title)}</div>',
-        '<div class="table-container"><table>',
-        "<tr><th>Ticker</th><th>Trade Plan</th><th>Price &amp; Narrative</th><th class='num'>ADR</th>"
-        "<th>RS</th><th>M.E.T.A.</th><th class='num'>ANTS</th><th>Status (Vol &amp; MA)</th></tr>",
+        f'<div class="section-title {bg_class}">{esc(title)}{sub_html}</div>',
+        '<div class="table-container"><table data-schema="coil">',
+        "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP)'>ADR</th>"
+        "<th data-col='rs'>RS</th><th data-col='meta'>M.E.T.A.</th><th class='num' data-col='ants'>ANTS</th>"
+        + _MA_YOY_HEADERS +
+        "<th data-col='status'>Status (Vol &amp; MA)</th></tr>",
     ]
     for m in matches:
         risk_color = "#3fb950" if m["risk_pct"] <= 4.0 else ("#f2cc60" if m["risk_pct"] <= 6.0 else "#ff7b72")
@@ -3482,7 +4124,7 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str) -> str:
                 </div>
                 {pb_html}
             </td>
-            <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])}{spark_html}<br><span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}</td>
+            <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])}{spark_html}<br>{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}</td>
             <td class="num" data-sort="{m['adr']}">{m['adr']}%</td>
             <td data-sort="{rs_val if isinstance(rs_val, int) else 0}"><span class="score">{esc(rs_val)}</span>{rs_mark}<br><span style="font-size:var(--fs-micro);color:var(--text-3);">1M: +{m['perf_1m']}%</span></td>
             <td data-sort="{meta_score}">
@@ -3490,6 +4132,7 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str) -> str:
                 {_meta_details_block(m.get('meta_details', []))}
             </td>
             <td class="num" data-sort="{ants_sort}">{ants_html}</td>
+            {_ma_cells(m.get('_ma_dist'))}{_fwd_yoy_cell(m['ticker'])}{_eps_accel_cell(m['ticker'])}
             <td style="text-align:left;" data-sort="{m['vol_pct']}">
                 {nh_html}{rs_badge}{status_html}{fp_html}{trendline_html}
                 <span class="{vol_color}">Vol: {m['vol_pct']}%</span><br>
@@ -3524,7 +4167,8 @@ def _ext_ticker_cell(tk: str) -> str:
 
 def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
                           spark_field: str = "Close", spark_n: int = 40,
-                          market_modifier: float = 1.0) -> None:
+                          market_modifier: float = 1.0,
+                          spark_ma_spec: Optional[List[Tuple[int, str]]] = None) -> None:
     """Compute the MADRRY-style indicators for external-engine rows IN PLACE:
     M.E.T.A. score (+details), price sparkline (weekly when weekly_spark),
     Martin footprint badges (incl. Young Base), plus 52wk-high persistence,
@@ -3548,6 +4192,7 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
             continue
         cl = df["Close"]
         close = float(cl.iloc[-1])
+        r["_ma_dist"] = _ma_dist_data(cl.tolist())   # price-to-10/20/50-SMA sort column
         ema9 = float(cl.ewm(span=9, adjust=False).mean().iloc[-1])
         ema21 = float(cl.ewm(span=21, adjust=False).mean().iloc[-1])
 
@@ -3555,9 +4200,9 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
             if len(cl) > n and float(cl.iloc[-n - 1]) > 0:
                 return (close / float(cl.iloc[-n - 1]) - 1) * 100.0
             return 0.0
-        rng = ((df["High"] - df["Low"]) / cl.replace(0, np.nan)).iloc[-20:]
-        adr = float(rng.mean() * 100.0) if len(rng) else 0.0
-        day_range_pct = float((df["High"].iloc[-1] - df["Low"].iloc[-1]) / close * 100.0) if close else 0.0
+        adr = _adr20(df)                          # canonical ADR%: 100×(mean(High/Low,20)−1)
+        _hi, _lo = float(df["High"].iloc[-1]), float(df["Low"].iloc[-1])
+        day_range_pct = ((_hi / _lo) - 1.0) * 100.0 if _lo else 0.0   # High/Low basis, same as ADR
         hi52 = float(df["High"].iloc[-252:].max())
         dist_52w = (hi52 - close) / hi52 * 100.0 if hi52 > 0 else 0.0
         v50 = float(df["Volume"].iloc[-50:].mean())
@@ -3581,23 +4226,31 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
         try:
             src = df[spark_field] if spark_field in df.columns else cl
             vol = df["Volume"] if "Volume" in df.columns else None
+            # Keep the FULL source series so the MA overlay (when requested) is valid
+            # across the whole displayed window; slice the INDEX to the last spark_n
+            # for the volume bars / up-day shading.
             if weekly_spark:
-                src_w = src.resample("W-FRI").last().dropna()
-                idx = src_w.index[-spark_n:]
-                series = src_w.loc[idx]
-                cls_s = cl.resample("W-FRI").last().reindex(src_w.index).loc[idx]
-                vol_s = vol.resample("W-FRI").sum().reindex(src_w.index).loc[idx] if vol is not None else None
+                src_full = src.resample("W-FRI").last().dropna()
+                idx = src_full.index[-spark_n:]
+                cls_s = cl.resample("W-FRI").last().reindex(src_full.index).loc[idx]
+                vol_s = vol.resample("W-FRI").sum().reindex(src_full.index).loc[idx] if vol is not None else None
             else:
-                series = src.iloc[-spark_n:]
-                idx = series.index
+                src_full = src.dropna()
+                idx = src_full.index[-spark_n:]
                 cls_s = cl.loc[idx]
                 vol_s = vol.loc[idx] if vol is not None else None
-            price_svg = make_sparkline(series.tolist())
+            if spark_ma_spec:
+                price_svg = make_sparkline(src_full.tolist(), width=132, height=34, pad=3,
+                                           window=spark_n, show_ma=True, ma_spec=spark_ma_spec,
+                                           price_sw=1.5, ma_sw=0.8, ma_labels=False)
+            else:
+                price_svg = make_sparkline(src_full.iloc[-spark_n:].tolist())
             vol_svg = ""
             if vol_s is not None and len(vol_s) >= 2:
                 ups = [True] + [float(cls_s.iloc[k]) >= float(cls_s.iloc[k - 1])
                                 for k in range(1, len(cls_s))]
-                vol_svg = make_volume_bars(vol_s.tolist(), ups)
+                vol_svg = make_volume_bars(vol_s.tolist(), ups,
+                                           width=132 if spark_ma_spec else 88)
             r["_spark"] = price_svg + vol_svg
         except Exception:  # noqa: BLE001
             pass
@@ -3689,6 +4342,27 @@ def _ext_fp_badges(m: dict) -> str:
     return f"<div class='edge-line'>{' · '.join(toks)}</div>" if toks else ""
 
 
+def _read_json_retry(path: str, attempts: int = 4, delay: float = 0.8):
+    """Read + parse a JSON file, retrying on a transient OSError/ValueError.
+
+    The external Trilogy/Minervini feeds are rewritten IN PLACE each morning ~1 min
+    before our 08:16 scan (no atomic temp-then-rename), so a single read can catch the
+    file mid-write — truncated -> ValueError, or momentarily absent -> OSError — which
+    would zero the tab for the whole day (observed 2026-06-26: Trilogy '...not found /
+    unreadable' while the file was fine seconds later). A couple of short retries ride
+    the publisher's write window out. Raises the last error only if every attempt fails."""
+    last: Optional[Exception] = None
+    for i in range(attempts):
+        try:
+            with open(path, "r") as fh:
+                return json.load(fh)
+        except (OSError, ValueError) as exc:
+            last = exc
+            if i < attempts - 1:
+                time.sleep(delay)
+    raise last  # type: ignore[misc]
+
+
 def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
     """Minervini engine daily VCP/SEPA buy list -> MADRRY-style table."""
     try:
@@ -3701,8 +4375,7 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
     latest = sorted(files)[-1]
     asof = latest[len("buy_list_"):-len(".json")]
     try:
-        with open(os.path.join(MINERVINI_DIR, latest), "r") as fh:
-            rows = json.load(fh)
+        rows = _read_json_retry(os.path.join(MINERVINI_DIR, latest))
     except (OSError, ValueError):
         return _ext_empty(f"Minervini engine: could not read {latest}."), 0
     if not rows:
@@ -3710,16 +4383,19 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
 
     for m in rows:
         m["_risk_pct"] = round((m.get("stop_frac") or 0.0) * 100, 1)
-    _enrich_external_rows(rows, weekly_spark=False, spark_field="Low", spark_n=60,
-                          market_modifier=market_modifier)
+    _enrich_external_rows(rows, weekly_spark=False, spark_field="Close", spark_n=60,
+                          market_modifier=market_modifier, spark_ma_spec=_MA_SPEC_DARK)
+    _prefetch_fundamentals([m.get("ticker") for m in rows], budget_s=30.0)
 
     out = [
         f"<div class='ext-asof'>🏛️ Minervini engine · daily VCP/SEPA buy list · as of {esc(asof)} · "
         f"{len(rows)} names · trade plan from <code>minervini_engine</code> · "
-        f"M.E.T.A./ANTS/sparkline (daily low · 60d + volume)/leader badges computed by MADRRY</div>",
-        "<div class='table-container'><table>",
-        "<tr><th>Ticker</th><th>Trade Plan</th><th>Price &amp; Narrative</th><th class='num'>ADR</th>"
-        "<th>RS</th><th>M.E.T.A.</th><th class='num'>ANTS</th><th>Status (VCP &amp; Vol)</th></tr>",
+        f"M.E.T.A./ANTS/sparkline (daily close · 60d + 10·20·50 MA + volume)/leader badges computed by MADRRY</div>",
+        "<div class='table-container'><table data-schema='minervini'>",
+        "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP)'>ADR</th>"
+        "<th data-col='rs'>RS</th><th data-col='meta'>M.E.T.A.</th><th class='num' data-col='ants'>ANTS</th>"
+        + _MA_YOY_HEADERS +
+        "<th data-col='status'>Status (VCP &amp; Vol)</th></tr>",
     ]
     for m in rows:
         tk = m.get("ticker", "")
@@ -3770,12 +4446,13 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
                 </div>
             </td>
             <td data-sort="{close if close is not None else 0}">{price_cell}{spark_html}<br>
-                <span class="tag">{esc(foot)}</span>{rev_line}<br>
-                <span class="tag">{esc(sector)}</span></td>
+                {_narrative(tk, f'''<span class="tag">{esc(foot)}</span>{rev_line}<br>
+                <span class="tag">{esc(sector)}</span>''')}</td>
             <td class="num" data-sort="{adr}">{adr}%</td>
             <td data-sort="{rs if isinstance(rs, int) else 0}"><span class="score">{esc(rs)}</span>{perf6_line}</td>
             {_ext_meta_cell(m)}
             {_ext_ants_cell(m)}
+            {_ma_cells(m.get('_ma_dist'))}{_fwd_yoy_cell(tk)}{_eps_accel_cell(tk)}
             <td style="text-align:left;" data-sort="{ptp if ptp is not None else 999}">
                 {leader_html}{fp_html}
                 <span class="fp-badge" style="border-color:{st_color};color:{st_color};background:{st_bg};">{esc(status)}</span>
@@ -3791,8 +4468,7 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
     """Trilogy nightly O'Neil reference-class buy-stop list -> MADRRY-style table.
     limit=None shows ALL candidates (default); pass an int to cap the display."""
     try:
-        with open(TRILOGY_RTB, "r") as fh:
-            data = json.load(fh)
+        data = _read_json_retry(TRILOGY_RTB)
     except (OSError, ValueError):
         return _ext_empty("Trilogy: ready_to_buy.json not found / unreadable."), 0
     cands = data.get("candidates", []) or []
@@ -3811,15 +4487,19 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
         _ib = c.get("ideal_buy")
         c["_risk_pct"] = (round((_ib - _stp) / _ib * 100, 1)
                           if isinstance(_ib, (int, float)) and isinstance(_stp, (int, float)) and _ib else 10.0)
-    _enrich_external_rows(shown, weekly_spark=True, market_modifier=market_modifier)
+    _enrich_external_rows(shown, weekly_spark=True, market_modifier=market_modifier,
+                          spark_ma_spec=_MA_SPEC_10W)
+    _prefetch_fundamentals([c.get("ticker") for c in shown], budget_s=30.0)
 
     out = [
         f"<div class='ext-asof'>📚 Trilogy nightly · O'Neil reference-class buy-stop list · as of {esc(asof)} · "
         f"{total} candidates{extra} · trade plan from <code>trilogy webapp</code> · "
-        f"M.E.T.A./ANTS/weekly-sparkline/leader badges computed by MADRRY</div>",
-        "<div class='table-container'><table>",
-        "<tr><th>Ticker</th><th>Trade Plan</th><th>Price &amp; Narrative</th><th>Grade</th>"
-        "<th class='num'>Win20</th><th>M.E.T.A.</th><th class='num'>ANTS</th><th>Status</th></tr>",
+        f"M.E.T.A./ANTS/weekly sparkline (+10-week MA)/leader badges computed by MADRRY</div>",
+        "<div class='table-container'><table data-schema='trilogy'>",
+        "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th data-col='grade'>Grade</th>"
+        "<th class='num' data-col='win20'>Win20</th><th data-col='meta'>M.E.T.A.</th><th class='num' data-col='ants'>ANTS</th>"
+        + _MA_YOY_HEADERS +
+        "<th data-col='status'>Status</th></tr>",
     ]
     grade_col = {"A": "#3fb950", "B": "#79c0ff", "C": "#f2cc60", "D": "#ff7b72", "F": "#ff7b72"}
     for c in shown:
@@ -3877,12 +4557,13 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
                 </div>
             </td>
             <td data-sort="{close if close is not None else 0}">{price_cell}{spark_html}<br>
-                <span class="theme-tag">{esc(pattern)}</span><br>
-                <span class="tag">{esc(family)}</span> <span class="tag">{esc(stage_txt)}</span> <span class="tag">{esc(sector)}</span></td>
+                {_narrative(tk, f'''<span class="theme-tag">{esc(pattern)}</span><br>
+                <span class="tag">{esc(family)}</span> <span class="tag">{esc(stage_txt)}</span> <span class="tag">{esc(sector)}</span>''')}</td>
             <td data-sort="{esc(grade)}"><span class="grade-badge" style="color:{gcol};border:1px solid {gcol};background:rgba(0,0,0,0.18);">{esc(grade) or '—'}</span>{likeness_line}</td>
             <td class="num" data-sort="{win20 if isinstance(win20, (int, float)) else 0}">{win_txt}</td>
             {_ext_meta_cell(c)}
             {_ext_ants_cell(c)}
+            {_ma_cells(c.get('_ma_dist'))}{_fwd_yoy_cell(tk)}{_eps_accel_cell(tk)}
             <td style="text-align:left;" data-sort="{esc(status)}" title="{esc(detail)}">
                 {leader_html}{fp_html}{rs_line_html}
                 <span class="fp-badge" style="border-color:{st_color};color:{st_color};">{esc(status)}</span>
@@ -3906,7 +4587,7 @@ def generate_hve_table(ep_matches: List[dict]) -> str:
             out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
                 <td class="ep-ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
                 <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])} <span class="good">(+{m['change']}%)</span><br><span style="font-size:var(--fs-caption);color:#8b949e;">Gap: {m['gap']}%</span></td>
-                <td data-sort="{m['rel_vol']}"><span class="theme-tag">{esc(m['theme'])}</span><br><br><span class="hve-badge">{m['rel_vol']}x Avg!</span><br><span style="font-size:var(--fs-caption);color:#8b949e;margin-top:4px;display:inline-block;">Float: {float_txt}</span></td>
+                <td data-sort="{m['rel_vol']}">{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}<br><br><span class="hve-badge">{m['rel_vol']}x Avg!</span><br><span style="font-size:var(--fs-caption);color:#8b949e;margin-top:4px;display:inline-block;">Float: {float_txt}</span></td>
                 <td data-sort="{m['risk_pct']}">
                     <div style="font-size:var(--fs-caption);color:#a5d6ff;text-align:left;margin-bottom:4px;">✔️ Close Range {m['close_range']}%</div>
                     <div class="entry-box">
@@ -4075,7 +4756,7 @@ def generate_ur_table(ur_matches: List[dict]) -> str:
             out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
                 <td class="ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank" style="color:#79c0ff;">{esc(m['ticker'])}</a></td>
                 <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])} <span style="color:#8b949e;">({m['change']:+}%)</span><br><span style="font-size:var(--fs-caption);color:#79c0ff;background:var(--tint-accent);padding:2px 6px;border-radius:4px;">Day {m['days_since_hve']} since HVE</span></td>
-                <td data-sort="{m['vol_contraction']}"><span class="theme-tag">{esc(m['theme'])}</span><br><br>
+                <td data-sort="{m['vol_contraction']}">{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}<br><br>
                     <span class="squat-badge {vol_color}">Vol: {m['vol_contraction']:.0f}% of Day 1</span><br>
                     <span class="squat-badge {holding_color}">Above D1 Low: {'Yes ✓' if m['holding_above_low'] else 'No ✗'}</span><br>
                     <span style="font-size:var(--fs-micro);color:#8b949e;">D1 High: ${m['day1_high']}</span>
@@ -4145,6 +4826,126 @@ def ext_percentile(ticker: str, ma_col: str, ext_value: float) -> Optional[float
         if v0 <= ext_value <= v1:
             return p1 if v1 == v0 else p0 + (ext_value - v0) / (v1 - v0) * (p1 - p0)
     return None
+
+
+# ---- forward base rates: "if this state, what has SPY/QQQ/IWM done next?" ----
+# Built offline by build_forward_baserates.py from full inception history with the
+# SAME metric definitions as the live cards. OOS validation (predictive_power.py)
+# showed regime(200MA) × distribution-days is the most predictive combination, so
+# that is the primary lookup; below-all-3-MAs extension is a secondary context line.
+_FORWARD_BR: Optional[dict] = None
+
+
+def _load_forward_baserates() -> dict:
+    global _FORWARD_BR
+    if _FORWARD_BR is not None:
+        return _FORWARD_BR
+    out: dict = {}
+    try:
+        with open(FORWARD_BASERATE_PATH) as f:
+            out = json.load(f)
+    except Exception:  # noqa: BLE001
+        out = {}
+    _FORWARD_BR = out
+    return out
+
+
+def _dist_bucket(dist: float) -> str:
+    d = int(dist or 0)
+    if d <= 2:
+        return "0-2"
+    if d <= 4:
+        return "3-4"
+    if d <= 6:
+        return "5-6"
+    if d <= 8:
+        return "7-8"
+    return "9+"
+
+
+def forward_baserate(ticker: str, dist_days: float, above_200: Optional[bool],
+                     min_n: int = 30) -> Optional[dict]:
+    """Most-specific reliable forward base-rate cell for the live state.
+    Fallback ladder (each needs the 4w sample n>=min_n):
+        regime × dist bucket  ->  dist bucket (regime-agnostic)  ->  baseline."""
+    blk = _load_forward_baserates().get((ticker or "").upper())
+    if not blk:
+        return None
+    bucket = _dist_bucket(dist_days)
+
+    def ok(cell):
+        return bool(cell and cell.get("f4w") and cell["f4w"].get("n", 0) >= min_n)
+
+    if above_200 is not None:
+        rk = "bull" if above_200 else "bear"
+        cell = blk.get("regime_dist", {}).get(rk, {}).get(bucket)
+        if ok(cell):
+            tag = "&gt;200MA" if above_200 else "&lt;200MA"
+            return {"scope": "regime_dist", "label": f"{tag} · {bucket} dist days",
+                    "stats": cell}
+    cell = blk.get("dist", {}).get(bucket)
+    if ok(cell):
+        return {"scope": "dist", "label": f"{bucket} dist days (all regimes)", "stats": cell}
+    cell = blk.get("baseline")
+    if ok(cell):
+        return {"scope": "baseline", "label": "any day (baseline)", "stats": cell}
+    return None
+
+
+def forward_ext_baserate(ticker: str, ext10: float, ext20: float, ext50: float,
+                         above_200: Optional[bool], min_n: int = 30) -> Optional[dict]:
+    """Secondary extension-only context: the below-all-3-MAs base rate, regime-aware
+    when available. Only returned when price is actually below all three MAs."""
+    blk = _load_forward_baserates().get((ticker or "").upper())
+    if not blk or not (ext10 < 0 and ext20 < 0 and ext50 < 0):
+        return None
+
+    def ok(cell):
+        return bool(cell and cell.get("f4w") and cell["f4w"].get("n", 0) >= min_n)
+
+    if above_200 is not None:
+        cell = blk.get("regime_ext_belowall3", {}).get("bull" if above_200 else "bear")
+        if ok(cell):
+            return {"label": f"below all 3 MAs · {'bull' if above_200 else 'bear'}", "stats": cell}
+    cell = blk.get("ext_belowall3")
+    if ok(cell):
+        return {"label": "below all 3 MAs", "stats": cell}
+    return None
+
+
+def _fwd_num(cell: Optional[dict]) -> str:
+    """Format one horizon cell as 'med +2.3%·71%' colored by sign of the median."""
+    if not cell:
+        return "<span style='color:#6e7681;'>—</span>"
+    med, win = cell["median"], cell["win"]
+    col = "val-green" if med > 0 else ("val-red" if med < 0 else "#c9d1d9")
+    return f"<span class='{col}'>{med:+.1f}%·{win:.0f}%</span>"
+
+
+def _forward_block(md: dict) -> str:
+    """Compact 'if this state → forward 1w/4w/8w' card line for one index."""
+    br = forward_baserate(md.get("ticker", ""), md.get("dist_days", 0), md.get("above_200"))
+    if not br:
+        return ""
+    s = br["stats"]
+    n = (s.get("f4w") or {}).get("n", 0)
+    rows = (f"<div style='margin-top:6px;border-top:1px solid #21262d;padding-top:5px;"
+            f"font-size:var(--fs-table);color:#8b949e;'>"
+            f"<span title=\"Historical forward price return after days in the SAME state "
+            f"(median · win-rate). Conditioner: 200-day-MA regime × O'Neil distribution-day "
+            f"bucket — the most predictive combination in out-of-sample testing. "
+            f"Built from full history since inception.\">"
+            f"📊 If this state → forward <span style='color:#6e7681;'>({br['label']}, n={n})</span></span><br>"
+            f"&nbsp;&nbsp;1w {_fwd_num(s.get('f1w'))} · "
+            f"4w {_fwd_num(s.get('f4w'))} · "
+            f"8w {_fwd_num(s.get('f8w'))}")
+    ext = forward_ext_baserate(md.get("ticker", ""), md.get("ext_10", 0.0),
+                               md.get("ext_20", 0.0), md.get("ext_50", 0.0), md.get("above_200"))
+    if ext:
+        es = ext["stats"]
+        rows += (f"<br><span style='color:#6e7681;'>&nbsp;&nbsp;{ext['label']}:</span> "
+                 f"4w {_fwd_num(es.get('f4w'))}")
+    return rows + "</div>"
 
 
 def breadth_day_over_day(br50: float, br200: float) -> Tuple[Optional[float], Optional[float]]:
@@ -4220,6 +5021,7 @@ def build_market_section(market_data: List[dict], breadth: dict,
                     {_ext_line("Above 50MA", md.get('ext_50', 0.0), p50)}<br>
                     Dist Days (O'Neil): <span class="{dist_col}">{md['dist_days']} days</span>
                 </div>
+                {_forward_block(md)}
             </div>""")
 
     if breadth.get("ok"):
@@ -4243,10 +5045,6 @@ def build_market_section(market_data: List[dict], breadth: dict,
 
     out.append(f"""
             {breadth_html}
-        </div>
-        <div class="market-summary">
-            <strong>M.E.T.A. MOMENTUM SCORING:</strong> Stocks scoring 70+ (🔥 SUPER MOMENTUM) may upgrade to Tier A+ even if slightly extended (risk ≤5%).
-            Look for: Hugging 10MA + Volume &lt;50% (VooDoo) + ADR ≥3% + Tight candles.
         </div>
     </div>""")
     return "".join(out), overall_trend
@@ -4910,9 +5708,11 @@ def generate_new_highs_section(nh: dict) -> str:
                    "the rest of the new highs are extended or still developing.</div></details>")
         return "".join(out)
 
-    out.append('<div class="table-container"><table>')
-    out.append("<tr><th>Ticker</th><th>Price &amp; Narrative</th><th>ADR</th><th>RS</th>"
-               "<th>3-Month Pattern &amp; Persistence</th><th>M.E.T.A.</th><th>Continuation Plan</th></tr>")
+    out.append('<div class="table-container"><table data-schema="newhighs">')
+    out.append("<tr><th data-col='tk'>Ticker</th><th data-col='price'>Price &amp; Narrative</th><th data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP)'>ADR</th><th data-col='rs'>RS</th>"
+               "<th data-col='pattern'>3-Month Pattern &amp; Persistence</th><th data-col='meta'>M.E.T.A.</th>"
+               + _MA_YOY_HEADERS +
+               "<th data-col='plan'>Continuation Plan</th></tr>")
     _tag_style = {"GRN": ("var(--tint-green)", "#3fb950"), "YEL": ("var(--tint-yellow)", "#f2cc60"), "RED": ("var(--tint-red)", "#ff7b72")}
     for m in green:
         spark_html = f"<div class='spark'>{m['spark']}</div>" if m.get("spark") else ""
@@ -4942,7 +5742,7 @@ def generate_new_highs_section(nh: dict) -> str:
         meta_disp_col = "#3fb950" if m.get("tag") == "GRN" else pcol
         out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
             <td class="ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
-            <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])}{spark_html}<br><span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}</td>
+            <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])}{spark_html}<br>{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}</td>
             <td data-sort="{m['adr']}">{m['adr']}%</td>
             <td data-sort="{rs_val if isinstance(rs_val,int) else 0}"><span class="score">{esc(rs_val)}</span><br><span style="font-size:var(--fs-micro);color:#8b949e;">1M:+{m['perf_1m']}% · 3M:+{m['perf_3m']}%</span></td>
             <td style="font-size:var(--fs-table);text-align:left;">
@@ -4952,6 +5752,7 @@ def generate_new_highs_section(nh: dict) -> str:
                 <div><span class="good">+{ext9} vs 9EMA</span> · <span class="{ext50_col}">+{ext50} vs 50EMA</span></div>
             </td>
             <td data-sort="{m['meta_score']}"><span style="font-size:var(--fs-title);font-weight:bold;color:{meta_disp_col};">{m['meta_score']}</span></td>
+            {_ma_cells(m.get('_ma_dist'))}{_fwd_yoy_cell(m['ticker'])}{_eps_accel_cell(m['ticker'])}
             <td data-sort="{risk if risk is not None else 999}">
                 <div class="entry-box" style="border-color:#3fb950;background:rgba(86,211,100,0.07);">
                     <span style="color:#3fb950;font-weight:bold;font-size:var(--fs-table);">Buy &gt; ${m['entry']}</span><br>
@@ -5039,7 +5840,7 @@ def generate_short_table(shorts: List[dict]) -> str:
             tt_txt = f"+{tt}% to 21EMA" if tt is not None else ""
             out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
                 <td class="ep-ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
-                <td data-sort="{m['dist9']}">{_lp(m['ticker'], m['close'])}<br><span class="bad">+{m['dist9']}% above 9EMA</span><br><span style="font-size:var(--fs-caption);color:#8b949e;">+{m['dist21']}% above 21EMA</span><br><span class="theme-tag">{esc(m['theme'])}</span></td>
+                <td data-sort="{m['dist9']}">{_lp(m['ticker'], m['close'])}<br><span class="bad">+{m['dist9']}% above 9EMA</span><br><span style="font-size:var(--fs-caption);color:#8b949e;">+{m['dist21']}% above 21EMA</span><br>{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}</td>
                 <td data-sort="{m['vol_ratio']}" style="font-size:var(--fs-table);text-align:left;">
                     <span class="bad">🔥 Vol {m['vol_ratio']}x</span><br>
                     <span class="warn">📈 {m['gap_ups']} recent gap-up{'s' if m['gap_ups'] != 1 else ''}</span><br>
@@ -5279,7 +6080,7 @@ def run_scanners_and_generate_html() -> str:
                         f"treat tiers/fires as provisional (or re-run later).</div>")
 
     with timed(diag, "scan_coil"):
-        tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full = scan_coil(rs_map, market_modifier, diag)
+        tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full, coil_funnel = scan_coil(rs_map, market_modifier, diag)
     with timed(diag, "scan_htf"):
         htf_matches = scan_htf(rs_map, market_modifier, diag, data_date)
         # Merge HTF fires INTO Tier A+ (user's chosen placement). Dedup against
@@ -5350,6 +6151,20 @@ def run_scanners_and_generate_html() -> str:
     top_picks_html = build_top_picks(tier_a_plus, tier_a, tier_a_minus, drafted=_drafted)
     hot_themes_html = build_hot_themes(tier_a_plus + tier_a + tier_a_minus + ep_matches)
     hot_industries_html = build_hot_industries(industry_rs, tier_a_plus + tier_a + tier_a_minus)
+
+    # Warm the fundamentals cache for EVERY narrative-bearing MADRRY ticker BEFORE the
+    # first table renders. Must precede generate_new_highs_section (below): its 🟢 green
+    # rows also tap fundamentals and were previously omitted from the batch, forcing one
+    # synchronous TradingView POST + cache flush per new-high name during HTML assembly.
+    # Batched + disk-cached + time-boxed; never fatal (Minervini/Trilogy warm their own).
+    _prefetch_fundamentals(
+        [s.get("ticker") for s in (tier_a_plus + tier_a + tier_a_minus_full
+                                   + ep_matches + ur_matches + short_matches)]
+        + [m.get("ticker") for m in nh_data.get("green", [])])
+    # Tier 3 — estimate-revision counts (per-ticker yfinance) for the TOP PICKS only.
+    _prefetch_revisions([s.get("ticker") for _, s in
+                         _rank_top_picks(tier_a_plus, tier_a, tier_a_minus_full)[:REVISIONS_TOP_N]])
+
     new_highs_html = generate_new_highs_section(nh_data)
     nh52_monitor_html = generate_nh52_monitor_section(nh52_pullbacks, nh52_monitored)
     counts = {
@@ -5367,7 +6182,9 @@ def run_scanners_and_generate_html() -> str:
         "<button class='tab-btn active' data-tab='madrry'>📋 MADRRY Watchlist</button>"
         f"<button class='tab-btn' data-tab='minervini'>🏛️ Minervini<span class='tab-count'>{minervini_n}</span></button>"
         f"<button class='tab-btn' data-tab='trilogy'>📚 Trilogy<span class='tab-count'>{trilogy_n}</span></button>"
-        f"<button class='tab-btn' data-tab='nh52pb'>📉 52wk Pullback<span class='tab-count'>{len(nh52_pullbacks)}</span></button>"
+        f"<button class='tab-btn' data-tab='pivots'>💥 Pivots &amp; U&amp;R<span class='tab-count'>{len(ep_matches) + len(ur_matches)}</span></button>"
+        f"<button class='tab-btn' data-tab='short'>🔻 Short<span class='tab-count'>{len(short_matches)}</span></button>"
+        f"<button class='tab-btn' data-tab='hi52'>📈 52-Week High<span class='tab-count'>{nh_data.get('total', 0)}</span></button>"
         f"<button class='tab-btn' data-tab='tracking'>📈 Tracking<span class='tab-count'>{tier_a_study_n}</span></button>"
         "</div>"
     )
@@ -5378,7 +6195,7 @@ def run_scanners_and_generate_html() -> str:
         "<title>MADRRY Ultimate Scanner Report</title>",
         f"<style>{PAGE_CSS}</style></head><body>",
         "<h1>MADRRY Watchlist</h1>",
-        f"<p class='header-sub'>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | QM + BIBLE + M.E.T.A. (Trendline + 3-Day Flag) + U&amp;R SNIPER + Martin Playbook (AVWAP · Base · Extension)</p>",
+        f"<p class='header-sub'>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>",
         build_runbar(counts, market_modifier, runtime, regime, allow_breakouts),
         stale_banner,
         regime_html,
@@ -5392,18 +6209,29 @@ def run_scanners_and_generate_html() -> str:
         "<input id='search' type='search' placeholder='🔎 Filter by ticker (e.g. NVDA)…' autocomplete='off'>",
         top_picks_html,
         tracking_html,
-        generate_coil_table(tier_a_plus, "🏆 TIER A+ (PERFECT COIL + HIGH MOMENTUM · incl. 🚩 HTF) - TRIGGER READY", "bg-aplus"),
-        generate_coil_table(tier_a, "🔥 TIER A (DEVELOPING WATCHLIST)", "bg-a"),
-        generate_coil_table(tier_a_minus_full, "🚀 TIER A- (EXTENDED / MESSY) - ALL", "bg-aminus"),
-        generate_hve_table(ep_matches),
-        generate_ur_table(ur_matches),
-        generate_short_table(short_matches),
-        # context / reference zone
-        new_highs_html,
+        build_filter_funnel(coil_funnel, len(tier_a_plus), len(tier_a), len(tier_a_minus_full)),
+        generate_coil_table(tier_a_plus, "🏆 TIER A+ (strict 3-day flag · ≤2% from EMA · vol ≤55% of prev-day or 50-day avg · incl. 🚩 HTF) — TRIGGER READY", "bg-aplus"),
+        generate_coil_table(tier_a, "🔥 TIER A (today's tight candle · ≤4% from EMA · vol ≤55% of prev-day or 50-day avg) — DEVELOPING", "bg-a"),
+        generate_coil_table(tier_a_minus_full, "🚀 TIER A- (≤6% from EMA · vol ≤ prev-day or 50-day avg) — EXTENDED / MESSY", "bg-aminus"),
         "</div>",  # /tab-madrry
         f"<div class='tab-panel' id='tab-minervini'>{minervini_html}</div>",
         f"<div class='tab-panel' id='tab-trilogy'>{trilogy_html}</div>",
-        f"<div class='tab-panel' id='tab-nh52pb'>{nh52_monitor_html}</div>",
+        # ---- Episodic Pivots (HVE) + Post-HVE U&R — own tab ----
+        "<div class='tab-panel' id='tab-pivots'>",
+        generate_hve_table(ep_matches),
+        generate_ur_table(ur_matches),
+        "</div>",
+        # ---- Parabolic Short — own tab ----
+        f"<div class='tab-panel' id='tab-short'>{generate_short_table(short_matches)}</div>",
+        # ---- 52-Week High — New Highs + Pullback as two sub-tabs ----
+        "<div class='tab-panel' id='tab-hi52'>",
+        "<div class='subtabs' role='tablist'>",
+        f"<button class='subtab-btn active' data-subtab='nh'>🆕 New 52wk Highs<span class='tab-count'>{nh_data.get('total', 0)}</span></button>",
+        f"<button class='subtab-btn' data-subtab='pull'>📉 52wk Pullback<span class='tab-count'>{len(nh52_pullbacks)}</span></button>",
+        "</div>",
+        f"<div class='subtab-panel active' id='subtab-nh'>{new_highs_html}</div>",
+        f"<div class='subtab-panel' id='subtab-pull'>{nh52_monitor_html}</div>",
+        "</div>",
         f"<div class='tab-panel' id='tab-tracking'>{tier_a_study_html}</div>",
         build_mindset_panel(),
         build_diag_panel(diag),
