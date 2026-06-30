@@ -2164,14 +2164,10 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             # (ADR >=2.0% floor removed 2026-06-30 per user — ADR no longer gates the pool;
             # `adr` is still TradingView's native ADRP and is used for tier discrimination below.)
 
-            # 52-week position bands (couldn't go in the server filter — see payload
-            # note). Keep names that are (a) within 0-20% BELOW their 52-week high and
-            # (b) at least 50% ABOVE their 52-week low.
+            # 52-week position band (couldn't go in the server filter — see payload
+            # note). Keep names within 0-20% BELOW their 52-week high.
             pct_below_high = ((high_52w - close) / high_52w * 100) if high_52w else None
-            pct_above_low = ((close - low_52w) / low_52w * 100) if low_52w else None
-            if (pct_below_high is None or pct_above_low is None
-                    or not (0.0 <= pct_below_high <= 20.0)
-                    or pct_above_low < 50.0):
+            if pct_below_high is None or not (0.0 <= pct_below_high <= 20.0):
                 drop_52w += 1
                 continue
 
@@ -3989,7 +3985,7 @@ def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
         f"</div><div class='fn-count'>{s1}{cap_note}</div></div>"
         "<div class='fn-stage'><div class='fn-body'>"
         "<div class='fn-title'>Stage 2 · Candidate gate <span class='fn-sub'>· client-side</span></div>"
-        "<div class='fn-crit'>0–20% below the 52-week high · ≥50% above the 52-week low · within 10% of the 9/21 EMA</div>"
+        "<div class='fn-crit'>0–20% below the 52-week high · within 10% of the 9/21 EMA</div>"
         f"</div><div class='fn-count'>{s2}</div></div>"
         "<div class='fn-stage'><div class='fn-body'>"
         "<div class='fn-title'>Stage 3 · Coil tiers <span class='fn-sub'>· 1-year history · flag tightness · volume dry-up</span></div>"
