@@ -1163,6 +1163,28 @@ def is_tight_flag(hist_df, adr, days=3, max_range_pct=10.0):
     return True
 
 
+DEAD_RANGE_DAYS = 5      # window for the auto dead-stock screen
+DEAD_RANGE_PCT = 0.5     # mean daily range below this over the window => pinned/dead
+
+
+def is_dead_pinned(hist_df, days: int = DEAD_RANGE_DAYS, thresh: float = DEAD_RANGE_PCT) -> bool:
+    """Auto-screen 'dead' names — M&A targets pinned at a cash deal price, plus
+    halted / pending-delist names. They flat-line: the recent daily range collapses
+    to ~0 even while the 20-day ADR still looks alive from the pre-deal move. Drop
+    any name whose MEAN daily (High/Low-1) over the last `days` sessions is below
+    `thresh`%. Calibrated 2026-06-30: dead JHG 0.07% / NUVL 0.14% vs the lowest live
+    momentum name ~1.5%+, so 0.5% sits in the gap with wide margin (no false drops)."""
+    if hist_df is None or len(hist_df) < days:
+        return False
+    recent = hist_df.tail(days)
+    lo = recent["Low"].values.astype(float)
+    hi = recent["High"].values.astype(float)
+    if (lo <= 0).any():
+        return False
+    rng = (hi / lo - 1.0) * 100.0
+    return bool(np.mean(rng) < thresh)
+
+
 def _vol_window_dryup(hist_df, n: int, thresh: float) -> bool:
     """True if the MEAN volume over the last `n` sessions is <= `thresh`% of EITHER
     the session immediately before that window OR the 50-day average volume.
@@ -2170,7 +2192,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
     # --- funnel instrumentation: exact survivor count after each filter stage ---
     n_universe = None          # TradingView totalCount matching the Stage-1 filter
     n_stage1 = 0               # rows actually fetched (range-capped at 5000)
-    drop_missing = drop_proximity = drop_52w = 0
+    drop_missing = drop_proximity = drop_52w = drop_dead = 0
     n_aplus_raw = n_a_raw = n_aminus_raw = n_aminus_total = 0
 
     try:
@@ -2303,6 +2325,11 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         hist_map = fetch_histories_batch([c["ticker"] for c in coil_candidates], period="1y")
         for c in coil_candidates:
             hist_df = hist_map.get(c["ticker"])
+            # Auto dead-stock screen: drop M&A-pinned / halted / pending-delist names
+            # (recent daily range flat-lined). Catches deal pins the ADR floor can't.
+            if is_dead_pinned(hist_df):
+                drop_dead += 1
+                continue
             # ADR is already TradingView's native ADRP (real 20-day ADR%) from the scan row —
             # no history recompute needed. History below is for the sparkline, the 3-day tight
             # flag, the volume dry-up test and the trendline.
@@ -2440,6 +2467,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         "stage1_fetched": n_stage1,          # rows fetched (range-capped at 5000)
         "drop_missing": drop_missing,
         "drop_52w": drop_52w,
+        "drop_dead": drop_dead,
         "drop_proximity": drop_proximity,
         "stage2_candidates": len(coil_candidates),
         "stage3_aplus": n_aplus_raw,
@@ -2969,6 +2997,8 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
         df = hist_map.get(t)
         if df is None or len(df) < 60:
             continue
+        if is_dead_pinned(df):                  # auto dead-stock screen (M&A pins etc.)
+            continue
         H = df["High"].values
         prior = H[-252:-1] if len(H) > 252 else H[:-1]
         if len(prior) == 0 or H[-1] < float(prior.max()):   # confirm genuine new high
@@ -3368,7 +3398,10 @@ def scan_parabolic_short(diag: Diagnostics) -> List[dict]:
     shorts: List[dict] = []
     for tk in tickers:
         _, theme, sector, perf_1m = meta[tk]
-        sig = _parabolic_short_signal(hist_map.get(tk), tk, theme, sector, perf_1m)
+        hd = hist_map.get(tk)
+        if is_dead_pinned(hd):                  # auto dead-stock screen (deal-jump pins)
+            continue
+        sig = _parabolic_short_signal(hd, tk, theme, sector, perf_1m)
         if sig:
             shorts.append(sig)
     shorts.sort(key=lambda x: x["dist9"], reverse=True)
@@ -3724,6 +3757,10 @@ async function refreshPrices(btn) {
     var num = parseFloat(String(raw).replace(/[^0-9.\\-]/g, ''));
     return isNaN(num) ? String(raw).toUpperCase() : num;
   }
+  // Shared "add a tier on a plain tap" mode — the touch/mobile equivalent of
+  // Shift-click (phones have no Shift key). The floating toggle built below flips it,
+  // and the header click handler treats a tap as "add tier" whenever it's on.
+  var multiSortMode = false;
   document.querySelectorAll('table').forEach(function (table) {
     if (table.classList.contains('fund-tbl')) return;   // nested fundamentals mini-table: not sortable
     var headRow = table.querySelector('tr');
@@ -3779,10 +3816,10 @@ async function refreshPrices(btn) {
 
     Array.prototype.forEach.call(headRow.children, function (th, idx) {
       th.classList.add('sortable');
-      th.innerHTML = th.innerHTML + ' <span class="arrow" title="Click to sort. Shift-click to add a secondary/tertiary sort tier.">⇅</span>';
+      th.innerHTML = th.innerHTML + ' <span class="arrow" title="Tap to sort. Shift-click (desktop) or turn on Multi-sort (mobile) to add a secondary/tertiary sort tier.">⇅</span>';
       th.addEventListener('click', function (ev) {
         var rank = keyIndex(th);
-        if (ev.shiftKey) {
+        if (ev.shiftKey || multiSortMode) {
           // Add a new tier, or flip this tier's direction if it's already active.
           if (rank < 0) keys.push({ th: th, asc: true });
           else keys[rank].asc = !keys[rank].asc;
@@ -3796,6 +3833,32 @@ async function refreshPrices(btn) {
       });
     });
   });
+
+  // Floating toggle so touch users can build multi-tier sorts without a Shift key.
+  // OFF (default): a tap sorts by one column, exactly as before. ON: each header tap
+  // ADDS a tier (primary, then secondary…); tapping an active tier flips its arrow.
+  (function () {
+    var btn = document.createElement('button');
+    btn.id = 'multiSortToggle';
+    btn.type = 'button';
+    btn.setAttribute('aria-pressed', 'false');
+    btn.textContent = '⇅ Multi-sort: off';
+    btn.title = 'When ON, each column tap ADDS a sort tier (primary, then secondary…) instead of replacing it. Tap an active tier again to flip its direction. Turn OFF to go back to one-column sorting.';
+    function paint() {
+      var on = multiSortMode;
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.textContent = on ? '⇅ Multi-sort: ON — tap columns to add' : '⇅ Multi-sort: off';
+      btn.style.background = on ? 'var(--accent,#3a86ff)' : 'var(--surface,#1b1b1b)';
+      btn.style.color = on ? 'var(--bg,#0b0b0b)' : 'var(--text,#eaeaea)';
+      btn.style.borderColor = 'var(--accent,#3a86ff)';
+    }
+    btn.style.cssText = 'position:fixed;z-index:9999;right:12px;bottom:12px;padding:9px 13px;'
+      + 'border-radius:20px;border:1px solid var(--accent,#3a86ff);font:600 13px system-ui,-apple-system,sans-serif;'
+      + 'box-shadow:0 2px 10px rgba(0,0,0,.45);cursor:pointer;opacity:.95;-webkit-tap-highlight-color:transparent;';
+    paint();
+    btn.addEventListener('click', function () { multiSortMode = !multiSortMode; paint(); });
+    document.body.appendChild(btn);
+  })();
 })();
 
 (function () {
