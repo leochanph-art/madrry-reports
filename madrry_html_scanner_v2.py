@@ -60,6 +60,7 @@ FORWARD_BASERATE_PATH = os.path.join(WORKSPACE, "forward_baserates.json")
 BREAKOUT_LOG_PATH = os.path.join(WORKSPACE, "breakout_log.json")
 TIER_A_TRACKING_PATH = os.path.join(WORKSPACE, "tier_a_tracking.json")
 META_WEIGHTS_PATH = os.path.join(WORKSPACE, "meta_weights.json")
+EXCLUDED_TICKERS_PATH = os.path.join(WORKSPACE, "excluded_tickers.txt")
 
 # ---- M.E.T.A. component weights (max points per component) -----------------
 # The 11 scoring slots. "Candle" shares the "Flag" slot (one or the other fires),
@@ -89,6 +90,26 @@ def _load_meta_weights() -> Dict[str, float]:
 
 META_WEIGHTS = _load_meta_weights()
 META_DENOM = sum(META_WEIGHTS.values()) or 1   # "Candle" excluded; `or 1` guards a 0-denom crash
+
+
+def _load_excluded_tickers() -> set:
+    """Tickers to keep OUT of the whole report — M&A targets / pending-delist names
+    that pin near their deal price and masquerade as tight coils. One symbol per
+    line in excluded_tickers.txt; blank lines and #-comments ignored. Edit that file
+    (no code change needed) to add or drop names; the next scan picks it up."""
+    out = set()
+    try:
+        with open(EXCLUDED_TICKERS_PATH) as fh:
+            for line in fh:
+                s = line.split("#", 1)[0].strip().upper()
+                if s:
+                    out.add(s)
+    except OSError:
+        pass
+    return out
+
+
+EXCLUDED_TICKERS = _load_excluded_tickers()
 
 # ---- META v4 (enhanced signed-feature score) — ranking driver, with fallback ----
 try:
@@ -1140,6 +1161,24 @@ def is_tight_flag(hist_df, adr, days=3, max_range_pct=10.0):
         return False
 
     return True
+
+
+def _vol_window_dryup(hist_df, n: int, thresh: float) -> bool:
+    """True if the MEAN volume over the last `n` sessions is <= `thresh`% of EITHER
+    the session immediately before that window OR the 50-day average volume.
+    n=1 reduces to "today's volume vs yesterday / the 50-day avg" (the A- gate)."""
+    if hist_df is None or len(hist_df) < n + 1:
+        return False
+    vols = hist_df["Volume"].values
+    win = float(np.mean(vols[-n:]))
+    prevd = float(vols[-(n + 1)])
+    if prevd > 0 and win / prevd * 100 <= thresh:
+        return True
+    if len(vols) >= 50:
+        v50 = float(np.mean(vols[-50:]))
+        if v50 > 0 and win / v50 * 100 <= thresh:
+            return True
+    return False
 
 
 def calculate_meta_momentum_score(stock_data, hist_df=None):
@@ -2347,19 +2386,19 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             min_dist = c["min_dist"]
             vol_pct = c["vol_pct_raw"]
             risk_pct = c["risk_pct"]
-            # Volume dry-up gates (risk no longer gates tiers).
-            #   A+ : today's vol <= 50% of the PREVIOUS day  OR  <= 50% of the 50-day avg.
-            #   A  : today's vol <= 55% of the PREVIOUS day  OR  <= 55% of the 50-day avg.
-            #   A- : today's vol <= the previous day          OR  <= the 50-day avg (not expanding).
-            vol50 = ((vol_vs_prev_pct is not None and vol_vs_prev_pct <= 50) or
-                     (vol_pct_50 is not None and vol_pct_50 <= 50))
-            vol55 = ((vol_vs_prev_pct is not None and vol_vs_prev_pct <= 55) or
-                     (vol_pct_50 is not None and vol_pct_50 <= 55))
-            vol_aminus = ((vol_vs_prev_pct is not None and vol_vs_prev_pct <= 100) or
-                          (vol_pct_50 is not None and vol_pct_50 <= 100))
+            # Volume dry-up gates (risk no longer gates tiers). The averaging window
+            # matches each tier's tightness window; "prev-day" = the session right
+            # before that window. Each test passes on EITHER the prev-day OR 50-day-avg
+            # comparison.
+            #   A+ : mean(last 3d vol) <= 50% of the pre-window day OR the 50-day avg.
+            #   A  : mean(last 2d vol) <= 55% of the pre-window day OR the 50-day avg.
+            #   A- : last 1d vol       <= the previous day          OR the 50-day avg (not expanding).
+            vol_aplus  = _vol_window_dryup(hist_df, 3, 50.0)
+            vol_a      = _vol_window_dryup(hist_df, 2, 55.0)
+            vol_aminus = _vol_window_dryup(hist_df, 1, 100.0)
 
-            is_a_plus = (is_tight_flag_3d and min_dist <= 0.01 and vol50)
-            is_a = (is_tight_2d and min_dist <= 0.01 and vol55 and not is_a_plus)
+            is_a_plus = (is_tight_flag_3d and min_dist <= 0.01 and vol_aplus)
+            is_a = (is_tight_2d and min_dist <= 0.01 and vol_a and not is_a_plus)
             is_a_minus = (is_tight_1d and min_dist <= 0.02 and vol_aminus
                           and not is_a_plus and not is_a)
 
@@ -6158,6 +6197,33 @@ def run_scanners_and_generate_html() -> str:
         short_matches = scan_parabolic_short(diag)
     with timed(diag, "scan_new_highs"):
         nh_data = scan_new_highs(rs_map, market_modifier, diag)
+
+    # ---- exclusion list: drop M&A / pending-delist names report-wide (see
+    # excluded_tickers.txt). Applied once here, after every scan, so a single
+    # list governs all tabs (coil tiers, HVE, U&R, parabolic, new highs). ----
+    if EXCLUDED_TICKERS:
+        def _drop(lst):
+            return [d for d in lst if (d.get("ticker") or "").upper() not in EXCLUDED_TICKERS]
+        _before = (len(tier_a_plus) + len(tier_a) + len(tier_a_minus_full)
+                   + len(ep_matches) + len(ur_matches) + len(short_matches)
+                   + len(nh_data.get("green", [])))
+        tier_a_plus = _drop(tier_a_plus)
+        tier_a = _drop(tier_a)
+        tier_a_minus = _drop(tier_a_minus)
+        tier_a_minus_full = _drop(tier_a_minus_full)
+        ep_matches = _drop(ep_matches)
+        ur_matches = _drop(ur_matches)
+        short_matches = _drop(short_matches)
+        nh_data["green"] = _drop(nh_data.get("green", []))
+        nh_data["confirmed"] = [t for t in nh_data.get("confirmed", [])
+                                if (t or "").upper() not in EXCLUDED_TICKERS]
+        nh_data["total"] = len(nh_data["confirmed"])
+        _after = (len(tier_a_plus) + len(tier_a) + len(tier_a_minus_full)
+                  + len(ep_matches) + len(ur_matches) + len(short_matches)
+                  + len(nh_data.get("green", [])))
+        if _before != _after:
+            log.info("Excluded %d row(s) via excluded_tickers.txt (%s)",
+                     _before - _after, ", ".join(sorted(EXCLUDED_TICKERS)))
     # 52wk-high daily monitor: record today's new highs, prune to the watch window,
     # then re-check every watched name for a low-volume pullback (awareness signal).
     with timed(diag, "nh52_monitor"):
@@ -6270,9 +6336,9 @@ def run_scanners_and_generate_html() -> str:
         top_picks_html,
         tracking_html,
         build_filter_funnel(coil_funnel, len(tier_a_plus), len(tier_a), len(tier_a_minus_full)),
-        generate_coil_table(tier_a_plus, "🏆 TIER A+ (strict 3-day flag · ≤1% from EMA · vol ≤50% of prev-day or 50-day avg · incl. 🚩 HTF) — TRIGGER READY", "bg-aplus"),
-        generate_coil_table(tier_a, "🔥 TIER A (2-day tight candle · ≤1% from EMA · vol ≤55% of prev-day or 50-day avg) — DEVELOPING", "bg-a"),
-        generate_coil_table(tier_a_minus_full, "🚀 TIER A- (1-day tight candle · ≤2% from EMA · vol ≤ prev-day or 50-day avg) — EXTENDED / MESSY", "bg-aminus"),
+        generate_coil_table(tier_a_plus, "🏆 TIER A+ (strict 3-day flag · ≤1% from EMA · 3-day vol ≤50% of prev-day or 50-day avg · incl. 🚩 HTF) — TRIGGER READY", "bg-aplus"),
+        generate_coil_table(tier_a, "🔥 TIER A (2-day tight candle · ≤1% from EMA · 2-day vol ≤55% of prev-day or 50-day avg) — DEVELOPING", "bg-a"),
+        generate_coil_table(tier_a_minus_full, "🚀 TIER A- (1-day tight candle · ≤2% from EMA · 1-day vol ≤ prev-day or 50-day avg) — EXTENDED / MESSY", "bg-aminus"),
         "</div>",  # /tab-madrry
         f"<div class='tab-panel' id='tab-minervini'>{minervini_html}</div>",
         f"<div class='tab-panel' id='tab-trilogy'>{trilogy_html}</div>",

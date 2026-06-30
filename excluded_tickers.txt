@@ -1,0 +1,8 @@
+# Tickers excluded from the MADRRY report (one per line; # = comment).
+# M&A targets / pending-delist names pin near their deal price and look like
+# tight coils, so the scanner must drop them. Add a name here to exclude it
+# report-wide; remove the line once the deal closes / it's relisted.
+#
+# ticker   # reason (date)
+GSAT       # Amazon acquisition ~$90/sh, announced 2026-04 (cash/stock)
+JHG        # Taken private $52/sh cash, closing 2026-06-30, delisting
