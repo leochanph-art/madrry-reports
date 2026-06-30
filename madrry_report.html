@@ -15914,6 +15914,10 @@ async function refreshPrices(btn) {
     var num = parseFloat(String(raw).replace(/[^0-9.\-]/g, ''));
     return isNaN(num) ? String(raw).toUpperCase() : num;
   }
+  // Shared "add a tier on a plain tap" mode — the touch/mobile equivalent of
+  // Shift-click (phones have no Shift key). The floating toggle built below flips it,
+  // and the header click handler treats a tap as "add tier" whenever it's on.
+  var multiSortMode = false;
   document.querySelectorAll('table').forEach(function (table) {
     if (table.classList.contains('fund-tbl')) return;   // nested fundamentals mini-table: not sortable
     var headRow = table.querySelector('tr');
@@ -15969,10 +15973,10 @@ async function refreshPrices(btn) {
 
     Array.prototype.forEach.call(headRow.children, function (th, idx) {
       th.classList.add('sortable');
-      th.innerHTML = th.innerHTML + ' <span class="arrow" title="Click to sort. Shift-click to add a secondary/tertiary sort tier.">⇅</span>';
+      th.innerHTML = th.innerHTML + ' <span class="arrow" title="Tap to sort. Shift-click (desktop) or turn on Multi-sort (mobile) to add a secondary/tertiary sort tier.">⇅</span>';
       th.addEventListener('click', function (ev) {
         var rank = keyIndex(th);
-        if (ev.shiftKey) {
+        if (ev.shiftKey || multiSortMode) {
           // Add a new tier, or flip this tier's direction if it's already active.
           if (rank < 0) keys.push({ th: th, asc: true });
           else keys[rank].asc = !keys[rank].asc;
@@ -15986,6 +15990,32 @@ async function refreshPrices(btn) {
       });
     });
   });
+
+  // Floating toggle so touch users can build multi-tier sorts without a Shift key.
+  // OFF (default): a tap sorts by one column, exactly as before. ON: each header tap
+  // ADDS a tier (primary, then secondary…); tapping an active tier flips its arrow.
+  (function () {
+    var btn = document.createElement('button');
+    btn.id = 'multiSortToggle';
+    btn.type = 'button';
+    btn.setAttribute('aria-pressed', 'false');
+    btn.textContent = '⇅ Multi-sort: off';
+    btn.title = 'When ON, each column tap ADDS a sort tier (primary, then secondary…) instead of replacing it. Tap an active tier again to flip its direction. Turn OFF to go back to one-column sorting.';
+    function paint() {
+      var on = multiSortMode;
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.textContent = on ? '⇅ Multi-sort: ON — tap columns to add' : '⇅ Multi-sort: off';
+      btn.style.background = on ? 'var(--accent,#3a86ff)' : 'var(--surface,#1b1b1b)';
+      btn.style.color = on ? 'var(--bg,#0b0b0b)' : 'var(--text,#eaeaea)';
+      btn.style.borderColor = 'var(--accent,#3a86ff)';
+    }
+    btn.style.cssText = 'position:fixed;z-index:9999;right:12px;bottom:12px;padding:9px 13px;'
+      + 'border-radius:20px;border:1px solid var(--accent,#3a86ff);font:600 13px system-ui,-apple-system,sans-serif;'
+      + 'box-shadow:0 2px 10px rgba(0,0,0,.45);cursor:pointer;opacity:.95;-webkit-tap-highlight-color:transparent;';
+    paint();
+    btn.addEventListener('click', function () { multiSortMode = !multiSortMode; paint(); });
+    document.body.appendChild(btn);
+  })();
 })();
 
 (function () {
