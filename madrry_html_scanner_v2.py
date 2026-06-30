@@ -2098,17 +2098,25 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
     payload_coil = {
         "filter": [
             {"left": "type", "operation": "in_range", "right": ["stock", "dr"]},
-            {"left": "close", "operation": "greater", "right": 7},
-            {"left": "volume", "operation": "greater", "right": 500000},
-            {"left": "close", "operation": "greater", "right": "SMA200"},
+            {"left": "close", "operation": "egreater", "right": 10},
+            {"left": "volume", "operation": "egreater", "right": 500000},
+            {"left": "average_volume_30d_calc", "operation": "egreater", "right": 500000},
+            {"left": "average_volume_60d_calc", "operation": "egreater", "right": 500000},
+            {"left": "close", "operation": "egreater", "right": "SMA200"},
             {"left": "market_cap_basic", "operation": "egreater", "right": 2000000000},
         ],
+        # NOTE on the 52-week bands (within 0-20% of the 52w high, >=50% above the
+        # 52w low): TradingView's /scan API rejects arithmetic on the RHS
+        # (price_52_week_low * 1.5 -> HTTP 400) and exposes no precomputed % field,
+        # so those two gates can't live in the server filter. They are enforced
+        # below in the parse loop from price_52_week_high / price_52_week_low —
+        # the net universe is identical to doing it server-side.
         "columns": [
             "name", "close", "open", "volume", "average_volume_30d_calc",
             "EMA9", "EMA21", "SMA50", "SMA200",
             "ADRP", "market_cap_basic", "Perf.1M", "Perf.3M", "Perf.6M", "Perf.Y",
             "sector", "industry", "high", "low", "change", "price_52_week_high",
-            "float_shares_outstanding",
+            "float_shares_outstanding", "price_52_week_low",
         ],
         "sort": {"sortBy": "ADRP", "sortOrder": "desc"},
         "range": [0, 5000],
@@ -2123,7 +2131,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
     # --- funnel instrumentation: exact survivor count after each filter stage ---
     n_universe = None          # TradingView totalCount matching the Stage-1 filter
     n_stage1 = 0               # rows actually fetched (range-capped at 5000)
-    drop_missing = drop_adr = drop_proximity = 0
+    drop_missing = drop_proximity = drop_52w = 0
     n_aplus_raw = n_a_raw = n_aminus_raw = n_aminus_total = 0
 
     try:
@@ -2135,15 +2143,16 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         n_universe = _univ if isinstance(_univ, int) else None
         for row in _rows:
             d = row.get("d")
-            if not d or len(d) < 22:
+            if not d or len(d) < 23:
                 drop_missing += 1
                 continue
             (ticker, close, opn, vol, avg_vol, ema9, ema21, sma50, sma200, adr,
              mcap, perf_1m, perf_3m, perf_6m, perf_y, sector, industry,
-             high, low, change, high_52w, float_shares) = d
+             high, low, change, high_52w, float_shares, low_52w) = d
 
             if any(x is None for x in (close, vol, avg_vol, ema9, ema21, sma50,
-                                       sma200, adr, perf_1m, perf_3m, high, low, high_52w)):
+                                       sma200, adr, perf_1m, perf_3m, high, low,
+                                       high_52w, low_52w)):
                 drop_missing += 1
                 continue
             if opn is None:
@@ -2152,11 +2161,18 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             p6 = perf_6m or 0
             py = perf_y or 0
             # (momentum floor removed 2026-06-28 per user — no longer gates the candidate pool)
-            # `adr` is TradingView's native ADRP — the canonical 20-day ADR% (100×(mean(H/L)−1)),
-            # the same value shown on TV charts. Real ADR, not the old 1-day Volatility.D, so the
-            # >=2.0% floor here is a genuine "moves enough to trade" universe filter.
-            if adr < 2.0:
-                drop_adr += 1
+            # (ADR >=2.0% floor removed 2026-06-30 per user — ADR no longer gates the pool;
+            # `adr` is still TradingView's native ADRP and is used for tier discrimination below.)
+
+            # 52-week position bands (couldn't go in the server filter — see payload
+            # note). Keep names that are (a) within 0-20% BELOW their 52-week high and
+            # (b) at least 50% ABOVE their 52-week low.
+            pct_below_high = ((high_52w - close) / high_52w * 100) if high_52w else None
+            pct_above_low = ((close - low_52w) / low_52w * 100) if low_52w else None
+            if (pct_below_high is None or pct_above_low is None
+                    or not (0.0 <= pct_below_high <= 20.0)
+                    or pct_above_low < 50.0):
+                drop_52w += 1
                 continue
 
             ma_cluster_pct = abs(ema9 - ema21) / ema21 * 100
@@ -2212,11 +2228,11 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             # 70% of previous day" branch needs daily history, which the cheap
             # TradingView feed doesn't carry. So Gate 2 no longer pre-filters on
             # volume — that way a day-over-day dry-up is never dropped early.
-            common_base = dist_52w <= 25.0 and adr >= 2.0
-            # Universe gate = near a key MA + tradeable ADR + not over-extended. Tightness
-            # (is_tight_1d / 3-day flag) is intentionally NOT here — it discriminates the
-            # A+/A/A- tiers below, rather than hiding names that had one wide session.
-            if not (common_base and min_dist <= 0.10):
+            # Universe gate = near a key MA (ADR floor and the 52w-high distance are
+            # handled above). Tightness (is_tight_1d / 3-day flag) is intentionally NOT
+            # here — it discriminates the A+/A/A- tiers below, rather than hiding names
+            # that had one wide session.
+            if not (min_dist <= 0.10):
                 drop_proximity += 1
                 continue
 
@@ -2379,7 +2395,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         "universe_total": n_universe,        # TradingView count matching the Stage-1 filter
         "stage1_fetched": n_stage1,          # rows fetched (range-capped at 5000)
         "drop_missing": drop_missing,
-        "drop_adr": drop_adr,
+        "drop_52w": drop_52w,
         "drop_proximity": drop_proximity,
         "stage2_candidates": len(coil_candidates),
         "stage3_aplus": n_aplus_raw,
@@ -3969,11 +3985,11 @@ def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
         "<div class='fn-cap'>📊 HOW THIS LIST WAS BUILT — from ~10,000+ US-listed stocks</div>"
         "<div class='fn-stage'><div class='fn-body'>"
         "<div class='fn-title'>Stage 1 · Universe filter <span class='fn-sub'>· TradingView, server-side</span></div>"
-        "<div class='fn-crit'>type = stock / DR · close &gt; $7 · day volume &gt; 500k · close &gt; SMA200 · market cap &gt; $2B</div>"
+        "<div class='fn-crit'>type = stock / DR · close ≥ $10 · day vol ≥ 500k · avg 30d &amp; 60d vol ≥ 500k · close ≥ SMA200 · market cap ≥ $2B</div>"
         f"</div><div class='fn-count'>{s1}{cap_note}</div></div>"
         "<div class='fn-stage'><div class='fn-body'>"
         "<div class='fn-title'>Stage 2 · Candidate gate <span class='fn-sub'>· client-side</span></div>"
-        "<div class='fn-crit'>ADR ≥ 2% · ≤25% below the 52-week high · within 10% of the 9/21 EMA</div>"
+        "<div class='fn-crit'>0–20% below the 52-week high · ≥50% above the 52-week low · within 10% of the 9/21 EMA</div>"
         f"</div><div class='fn-count'>{s2}</div></div>"
         "<div class='fn-stage'><div class='fn-body'>"
         "<div class='fn-title'>Stage 3 · Coil tiers <span class='fn-sub'>· 1-year history · flag tightness · volume dry-up</span></div>"
