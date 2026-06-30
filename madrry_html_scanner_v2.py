@@ -2337,21 +2337,30 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
 
             is_tight_flag_3d = meta_score_data.get("is_flag", False)
             is_tight_1d = c["is_tight_1d"]
+            # 2-day tight bar: each of the last 2 daily bars has range% <= ADR
+            # (same per-bar basis as is_tight_1d, over the last two sessions).
+            is_tight_2d = False
+            if hist_df is not None and len(hist_df) >= 2 and c["adr"] > 0:
+                last2 = hist_df.tail(2)
+                rng2 = (last2["High"] - last2["Low"]) / last2["Close"] * 100
+                is_tight_2d = bool(rng2.le(c["adr"]).all())
             min_dist = c["min_dist"]
             vol_pct = c["vol_pct_raw"]
             risk_pct = c["risk_pct"]
             # Volume dry-up gates (risk no longer gates tiers).
-            #   A+/A : today's vol <= 55% of the PREVIOUS day  OR  <= 55% of the 50-day avg.
-            #   A-   : today's vol <= the previous day          OR  <= the 50-day avg (not expanding).
+            #   A+ : today's vol <= 50% of the PREVIOUS day  OR  <= 50% of the 50-day avg.
+            #   A  : today's vol <= 55% of the PREVIOUS day  OR  <= 55% of the 50-day avg.
+            #   A- : today's vol <= the previous day          OR  <= the 50-day avg (not expanding).
+            vol50 = ((vol_vs_prev_pct is not None and vol_vs_prev_pct <= 50) or
+                     (vol_pct_50 is not None and vol_pct_50 <= 50))
             vol55 = ((vol_vs_prev_pct is not None and vol_vs_prev_pct <= 55) or
                      (vol_pct_50 is not None and vol_pct_50 <= 55))
             vol_aminus = ((vol_vs_prev_pct is not None and vol_vs_prev_pct <= 100) or
                           (vol_pct_50 is not None and vol_pct_50 <= 100))
 
-            is_a_plus = (is_tight_flag_3d and min_dist <= 0.02 and vol55)
-            is_a = (is_tight_1d and min_dist <= 0.04 and vol55 and not is_a_plus)
-            # A- no longer requires today's bar to be tight (removed 2026-06-28 per user)
-            is_a_minus = (min_dist <= 0.06 and vol_aminus
+            is_a_plus = (is_tight_flag_3d and min_dist <= 0.01 and vol50)
+            is_a = (is_tight_2d and min_dist <= 0.01 and vol55 and not is_a_plus)
+            is_a_minus = (is_tight_1d and min_dist <= 0.02 and vol_aminus
                           and not is_a_plus and not is_a)
 
             if is_a_plus:
@@ -3680,32 +3689,71 @@ async function refreshPrices(btn) {
     if (table.classList.contains('fund-tbl')) return;   // nested fundamentals mini-table: not sortable
     var headRow = table.querySelector('tr');
     if (!headRow) return;
+
+    // Tiered multi-sort state, per table. `keys` is an ordered list of active sort
+    // tiers: [{th, asc}, ...]. Tier 0 is primary, tier 1 secondary, etc. A plain
+    // click = single-column sort (replaces every tier). Shift-click = add/toggle a
+    // tier while keeping the existing ones, so you can do e.g. primary Fwd YoY ↓
+    // then secondary "closest to 10MA" ↑. Single-column behaviour is unchanged when
+    // you never hold Shift.
+    var keys = [];
+    function keyIndex(th) {
+      for (var i = 0; i < keys.length; i++) { if (keys[i].th === th) return i; }
+      return -1;
+    }
+    function resort() {
+      var body = table.tBodies[0] || table;
+      var rows = Array.prototype.filter.call(body.rows, function (r) { return !r.querySelector('th'); });
+      // Resolve each tier's CURRENT column position fresh — columns can be reordered
+      // (see the column-reorder IIFE below), so capture-time indexes would go stale.
+      var tiers = keys.map(function (k) {
+        return { idx: Array.prototype.indexOf.call(headRow.children, k.th), asc: k.asc };
+      });
+      rows.sort(function (a, b) {
+        for (var i = 0; i < tiers.length; i++) {
+          var t = tiers[i];
+          var va = cellVal(a, t.idx), vb = cellVal(b, t.idx);
+          if (va < vb) return t.asc ? -1 : 1;
+          if (va > vb) return t.asc ? 1 : -1;
+        }
+        return 0;
+      });
+      rows.forEach(function (r) { body.appendChild(r); });
+      // Repaint every header's indicator. Single tier → bare ▲/▼ (unchanged look);
+      // multiple tiers → a rank prefix (1▲ 2▼ …) so the precedence is visible.
+      var multi = keys.length > 1;
+      Array.prototype.forEach.call(headRow.children, function (h) {
+        var rank = keyIndex(h);
+        var a0 = h.querySelector('.arrow');
+        if (rank < 0) {
+          h.classList.remove('sorted');
+          h.removeAttribute('aria-sort');
+          if (a0) a0.textContent = '⇅';
+        } else {
+          var asc = keys[rank].asc;
+          h.classList.add('sorted');
+          h.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
+          if (a0) a0.textContent = (multi ? (rank + 1) : '') + (asc ? '▲' : '▼');
+        }
+      });
+    }
+
     Array.prototype.forEach.call(headRow.children, function (th, idx) {
       th.classList.add('sortable');
-      th.innerHTML = th.innerHTML + ' <span class="arrow">⇅</span>';
-      var asc = true;
-      th.addEventListener('click', function () {
-        // live index, not the capture-time idx — columns can be reordered (see the
-        // column-reorder IIFE below), so resolve this header's CURRENT position.
-        var idx = Array.prototype.indexOf.call(headRow.children, th);
-        var body = table.tBodies[0] || table;
-        var rows = Array.prototype.filter.call(body.rows, function (r) { return !r.querySelector('th'); });
-        rows.sort(function (a, b) {
-          var va = cellVal(a, idx), vb = cellVal(b, idx);
-          if (va < vb) return asc ? -1 : 1;
-          if (va > vb) return asc ? 1 : -1;
-          return 0;
-        });
-        rows.forEach(function (r) { body.appendChild(r); });
-        Array.prototype.forEach.call(headRow.children, function (h) {
-          h.classList.remove('sorted');
-          var a0 = h.querySelector('.arrow'); if (a0) a0.textContent = '⇅';
-        });
-        th.classList.add('sorted');
-        th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
-        var ar = th.querySelector('.arrow');
-        if (ar) ar.textContent = asc ? '▲' : '▼';
-        asc = !asc;
+      th.innerHTML = th.innerHTML + ' <span class="arrow" title="Click to sort. Shift-click to add a secondary/tertiary sort tier.">⇅</span>';
+      th.addEventListener('click', function (ev) {
+        var rank = keyIndex(th);
+        if (ev.shiftKey) {
+          // Add a new tier, or flip this tier's direction if it's already active.
+          if (rank < 0) keys.push({ th: th, asc: true });
+          else keys[rank].asc = !keys[rank].asc;
+        } else {
+          // Plain click: collapse to a single-column sort. Re-clicking the lone
+          // active column toggles its direction (original single-sort behaviour).
+          if (keys.length === 1 && rank === 0) keys[0].asc = !keys[0].asc;
+          else keys = [{ th: th, asc: true }];
+        }
+        resort();
       });
     });
   });
@@ -6222,9 +6270,9 @@ def run_scanners_and_generate_html() -> str:
         top_picks_html,
         tracking_html,
         build_filter_funnel(coil_funnel, len(tier_a_plus), len(tier_a), len(tier_a_minus_full)),
-        generate_coil_table(tier_a_plus, "🏆 TIER A+ (strict 3-day flag · ≤2% from EMA · vol ≤55% of prev-day or 50-day avg · incl. 🚩 HTF) — TRIGGER READY", "bg-aplus"),
-        generate_coil_table(tier_a, "🔥 TIER A (today's tight candle · ≤4% from EMA · vol ≤55% of prev-day or 50-day avg) — DEVELOPING", "bg-a"),
-        generate_coil_table(tier_a_minus_full, "🚀 TIER A- (≤6% from EMA · vol ≤ prev-day or 50-day avg) — EXTENDED / MESSY", "bg-aminus"),
+        generate_coil_table(tier_a_plus, "🏆 TIER A+ (strict 3-day flag · ≤1% from EMA · vol ≤50% of prev-day or 50-day avg · incl. 🚩 HTF) — TRIGGER READY", "bg-aplus"),
+        generate_coil_table(tier_a, "🔥 TIER A (2-day tight candle · ≤1% from EMA · vol ≤55% of prev-day or 50-day avg) — DEVELOPING", "bg-a"),
+        generate_coil_table(tier_a_minus_full, "🚀 TIER A- (1-day tight candle · ≤2% from EMA · vol ≤ prev-day or 50-day avg) — EXTENDED / MESSY", "bg-aminus"),
         "</div>",  # /tab-madrry
         f"<div class='tab-panel' id='tab-minervini'>{minervini_html}</div>",
         f"<div class='tab-panel' id='tab-trilogy'>{trilogy_html}</div>",
