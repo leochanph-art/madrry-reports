@@ -644,14 +644,17 @@ LIVE_PRICE_PROXY = ""
 def _lp(ticker: Any, close: Any, *, style: str = "",
         entry: Any = None, stop: Any = None, fmt: str = "{:.2f}") -> str:
     """A live-price <span>: tagged so the Refresh-Prices button can update it in
-    place. data-snap holds the scan-time price (for up/down colouring)."""
+    place. data-snap holds the scan-time price (for up/down colouring).
+    Index symbols (caret-prefixed, e.g. ^IXIC) are points, not dollars, so the
+    '$' prefix is dropped — the refresh JS keys off the same caret to stay consistent."""
     extra = ""
     if entry is not None:
         extra += f" data-entry='{entry}'"
     if stop is not None:
         extra += f" data-stop='{stop}'"
+    unit = "" if str(ticker).startswith("^") else "$"
     return (f"<span class='lp' data-tkr='{esc(str(ticker))}' data-snap='{close}'{extra} "
-            f"style='{style}'>${fmt.format(close)}</span>")
+            f"style='{style}'>{unit}{fmt.format(close)}</span>")
 
 
 # ----------------------------------------------------------------------------
@@ -865,7 +868,10 @@ def _fetch_one_index(ticker: str) -> Optional[dict]:
     # 14mo (not 3mo) so we carry ≥200 bars for the SMA200 bull/bear regime that
     # the forward-base-rate lookup conditions on. The 10/20/50-SMA, dist-days and
     # asof/TV-patch logic all read only the tail, so the longer range is inert to them.
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=14mo"
+    from urllib.parse import quote
+    # Index symbols carry a caret (^IXIC) — percent-encode the path segment so the
+    # Yahoo v8 request is well-formed (plain tickers like QQQ pass through unchanged).
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(ticker, safe='')}?interval=1d&range=14mo"
     data = _request_json(url, headers={"User-Agent": "Mozilla/5.0"}, label=f"market:{ticker}", retries=3)
     result = data["chart"]["result"][0]
     closes = result["indicators"]["quote"][0]["close"]
@@ -999,7 +1005,9 @@ def fetch_sp_breadth(diag: Optional[Diagnostics] = None) -> dict:
 
 def fetch_market_health(diag: Optional[Diagnostics] = None) -> Tuple[List[dict], dict]:
     """Index health (parallel Yahoo) + S&P-500 breadth (Barchart)."""
-    tickers = ["QQQ", "SPY", "IWM"]
+    # ^IXIC (Nasdaq Composite) leads — it now drives the GREEN/YELLOW/RED regime and
+    # the market-modifier. QQQ (Nasdaq-100 ETF) is kept as an informational card.
+    tickers = ["^IXIC", "QQQ", "SPY", "IWM"]
     market_data: List[dict] = []
 
     # The 4 Yahoo probes are independent -> fetch concurrently.
@@ -3658,7 +3666,7 @@ async function _lpFetchQuotes(tickers) {
   var q = {};
   if (LIVE_PRICE_PROXY) {
     // Cloudflare Worker: one call, returns {result:[{symbol,regularMarketPrice}]}
-    var res = await fetch(LIVE_PRICE_PROXY.replace(/\\/+$/, "") + "/?symbols=" + tickers.join(","), { cache: 'no-store' });
+    var res = await fetch(LIVE_PRICE_PROXY.replace(/\\/+$/, "") + "/?symbols=" + tickers.map(encodeURIComponent).join(","), { cache: 'no-store' });
     var data = await res.json();
     var arr = (data.quoteResponse && data.quoteResponse.result) || data.result || (Array.isArray(data) ? data : []);
     arr.forEach(function (r) {
@@ -3696,7 +3704,9 @@ async function refreshPrices(btn) {
       if (px == null) return;
       updated++;
       var snap = parseFloat(e.getAttribute('data-snap'));
-      e.textContent = "$" + px.toFixed(2);
+      // Index symbols (^IXIC) are points, not dollars — match the server render.
+      var unit = (e.getAttribute('data-tkr') || '').charAt(0) === '^' ? "" : "$";
+      e.textContent = unit + px.toFixed(2);
       e.style.color = px > snap ? "#3fb950" : (px < snap ? "#ff7b72" : "");
       e.classList.remove('flag-up', 'flag-down');
       var entry = parseFloat(e.getAttribute('data-entry'));
@@ -5091,13 +5101,19 @@ def _forward_block(md: dict) -> str:
         return ""
     s = br["stats"]
     n = (s.get("f4w") or {}).get("n", 0)
+    # Small-n caution (display only; the min_n=30 lookup gate is unchanged). Rare
+    # states cluster in a handful of episodes — e.g. ^IXIC bear·9+ dist (n=41) is
+    # dominated by the 1987/2001/2020 capitulation lows and reads strongly bullish
+    # while QQQ's same cell (2008/2022 mid-bear grind) reads bearish — so a thin
+    # cell is composition-sensitive, not a stable base rate (audit 2026-07-02).
+    small_n = " <span style='color:var(--yellow,#e3b341);' title=\"Thin sample — this state is rare, so the stats lean on a few historical episodes; treat as context, not a stable base rate.\">⚠️ small n</span>" if n < 100 else ""
     rows = (f"<div style='margin-top:6px;border-top:1px solid #21262d;padding-top:5px;"
             f"font-size:var(--fs-table);color:#8b949e;'>"
             f"<span title=\"Historical forward price return after days in the SAME state "
             f"(median · win-rate). Conditioner: 200-day-MA regime × O'Neil distribution-day "
             f"bucket — the most predictive combination in out-of-sample testing. "
             f"Built from full history since inception.\">"
-            f"📊 If this state → forward <span style='color:#6e7681;'>({br['label']}, n={n})</span></span><br>"
+            f"📊 If this state → forward <span style='color:#6e7681;'>({br['label']}, n={n})</span></span>{small_n}<br>"
             f"&nbsp;&nbsp;1w {_fwd_num(s.get('f1w'))} · "
             f"4w {_fwd_num(s.get('f4w'))} · "
             f"8w {_fwd_num(s.get('f8w'))}")
@@ -5153,6 +5169,13 @@ def _bd_chip(d: Optional[float]) -> str:
     return f" <span class='{col}' style='font-size:var(--fs-table);'>{arr} {d:+.1f}pp</span>"
 
 
+def _index_display(tk: str) -> str:
+    """Card/label name for an index. The internal key stays the Yahoo symbol
+    (^IXIC) for data lookups + the live-refresh fetch; the caret is dropped only
+    for display so the header reads cleanly as 'IXIC' alongside SPY/QQQ/IWM."""
+    return "IXIC" if tk == "^IXIC" else tk
+
+
 def build_market_section(market_data: List[dict], breadth: dict,
                          regime: str = "GREEN", allow_breakouts: bool = True) -> Tuple[str, str]:
     """Returns (html, overall_trend)."""
@@ -5162,7 +5185,7 @@ def build_market_section(market_data: List[dict], breadth: dict,
         tk = md["ticker"]
         trend_col = "val-green" if md["trend"] == "GREEN" else "val-red"
         dist_col = "val-red" if md["dist_days"] >= 6 else ("val-warn" if md["dist_days"] >= 4 else "val-green")  # align to regime thresholds (audit)
-        if tk == "QQQ" and md["trend"] == "RED":
+        if tk == "^IXIC" and md["trend"] == "RED":
             overall_trend = "RED"
         chg = md.get("change_pct", 0.0)
         chg_pt = md.get("change_pt", 0.0)
@@ -5173,7 +5196,7 @@ def build_market_section(market_data: List[dict], breadth: dict,
         spark = md.get("spark", "")
         out.append(f"""
             <div class="market-card">
-                <h3>{esc(tk)} {_lp(tk, md['close'], style="float:right", fmt="{:.2f}")}</h3>
+                <h3>{esc(_index_display(tk))} {_lp(tk, md['close'], style="float:right", fmt="{:.2f}")}</h3>
                 <div style="font-size:var(--fs-caption);margin-bottom:4px;"><span class="{chg_col}">{chg:+.2f}% ({chg_pt:+.2f})</span> <span style="color:#8b949e;">vs prev close</span></div>
                 <div class="idx-spark">{spark}</div>
                 <div style="font-size:var(--fs-table);color:#8b949e;margin:5px 0;">10SMA/21SMA: <span class="{trend_col}">{md['trend']}</span></div>
@@ -5355,7 +5378,7 @@ def build_regime(market_data: List[dict], breadth: dict,
     """Market-top early-warning grid: 10 scored tells (+ VIX info) rolled into a
     GREEN/YELLOW/RED verdict with hard 🔴 overrides. Returns (html, regime, allow_breakouts)."""
     md = {m["ticker"]: m for m in market_data}
-    qqq, spy = md.get("QQQ"), md.get("SPY")
+    ixic, spy = md.get("^IXIC"), md.get("SPY")
     br50 = breadth.get("above50", 50.0)
     br200 = breadth.get("above200", 50.0)
     dist_max = max((m.get("dist_days", 0) for m in market_data), default=0)
@@ -5364,12 +5387,12 @@ def build_regime(market_data: List[dict], breadth: dict,
     sigs = []   # (state, label)  state ∈ g/y/r/i ; i = info (not scored)
 
     # 1) Trend
-    if qqq and spy and qqq["trend"] == "GREEN" and spy["trend"] == "GREEN":
-        sigs.append(("g", "Trend ✓ (QQQ/SPY 10&gt;21)"))
-    elif qqq and spy and qqq["trend"] == "RED" and spy["trend"] == "RED":
-        sigs.append(("r", "Trend ✗ (QQQ &amp; SPY 10&lt;21)"))
+    if ixic and spy and ixic["trend"] == "GREEN" and spy["trend"] == "GREEN":
+        sigs.append(("g", "Trend ✓ (IXIC/SPY 10&gt;21)"))
+    elif ixic and spy and ixic["trend"] == "RED" and spy["trend"] == "RED":
+        sigs.append(("r", "Trend ✗ (IXIC &amp; SPY 10&lt;21)"))
     else:
-        sigs.append(("y", "Trend mixed (QQQ/SPY)"))
+        sigs.append(("y", "Trend mixed (IXIC/SPY)"))
     # 2/3) S&P breadth > 50/200DMA — but a FAILED breadth fetch returns the 50.0
     #      sentinel, which would score as two phantom YELLOW tells (audit H3).
     #      Guard on the ok flag like every other failable input does.
@@ -5382,9 +5405,9 @@ def build_regime(market_data: List[dict], breadth: dict,
     # 4) Distribution days
     sigs.append((("g" if dist_max < 4 else "y" if dist_max < 6 else "r"), f"Distribution {dist_max}d"))
     # 5) Climax extension — calibrated to history via the percentile table
-    #    (same P## as the QQQ/SPY cards; take the more-stretched of the two).
+    #    (same P## as the IXIC/SPY cards; take the more-stretched of the two).
     climax = []
-    for tk in ("QQQ", "SPY"):
+    for tk in ("^IXIC", "SPY"):
         m = md.get(tk)
         if m is not None:
             p = ext_percentile(tk, "SMA50", m.get("ext_50", 0.0))
@@ -5394,7 +5417,7 @@ def build_regime(market_data: List[dict], breadth: dict,
         cp, ctk, cext = max(climax)
         cst = "r" if cp >= 90 else ("y" if cp >= 75 else "g")
         cflag = " ⚠️stretched" if cp >= 90 else (" hot" if cp >= 75 else "")
-        sigs.append((cst, f"Climax {ctk} +{cext:.0f}% · P{cp:.0f}{cflag}"))
+        sigs.append((cst, f"Climax {_index_display(ctk)} +{cext:.0f}% · P{cp:.0f}{cflag}"))
     else:
         sigs.append((("g" if ext_max <= 10 else "y" if ext_max <= 15 else "r"),
                      f"Climax ext {ext_max:.0f}%"))
@@ -5405,11 +5428,11 @@ def build_regime(market_data: List[dict], breadth: dict,
         sigs.append((st, f"Leaders &lt;50DMA {b50:.0f}% · noNH {leader_stats['no_new_high']:.0f}%"))
     else:
         sigs.append(("i", "Leader momentum n/a"))
-    # 7) Topping-range breakdown (QQQ/SPY)
-    idx_below = [m for m in (qqq, spy) if m and m.get("close_below_range")]
-    idx_pos = [m.get("range_pos", 1.0) for m in (qqq, spy) if m]
+    # 7) Topping-range breakdown (IXIC/SPY)
+    idx_below = [m for m in (ixic, spy) if m and m.get("close_below_range")]
+    idx_pos = [m.get("range_pos", 1.0) for m in (ixic, spy) if m]
     if idx_below:
-        sigs.append(("r", f"Topping: {'/'.join(m['ticker'] for m in idx_below)} broke range"))
+        sigs.append(("r", f"Topping: {'/'.join(_index_display(m['ticker']) for m in idx_below)} broke range"))
     elif idx_pos and min(idx_pos) < 0.2:
         sigs.append(("y", "Topping: near range low"))
     else:
@@ -6065,17 +6088,17 @@ def fetch_intraday_5m(ticker: str) -> Optional[dict]:
 
 def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
                                risk_dollar: float = 500.0) -> str:
-    """LIVE intraday execution plan (ORB + VWAP + volume + QQQ kill-switch),
-    amended from madrry_trade_plan.py and rendered into the report. Operates on
-    the current scan's high-conviction names (A+ VCP power + HVE rel-vol)."""
+    """LIVE intraday execution plan (ORB + VWAP + volume), amended from
+    madrry_trade_plan.py and rendered into the report. Operates on the current
+    scan's high-conviction names (A+ VCP power + HVE rel-vol)."""
     targets = [s for s in setups_pool
                if (s.get("power_score") or 0) > 100 or (s.get("rel_vol") or 0) > 3.0]
     targets.sort(key=lambda x: (x.get("power_score") or (x.get("rel_vol", 0) * 100)),
                  reverse=True)
     targets = targets[:6]
 
-    # Fetch QQQ (kill-switch) + every target's 5m snapshot concurrently.
-    need = ["QQQ"] + [t["ticker"] for t in targets]
+    # Fetch each target's 5m snapshot concurrently (per-stock VWAP/ORB gating).
+    need = [t["ticker"] for t in targets]
     intra: Dict[str, Optional[dict]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
         futs = {pool.submit(fetch_intraday_5m, tk): tk for tk in dict.fromkeys(need)}
@@ -6084,23 +6107,6 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
                 intra[futs[fut]] = fut.result()
             except Exception:  # noqa: BLE001
                 intra[futs[fut]] = None
-
-    # --- QQQ intraday VWAP kill-switch banner ---
-    qqq = intra.get("QQQ")
-    market_is_safe = True
-    if qqq:
-        safe = qqq["current_price"] >= qqq["vwap"]
-        market_is_safe = safe
-        if safe:
-            banner = (f'<div class="kill-ok">🟢 MARKET GREEN LIGHT — QQQ above intraday VWAP '
-                      f'(${qqq["current_price"]:.2f} ≥ ${qqq["vwap"]:.2f}). Breakouts have tailwind.</div>')
-        else:
-            banner = (f'<div class="kill-bad">🚨 MARKET RED LIGHT — QQQ BELOW intraday VWAP '
-                      f'(${qqq["current_price"]:.2f} &lt; ${qqq["vwap"]:.2f}). Breakouts fail in weak tape — '
-                      f'cancel longs or trade tiny.</div>')
-    else:
-        banner = ('<div class="kill-warn">⚠️ Could not fetch QQQ intraday data (market may be closed). '
-                  'Plan uses the last available session.</div>')
 
     rows = []
     for s in targets:
@@ -6151,8 +6157,6 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
             ]
             if is_hve:
                 steps.append(f'3️⃣ <b>較佳:</b> 等回測 ${trigger:.2f} 守住再進 (避免追高).')
-            if not market_is_safe:
-                steps.insert(0, '⚠️ <span class="bad">QQQ 在 VWAP 下，假突破機率高.</span>')
             protocol = "<br>".join(steps)
 
         size_block = (f'<span class="entry-text">Trigger ${trigger:.2f}</span><br>'
@@ -6171,7 +6175,6 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
 
     return f"""
     <div class="section-title" style="background-color:#10243a;color:#79c0ff;border-bottom:3px solid #1f6feb;">⚔️ INTRADAY EXECUTION PLAN — 盤中執行 (ORB + VWAP · Live · Risk ${risk_dollar:.0f})</div>
-    <div style="margin:0 0 4px;">{banner}</div>
     <div class="table-container"><table>
         <thead><tr><th>Ticker</th><th>Live (Price / VWAP / ORB)</th><th>Execution Protocol</th><th>Trigger / Stop / Size</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>
@@ -6207,27 +6210,36 @@ def run_scanners_and_generate_html() -> str:
             t2108 = f_t2108.result()
             sector_rs = f_sect.result()
 
-    qqq_trend = next((m["trend"] for m in market_data if m["ticker"] == "QQQ"), "GREEN")
+    ixic_trend = next((m["trend"] for m in market_data if m["ticker"] == "^IXIC"), "GREEN")
     spy_trend = next((m["trend"] for m in market_data if m["ticker"] == "SPY"), "GREEN")
     above_50_pct = breadth.get("above50", 50.0)
-    if qqq_trend == "GREEN" and spy_trend == "GREEN":
+    if ixic_trend == "GREEN" and spy_trend == "GREEN":
         market_modifier = 1.2
-    elif qqq_trend == "RED" and spy_trend == "RED":
+    elif ixic_trend == "RED" and spy_trend == "RED":
         market_modifier = 0.4 if above_50_pct < 40.0 else 0.7
     else:
         market_modifier = 1.0
-    log.info("QQQ=%s SPY=%s Above50=%.1f%% MarketMod=%s",
-             qqq_trend, spy_trend, above_50_pct, market_modifier)
+    log.info("IXIC=%s SPY=%s Above50=%.1f%% MarketMod=%s",
+             ixic_trend, spy_trend, above_50_pct, market_modifier)
 
     # 10 calendar days > the 5 TRADING-day U&R window, so weekend-spanning day-4/5
     # setups aren't purged before scan_ur can see them (audit H4).
     hve_history = cleanup_old_hve(load_hve_history(), days=10)
 
-    # Data date = trading date of the last daily bar (from QQQ). Computed BEFORE
-    # the scans so they can reject stale history feeds (Yahoo's bulk endpoint
-    # can lag the chart endpoint by a session during EOD consolidation).
-    data_date = next((m.get("asof") for m in market_data if m.get("ticker") == "QQQ" and m.get("asof")),
-                     None) or date.today().isoformat()
+    # Data date = trading date of the last daily bar, taken as the FRESHEST asof
+    # across the index cards. Computed BEFORE the scans so they can reject stale
+    # history feeds (Yahoo's bulk endpoint can lag the chart endpoint by a session
+    # during EOD consolidation). Why max and not just ^IXIC (the primary index):
+    # TradingView's scan API has no ^IXIC, so the stale-bar TV-append inside
+    # _fetch_one_index can only patch the ETF cards (QQQ/SPY/IWM) — under Yahoo's
+    # EOD lag those carry the real current session while ^IXIC would sit a day
+    # behind, and keying on ^IXIC alone would mark the whole report provisional.
+    _asofs = [m["asof"] for m in market_data if m.get("asof")]  # ISO strings → max() is latest
+    data_date = max(_asofs) if _asofs else None
+    if not next((m for m in market_data if m.get("ticker") == "^IXIC" and m.get("asof")), None):
+        diag.warn("^IXIC asof unavailable — data_date taken from the other index cards "
+                  + (f"({data_date})" if data_date else "(none — today())"))
+    data_date = data_date or date.today().isoformat()
     # Vintage check vs the wall clock: if even the chart feed is a session
     # behind (it happens during Yahoo's EOD consolidation window), say so
     # loudly in the report instead of presenting old bars as today's scan.
