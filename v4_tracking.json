@@ -1,9 +1,9 @@
 {
- "generated": "2026-07-03",
+ "generated": "2026-07-04",
  "window": 40,
  "win_def": "fwd close >= entry*(1+2*ADR/100)",
  "loss_def": "fwd low <= entry*0.92",
- "n": 1158,
+ "n": 1162,
  "records": {
   "HUM|2026-06-09": {
    "ticker": "HUM",
@@ -4083,7 +4083,7 @@
    "loss_line": 148.6812,
    "resolve_date": null,
    "days_to_resolve": null,
-   "days_followed": 12
+   "days_followed": 13
   },
   "CLS|2026-06-12": {
    "ticker": "CLS",
@@ -4559,7 +4559,7 @@
    "loss_line": 38.8608,
    "resolve_date": null,
    "days_to_resolve": null,
-   "days_followed": 12
+   "days_followed": 13
   },
   "RVMD|2026-06-12": {
    "ticker": "RVMD",
@@ -5239,7 +5239,7 @@
    "loss_line": 16.5324,
    "resolve_date": null,
    "days_to_resolve": null,
-   "days_followed": 12
+   "days_followed": 13
   },
   "GNRC|2026-06-12": {
    "ticker": "GNRC",
@@ -5569,17 +5569,17 @@
     "frac_Supply_Shock": 0.0,
     "frac_Risk": 0.66667
    },
-   "outcome": "open",
-   "label_2adr": null,
-   "barrier_return": null,
-   "realized_return": null,
+   "outcome": "loss",
+   "label_2adr": 0,
+   "barrier_return": -0.08,
+   "realized_return": -0.0994,
    "fwd20_return": null,
    "fwd40_return": null,
    "win_target": 161.6967,
    "loss_line": 132.9676,
-   "resolve_date": null,
-   "days_to_resolve": null,
-   "days_followed": 12
+   "resolve_date": "2026-07-02",
+   "days_to_resolve": 13,
+   "days_followed": 13
   },
   "WKC|2026-06-12": {
    "ticker": "WKC",
@@ -6267,7 +6267,7 @@
    "loss_line": 354.1632,
    "resolve_date": null,
    "days_to_resolve": null,
-   "days_followed": 12
+   "days_followed": 13
   },
   "EZPW|2026-06-12": {
    "ticker": "EZPW",
@@ -42561,17 +42561,17 @@
     "frac_Supply_Shock": 0.0,
     "frac_Risk": 0.66667
    },
-   "outcome": "open",
-   "label_2adr": null,
-   "barrier_return": null,
-   "realized_return": null,
+   "outcome": "win",
+   "label_2adr": 1,
+   "barrier_return": 0.0638,
+   "realized_return": 0.0638,
    "fwd20_return": null,
    "fwd40_return": null,
    "win_target": 85.0775,
    "loss_line": 74.75,
-   "resolve_date": null,
-   "days_to_resolve": null,
-   "days_followed": 12
+   "resolve_date": "2026-07-02",
+   "days_to_resolve": 13,
+   "days_followed": 13
   },
   "WSC|2026-06-12": {
    "ticker": "WSC",
@@ -42639,7 +42639,7 @@
    "loss_line": 25.8796,
    "resolve_date": null,
    "days_to_resolve": null,
-   "days_followed": 12
+   "days_followed": 13
   },
   "XMAX|2026-06-15": {
    "ticker": "XMAX",
@@ -53441,17 +53441,17 @@
     "frac_Supply_Shock": 0.0,
     "frac_Risk": 0.66667
    },
-   "outcome": "open",
-   "label_2adr": null,
-   "barrier_return": null,
-   "realized_return": null,
+   "outcome": "loss",
+   "label_2adr": 0,
+   "barrier_return": -0.08,
+   "realized_return": -0.1584,
    "fwd20_return": null,
    "fwd40_return": null,
    "win_target": 91.7669,
    "loss_line": 74.8696,
-   "resolve_date": null,
-   "days_to_resolve": null,
-   "days_followed": 12
+   "resolve_date": "2026-07-02",
+   "days_to_resolve": 13,
+   "days_followed": 13
   },
   "TWLO|2026-06-12": {
    "ticker": "TWLO",
@@ -53587,7 +53587,7 @@
    "loss_line": 150.1808,
    "resolve_date": null,
    "days_to_resolve": null,
-   "days_followed": 12
+   "days_followed": 13
   },
   "NET|2026-06-12": {
    "ticker": "NET",
@@ -53655,7 +53655,7 @@
    "loss_line": 210.2016,
    "resolve_date": null,
    "days_to_resolve": null,
-   "days_followed": 12
+   "days_followed": 13
   },
   "ODFL|2026-06-12": {
    "ticker": "ODFL",
@@ -53791,7 +53791,7 @@
    "loss_line": 16.3484,
    "resolve_date": null,
    "days_to_resolve": null,
-   "days_followed": 12
+   "days_followed": 13
   },
   "AMN|2026-06-12": {
    "ticker": "AMN",
@@ -53849,17 +53849,17 @@
     "frac_Supply_Shock": 0.0,
     "frac_Risk": 0.66667
    },
-   "outcome": "open",
-   "label_2adr": null,
-   "barrier_return": null,
-   "realized_return": null,
+   "outcome": "win",
+   "label_2adr": 1,
+   "barrier_return": 0.1282,
+   "realized_return": 0.1282,
    "fwd20_return": null,
    "fwd40_return": null,
    "win_target": 34.1616,
    "loss_line": 28.336,
-   "resolve_date": null,
-   "days_to_resolve": null,
-   "days_followed": 12
+   "resolve_date": "2026-07-02",
+   "days_to_resolve": 13,
+   "days_followed": 13
   },
   "SKYT|2026-06-12": {
    "ticker": "SKYT",
@@ -61107,6 +61107,38 @@
    "tier": "A-",
    "sector": "Health Technology",
    "legacy_meta_score": 6.9,
+   "outcome": "short_history"
+  },
+  "TWST|2026-07-03": {
+   "ticker": "TWST",
+   "pick_date": "2026-07-03",
+   "tier": "A+",
+   "sector": "Health Technology",
+   "legacy_meta_score": 32.0,
+   "outcome": "short_history"
+  },
+  "TXG|2026-07-03": {
+   "ticker": "TXG",
+   "pick_date": "2026-07-03",
+   "tier": "A+",
+   "sector": "Health Technology",
+   "legacy_meta_score": 31.2,
+   "outcome": "short_history"
+  },
+  "MNST|2026-07-03": {
+   "ticker": "MNST",
+   "pick_date": "2026-07-03",
+   "tier": "A-",
+   "sector": "Consumer Non-Durables",
+   "legacy_meta_score": 47.5,
+   "outcome": "short_history"
+  },
+  "FMX|2026-07-03": {
+   "ticker": "FMX",
+   "pick_date": "2026-07-03",
+   "tier": "A-",
+   "sector": "Consumer Non-Durables",
+   "legacy_meta_score": 40.3,
    "outcome": "short_history"
   }
  }
