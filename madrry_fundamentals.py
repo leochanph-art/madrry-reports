@@ -752,9 +752,9 @@ def _yoy_html(y) -> str:
 
 
 _ACCEL_CHIP = {
-    "accel":  ("&#9650;&#9650; Accelerating", "#3fb950"),
-    "steady": ("&#8594; Steady", "#8b949e"),
-    "decel":  ("&#9660; Decelerating", "#ff7b72"),
+    "accel":  ("&#9650;&#9650; Accelerating", "#54b87f"),
+    "steady": ("&#8594; Steady", "#82827c"),
+    "decel":  ("&#9660; Decelerating", "#e06c6a"),
 }
 
 
@@ -778,15 +778,15 @@ def _margin_line(rec: dict) -> str:
         return ""
     bits = []
     if latest is not None:
-        star = (" <span style='color:#3fb950;font-weight:600;'>&#11088; new high</span>"
+        star = (" <span style='color:#54b87f;font-weight:600;'>&#11088; new high</span>"
                 if m.get("new_high") else "")
-        bits.append(f"<b>Net margin</b> {latest:.1f}% <span style='color:#8b949e;'>(qtr)</span>{star}")
+        bits.append(f"<b>Net margin</b> {latest:.1f}% <span style='color:#82827c;'>(qtr)</span>{star}")
     if ttm is not None:
         bits.append(f"{ttm:.1f}% TTM")
     pct = industry_percentile(rec.get("industry"), ttm)
     if pct is not None:
         ind = _esc(rec.get("industry") or "industry")
-        bits.append(f"<span style='color:#3fb950;'>top {max(1, 100 - int(pct))}% in {ind}</span>"
+        bits.append(f"<span style='color:#54b87f;'>top {max(1, 100 - int(pct))}% in {ind}</span>"
                     if pct >= 90 else f"{int(pct)}th pct in {ind}")
     return "<div class='fund-src' style='margin-top:4px;'>" + " &middot; ".join(bits) + "</div>"
 
@@ -801,13 +801,13 @@ def _revisions_line(ticker: str) -> str:
         return ""
     cells = []
     if up is not None:
-        cells.append(f"<span style='color:#3fb950;'>&#9650;{up}</span>")
+        cells.append(f"<span style='color:#54b87f;'>&#9650;{up}</span>")
     if dn is not None:
-        cells.append(f"<span style='color:#ff7b72;'>&#9660;{dn}</span>")
-    bits = ["<b>Est. revisions</b> <span style='color:#8b949e;'>(30d)</span> " + " / ".join(cells)]
+        cells.append(f"<span style='color:#e06c6a;'>&#9660;{dn}</span>")
+    bits = ["<b>Est. revisions</b> <span style='color:#82827c;'>(30d)</span> " + " / ".join(cells)]
     drift = r.get("drift90")
     if drift is not None and abs(drift) >= 0.005:
-        col = "#3fb950" if drift > 0 else "#ff7b72"
+        col = "#54b87f" if drift > 0 else "#e06c6a"
         verb = "raised" if drift > 0 else "cut"
         bits.append(f"consensus {verb} <span style='color:{col};'>"
                     f"{'+' if drift >= 0 else ''}{drift * 100:.0f}%</span> vs 90d ago")
@@ -829,7 +829,7 @@ def render_accel(rec: dict) -> str:
         txt, col = _ACCEL_CHIP[v]
         chips.append(f"<span style='color:{col};font-weight:600;'>{txt}</span>")
     if a.get("ttm_new_high"):
-        chips.append("<span style='color:#3fb950;font-weight:600;'>&#11088; TTM EPS new high</span>")
+        chips.append("<span style='color:#54b87f;font-weight:600;'>&#11088; TTM EPS new high</span>")
     head = " &nbsp;&middot;&nbsp; ".join(chips)
     out = ["<div class='fund-wrap' style='margin-top:8px;'>",
            "<div class='fund-src' style='margin:2px 0 4px;letter-spacing:.04em;'>EARNINGS ACCELERATION"

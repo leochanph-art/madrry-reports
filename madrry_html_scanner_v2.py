@@ -1801,6 +1801,123 @@ def make_volume_bars(volumes: Iterable[float], ups: Optional[List[bool]] = None,
 
 
 # ----------------------------------------------------------------------------
+# CANDLESTICK CHART (2026-07-05 layout upgrade)
+#
+# The chart cell ships a compact JSON payload in a data attribute; ONE shared
+# client-side renderer (CANDLE_JS) lazily draws candles + volume + 10/20/50
+# MAs + the lesson-engine levels (SR zone band, PB trigger/stop, plan
+# entry/stop, trendline + channel-rail diagonals) when the row scrolls into
+# view. Server-side SVG candles were rejected: ~16KB of markup per chart
+# across ~400 charts would triple the report size.
+# ----------------------------------------------------------------------------
+def _cfin(x, nd: int = 2) -> Optional[float]:
+    """Finite float rounded to nd, else None (payload hygiene)."""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    return round(v, nd)
+
+
+def _candle_overlays(plan: Optional[dict]) -> dict:
+    """Whitelisted plan/lesson levels for the chart renderer, short-keyed to
+    keep the per-row payload small. Diagonal pairs (value-now + $/trading-day
+    slope) come from the tl_*_now / ch_gov_* exports added to the engines —
+    ch_top_at/ch_bot_at are ensemble trade levels and are NOT drawable."""
+    if not plan:
+        return {}
+    ov: Dict[str, Any] = {}
+
+    def put(k, v, nd=2):
+        f = _cfin(v, nd)
+        if f is not None:
+            ov[k] = f
+
+    put("e", plan.get("entry"))
+    put("s", plan.get("stop"))
+    put("srl", plan.get("sr_prot_lo"))
+    put("srh", plan.get("sr_prot_hi"))
+    put("srs", plan.get("sr_stop_suggest"))
+    if plan.get("pb2_state") in ("setup", "recovery"):
+        put("pbt", plan.get("pb2_trigger"))
+        put("pbs", plan.get("pb2_stop"))
+    put("tsn", plan.get("tl_sup_now"))
+    put("tsd", plan.get("tl_sup_slope_d"), 4)
+    put("trn", plan.get("tl_res_now"))
+    put("trd", plan.get("tl_res_slope_d"), 4)
+    put("ctn", plan.get("ch_gov_top_now"))
+    put("cbn", plan.get("ch_gov_bot_now"))
+    put("cd", plan.get("ch_gov_slope_d"), 4)
+    # a diagonal without its slope (or vice versa) is undrawable — drop the orphan
+    for a, b in (("tsn", "tsd"), ("trn", "trd")):
+        if (a in ov) != (b in ov):
+            ov.pop(a, None)
+            ov.pop(b, None)
+    if not ("ctn" in ov and "cbn" in ov and "cd" in ov):
+        for k in ("ctn", "cbn", "cd"):
+            ov.pop(k, None)
+    if "srl" in ov and "srh" in ov and ov["srl"] > ov["srh"]:
+        ov.pop("srl"), ov.pop("srh")
+    if "tsn" in ov:
+        ov["tsk"] = str(plan.get("tl_sup_kind") or "TL")[:3]
+    if "trn" in ov:
+        ov["trk"] = str(plan.get("tl_res_kind") or "TL")[:3]
+    return ov
+
+
+def make_candle_chart(hist_df: Optional[pd.DataFrame], plan: Optional[dict] = None,
+                      window: int = 60, weekly: bool = False) -> str:
+    """<div class='cchart' data-c='{...}'> rendered client-side by CANDLE_JS.
+
+    Payload: t0 (first bar date) + dt (calendar-day gaps), OHLC (2dp, 4dp
+    under $1), volume in thousands, up to 49 pre-window closes (so the 50-MA
+    is valid at the left edge), w=1 for weekly bars, ov = overlay levels.
+    Never raises; '' when history is unusable."""
+    try:
+        if hist_df is None or len(hist_df) < 2:
+            return ""
+        df = hist_df
+        if weekly:
+            vol = df["Volume"] if "Volume" in df.columns else pd.Series(np.nan, index=df.index)
+            df = pd.DataFrame({
+                "Open": df["Open"].resample("W-FRI").first(),
+                "High": df["High"].resample("W-FRI").max(),
+                "Low": df["Low"].resample("W-FRI").min(),
+                "Close": df["Close"].resample("W-FRI").last(),
+                "Volume": vol.resample("W-FRI").sum(),
+            }).dropna(subset=["Open", "High", "Low", "Close"])
+        df = df[df["Close"].notna()]
+        if len(df) < 2:
+            return ""
+        win = df.tail(window)
+        pre = df["Close"].iloc[max(0, len(df) - len(win) - 49):len(df) - len(win)]
+        nd = 4 if float(win["Close"].iloc[-1]) < 1.0 else 2
+        payload: Dict[str, Any] = {
+            "t0": str(win.index[0].date()),
+            "dt": [0] + [int((win.index[i] - win.index[i - 1]).days)
+                         for i in range(1, len(win))],
+            "o": [_cfin(x, nd) for x in win["Open"].tolist()],
+            "h": [_cfin(x, nd) for x in win["High"].tolist()],
+            "l": [_cfin(x, nd) for x in win["Low"].tolist()],
+            "c": [_cfin(x, nd) for x in win["Close"].tolist()],
+            "v": [int(round((f or 0.0) / 1000.0)) for f in
+                  (_cfin(x, 0) for x in win["Volume"].tolist())] if "Volume" in win.columns
+                 else [0] * len(win),
+            "p": [_cfin(x, nd) for x in pre.tolist()],
+            "w": 1 if weekly else 0,
+        }
+        ov = _candle_overlays(plan)
+        if ov:
+            payload["ov"] = ov
+        js = json.dumps(payload, separators=(",", ":")).replace("'", "&#39;")
+        return f"<div class='cchart' data-c='{js}'></div>"
+    except Exception:                                    # never kill a scan
+        return ""
+
+
+# ----------------------------------------------------------------------------
 # PLAYBOOK / FOOTPRINT ANALYSIS  (Martin Momentum method — additive, soft)
 #
 # Studies the ticker's recent "footprint": the base it built, how many
@@ -2668,11 +2785,6 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             c["status_labels"].extend(meta_score_data["badges"])
             trendline_data = calculate_trendline_analysis(c["ticker"], hist_df)
 
-            # Sparkline reuses the history we already downloaded — no extra calls.
-            spark = ""
-            if hist_df is not None and len(hist_df) >= 2:
-                spark = make_price_spark(hist_df["Close"].tolist(), 40)
-
             # Day-over-day volume dry-up: today's volume <= 70% of the prior
             # session. Needs daily history (the cheap TV feed can't supply it),
             # so it is evaluated here and used as an OR-branch in the A- gate.
@@ -2717,7 +2829,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 "stop_reason": c["stop_reason"], "status_labels": c["status_labels"],
                 "dist_52w": c["dist_52w"], "meta_score": meta_score, "section": "coil", **_raw_scores,
                 "meta_details": meta_score_data["details"], "trendline_data": trendline_data,
-                "spark": spark, "footprint": footprint,
+                "spark": "", "footprint": footprint,
                 "_ma_dist": (_ma_dist_data(hist_df["Close"].tolist())
                              if (hist_df is not None and len(hist_df) >= 2) else None),
                 "pb_entry": c["pb_entry"], "pb_stop": c["pb_stop"], "pb_risk": c["pb_risk"], "ema9": c["ema9"],
@@ -2727,6 +2839,9 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 **_tl_quality(hist_df, c["entry"], "long"),
                 **_ch_quality(hist_df, c["entry"], "long"),
             }
+            # Candlestick chart AFTER the engine merge so the payload can draw
+            # the lesson levels (SR zone, PB trigger/stop, TL/CH diagonals).
+            stock_data["spark"] = make_candle_chart(hist_df, stock_data, 60)
 
             is_tight_flag_3d = meta_score_data.get("is_flag", False)
             is_tight_1d = c["is_tight_1d"]
@@ -3012,7 +3127,7 @@ def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
         meta_score_data = calculate_meta_momentum_score(meta_input, df)
         meta_score, _raw_scores = _ranking_meta_score_ex(df, meta_score_data["score"], market_modifier)
 
-        spark = make_price_spark(df["Close"].tolist(), 40) if len(df) >= 2 else ""
+        spark = make_candle_chart(df, {"entry": entry, "stop": stop}, 60) if len(df) >= 2 else ""
         footprint = analyze_footprint(df)
         trendline_data = calculate_trendline_analysis(t, df)
         theme = get_theme(t, m.get("industry", "N/A"))
@@ -3388,7 +3503,7 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
             "rs_rating": rs if isinstance(rs, int) else "N/A", "sector": info["sector"],
             "theme": get_theme(t, info["industry"]), "tag": tag, "label": label,
             "entry": entry, "stop": stop, "risk_pct": risk_pct,
-            "spark": make_price_spark(cl.tolist(), 60) if len(cl) >= 2 else "",
+            "spark": "",
             "_ma_dist": _ma_dist_data(cl.tolist()),
             "fp_badges": fp.get("badges", []),
             "persist_tier": rec["tier"], "persist_label": rec["label"],
@@ -3399,6 +3514,7 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
             **_ch_quality(df, entry, "long"),
         })
         rows[-1]["lesson_confluence"] = _lesson_confluence(rows[-1])
+        rows[-1]["spark"] = make_candle_chart(df, rows[-1], 60)
 
     # Persistent leaders first (relentless > persistent > none), then by M.E.T.A.
     p_rank = {"R": 2, "P": 1, "": 0}
@@ -3513,9 +3629,10 @@ def scan_nh52_pullbacks(history: dict, rs_map: dict, diag: Diagnostics,
             "last_high": e.get("last_high"), "high_count": int(e.get("high_count", 0)),
             "rs_rating": rs if isinstance(rs, int) else "N/A",
             "status": status, "tag": tag,
-            "spark": make_price_spark(cl.tolist(), 60) if len(cl) >= 2 else "",
+            "spark": "",
             **_pb2_quality(df),
         })
+        monitored[-1]["spark"] = make_candle_chart(df, monitored[-1], 60)
 
     order = {"GRN": 0, "RED": 1, "HOLD": 2}
     monitored.sort(key=lambda x: (order.get(x["tag"], 9), x["days_since_high"]))
@@ -3967,6 +4084,15 @@ PAGE_CSS = """
     .fund-up { color:#54b87f; } .fund-dn { color:#e06c6a; } .fund-flat, .fund-na { color:var(--text-3); }
     .fund-src { color:var(--text-3); font-size:10px; margin-top:3px; opacity:.7; }
     .spark { margin-top:4px; }
+    /* candlestick chart cell: JSON payload rendered lazily by CANDLE_JS */
+    .cchart { margin-top:4px; width:100%; max-width:340px; }
+    .cchart:empty { aspect-ratio:340/210; background:var(--raised); border-radius:var(--r-card); opacity:.45; }
+    .cchart svg { display:block; width:100%; height:auto; }
+    .cc-tip { position:fixed; z-index:99; pointer-events:none; display:none; white-space:nowrap;
+              background:var(--raised); border:1px solid var(--line-2); border-radius:var(--r-card);
+              padding:6px 9px; font:11px var(--mono); color:var(--text);
+              box-shadow:0 4px 14px rgba(0,0,0,.4); }
+    .cc-tip b { color:var(--text-2); font-weight:500; }
     .livebtn { cursor:pointer; font:inherit; border:1px solid var(--bd-accent) !important; color:var(--accent-2) !important; background:var(--tint-accent) !important; min-width:9.5em; min-height:32px; }
     .livebtn:disabled { opacity:0.6; cursor:wait; }
     .lp { transition:color .25s; font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:var(--fs-title); font-weight:700; }
@@ -4449,6 +4575,177 @@ async function refreshPrices(btn) {
     });
     refresh();
   });
+})();
+</script>
+"""
+
+# Shared client-side candlestick renderer. Each .cchart div carries its own
+# compact OHLCV+overlay JSON (data-c, written by make_candle_chart); ONE
+# IntersectionObserver renders charts lazily as they scroll into view, and a
+# beforeprint hook renders everything for print/PDF. Colors come from the
+# :root tokens so the palette stays single-sourced.
+CANDLE_JS = """
+<script>
+(function () {
+  'use strict';
+  var css = getComputedStyle(document.documentElement);
+  function tok(n, fb) { var v = css.getPropertyValue(n); return v ? v.trim() : fb; }
+  var UP = tok('--candle-up', '#54b87f'), DN = tok('--candle-down', '#e06c6a'),
+      DOJI = tok('--candle-doji', '#82827c'), VOLC = tok('--vol-bar', '#4a4a52'),
+      VOLUP = tok('--vol-bar-up', 'rgba(84,184,127,.45)'), ACC = tok('--accent', '#8cb4d6'),
+      WRN = tok('--warn', '#d3a04d'), RAIL = tok('--ma-slow', '#6b6b74'),
+      MASPEC = [[10, tok('--ma-fast', '#8cb4d6')], [20, tok('--ma-mid', '#d3a04d')], [50, tok('--ma-slow', '#6b6b74')]];
+  var W = 340, H = 210, PT = 4, PB = 158, VT = 166, VB = 206, PL = 4, PR = 300;
+  var uid = 0, tip = null;
+
+  function sma(vals, p) {
+    var out = [], s = 0, q = [];
+    for (var i = 0; i < vals.length; i++) {
+      var v = vals[i]; if (v == null) { out.push(null); s = 0; q = []; continue; }
+      q.push(v); s += v; if (q.length > p) s -= q.shift();
+      out.push(q.length === p ? s / p : null);
+    }
+    return out;
+  }
+  function fmt(v) { return v >= 1000 ? v.toFixed(0) : (v >= 100 ? v.toFixed(1) : v.toFixed(2)); }
+
+  function render(el) {
+    if (el.__cc) return; el.__cc = 1;
+    var d; try { d = JSON.parse(el.getAttribute('data-c')); } catch (e) { return; }
+    if (!d || !d.c || d.c.length < 2) return;
+    var n = d.c.length, ov = d.ov || {}, i, k;
+    var dates = [], tms = Date.parse(d.t0 + 'T00:00:00Z');
+    for (i = 0; i < n; i++) { tms += d.dt[i] * 86400000; dates.push(new Date(tms).toISOString().slice(0, 10)); }
+    var lo = Infinity, hi = -Infinity;
+    for (i = 0; i < n; i++) {
+      if (d.l[i] != null && d.l[i] < lo) lo = d.l[i];
+      if (d.h[i] != null && d.h[i] > hi) hi = d.h[i];
+    }
+    if (!isFinite(lo) || !isFinite(hi) || hi <= lo) return;
+    var R = hi - lo;
+    var mas = MASPEC.map(function (sp) { return { col: sp[1], v: sma((d.p || []).concat(d.c), sp[0]).slice(-n) }; });
+    mas.forEach(function (m) { m.v.forEach(function (v) { if (v != null) { if (v < lo) lo = v; if (v > hi) hi = v; } }); });
+    // horizontal overlay levels join the y-scale only when near the bar range
+    ['e', 's', 'srl', 'srh', 'srs', 'pbt', 'pbs'].forEach(function (key) {
+      var v = ov[key];
+      if (v != null && v >= lo - 0.15 * R && v <= hi + 0.15 * R) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    });
+    var pad = (hi - lo) * 0.03 || 0.5; lo -= pad; hi += pad;
+    var step = (PR - PL) / n, bw = Math.max(step * 0.62, 1);
+    function X(i2) { return PL + (i2 + 0.5) * step; }
+    function Y(v) { return PT + (1 - (v - lo) / (hi - lo)) * (PB - PT); }
+    function inP(y) { return y >= PT && y <= PB; }
+    var id = 'cc' + (++uid), s = [], labels = [];
+    s.push('<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">');
+    s.push('<defs><clipPath id="' + id + '"><rect x="' + PL + '" y="' + PT + '" width="' + (PR - PL) + '" height="' + (PB - PT) + '"/></clipPath></defs>');
+
+    // ---- SR zone band ----
+    if (ov.srl != null && ov.srh != null) {
+      var zt = Math.max(PT, Math.min(PB, Y(ov.srh))), zb = Math.max(PT, Math.min(PB, Y(ov.srl)));
+      if (zb - zt > 0.5) {
+        s.push('<rect x="' + PL + '" y="' + zt.toFixed(1) + '" width="' + (PR - PL) + '" height="' + (zb - zt).toFixed(1) + '" fill="' + ACC + '" opacity="0.10"/>');
+        [Y(ov.srh), Y(ov.srl)].forEach(function (y) {
+          if (inP(y)) s.push('<line x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + PR + '" y2="' + y.toFixed(1) + '" stroke="' + ACC + '" stroke-width="0.7" stroke-dasharray="2 2" opacity="0.5"/>');
+        });
+        labels.push({ y: (zt + zb) / 2, t: 'SR', c: ACC });
+      }
+    }
+    // ---- diagonals: channel rails, then trendlines ----
+    var f = d.w ? 5 : 1;
+    function dline(now, slope, col, dash, name) {
+      if (now == null || slope == null) return;
+      var y1 = Y(now - slope * (n - 1) * f), y2 = Y(now);
+      s.push('<line x1="' + X(0).toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + X(n - 1).toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke="' + col + '" stroke-width="1.2" opacity="0.8"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + ' clip-path="url(#' + id + ')"/>');
+      if (name && inP(y2)) labels.push({ y: y2, t: name, c: col });
+    }
+    if (ov.ctn != null) { dline(ov.ctn, ov.cd, RAIL, '4 3', 'CH'); dline(ov.cbn, ov.cd, RAIL, '4 3', 'CH'); }
+    dline(ov.tsn, ov.tsd, ACC, '', ov.tsk || 'TL');
+    dline(ov.trn, ov.trd, WRN, '', ov.trk || 'TL');
+    // ---- moving averages ----
+    mas.forEach(function (m) {
+      var seg = [];
+      for (i = 0; i < n; i++) {
+        if (m.v[i] == null) { if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.8" opacity="0.6"/>'); seg = []; continue; }
+        seg.push(X(i).toFixed(1) + ',' + Y(m.v[i]).toFixed(1));
+      }
+      if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.8" opacity="0.6"/>');
+    });
+    // ---- candles ----
+    for (i = 0; i < n; i++) {
+      if (d.o[i] == null || d.h[i] == null || d.l[i] == null || d.c[i] == null) continue;
+      var col = d.c[i] > d.o[i] ? UP : (d.c[i] < d.o[i] ? DN : DOJI);
+      var x = X(i);
+      s.push('<line x1="' + x.toFixed(1) + '" y1="' + Y(d.h[i]).toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + Y(d.l[i]).toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>');
+      var by = Math.min(Y(d.o[i]), Y(d.c[i])), bh = Math.max(Math.abs(Y(d.o[i]) - Y(d.c[i])), 0.8);
+      s.push('<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + bh.toFixed(1) + '" fill="' + col + '"/>');
+    }
+    // ---- volume pane ----
+    var vmax = 0;
+    for (i = 0; i < n; i++) if (d.v[i] > vmax) vmax = d.v[i];
+    if (vmax > 0) for (i = 0; i < n; i++) {
+      var vh = d.v[i] / vmax * (VB - VT);
+      if (vh < 0.5) continue;
+      var vcol = (d.o[i] != null && d.c[i] != null && d.c[i] >= d.o[i]) ? VOLUP : VOLC;
+      s.push('<rect x="' + (X(i) - bw / 2).toFixed(1) + '" y="' + (VB - vh).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + vh.toFixed(1) + '" fill="' + vcol + '"/>');
+    }
+    // ---- plan / lesson horizontal lines ----
+    function hline(v, col, dash, name, pin) {
+      if (v == null) return;
+      var y = Y(v);
+      if (!inP(y)) {
+        if (pin) labels.push({ y: y < PT ? PT + 5 : PB - 1, t: (y < PT ? '\\u21e1' : '\\u21e3') + name + ' ' + fmt(v), c: col });
+        return;
+      }
+      s.push('<line x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + PR + '" y2="' + y.toFixed(1) + '" stroke="' + col + '" stroke-width="1.15" opacity="0.9"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
+      labels.push({ y: y, t: name + ' ' + fmt(v), c: col });
+    }
+    hline(ov.srs, DN, '1 3', 'Sr', false);
+    hline(ov.pbt, UP, '5 3', 'PB', false);
+    hline(ov.pbs, DN, '5 3', 'P\\u2717', false);
+    hline(ov.e, UP, '', 'E', true);
+    hline(ov.s, DN, '', 'S', true);
+    // last close marker
+    var lc = d.c[n - 1], pc = d.c[n - 2];
+    if (lc != null) labels.push({ y: Y(lc), t: fmt(lc), c: (pc != null && lc < pc) ? DN : UP, b: 1 });
+    // ---- right-gutter labels, de-collided ----
+    labels.sort(function (a, b) { return a.y - b.y; });
+    for (k = 1; k < labels.length; k++) if (labels[k].y - labels[k - 1].y < 9) labels[k].y = labels[k - 1].y + 9;
+    var ovf = labels.length ? labels[labels.length - 1].y - PB : 0;
+    if (ovf > 0) for (k = 0; k < labels.length; k++) labels[k].y -= ovf;
+    labels.forEach(function (L) {
+      s.push('<text x="' + (PR + 3) + '" y="' + (Math.max(L.y, PT + 5) + 2.5).toFixed(1) + '" font-size="8" font-family="ui-monospace,monospace"' + (L.b ? ' font-weight="700"' : '') + ' fill="' + L.c + '">' + L.t + '</text>');
+    });
+    s.push('</svg>');
+    el.innerHTML = s.join('');
+    // ---- shared tooltip ----
+    var svg = el.firstChild;
+    svg.addEventListener('pointermove', function (ev) {
+      if (!tip) { tip = document.createElement('div'); tip.className = 'cc-tip'; document.body.appendChild(tip); }
+      var r = svg.getBoundingClientRect();
+      var xi = Math.max(0, Math.min(n - 1, Math.floor(((ev.clientX - r.left) / r.width * W - PL) / step)));
+      if (d.c[xi] == null) return;
+      var chg = (xi > 0 && d.c[xi - 1]) ? ((d.c[xi] / d.c[xi - 1] - 1) * 100).toFixed(1) : null;
+      var vv = d.v[xi] >= 1000 ? (d.v[xi] / 1000).toFixed(1) + 'M' : d.v[xi] + 'K';
+      tip.innerHTML = '<b>' + dates[xi] + (d.w ? ' (wk)' : '') + '</b>  O ' + fmt(d.o[xi]) + '  H ' + fmt(d.h[xi]) + '  L ' + fmt(d.l[xi]) + '  C ' + fmt(d.c[xi])
+        + (chg != null ? ' <span style="color:' + (chg >= 0 ? UP : DN) + '">' + (chg >= 0 ? '+' : '') + chg + '%</span>' : '') + '  V ' + vv;
+      tip.style.display = 'block';
+      var tw = tip.offsetWidth || 200;
+      tip.style.left = Math.min(ev.clientX + 14, window.innerWidth - tw - 8) + 'px';
+      tip.style.top = (ev.clientY + 16) + 'px';
+    });
+    svg.addEventListener('pointerleave', function () { if (tip) tip.style.display = 'none'; });
+  }
+
+  var els = document.querySelectorAll('.cchart[data-c]');
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) { if (en.isIntersecting) { render(en.target); io.unobserve(en.target); } });
+    }, { rootMargin: '500px' });
+    els.forEach(function (el) { io.observe(el); });
+  } else {
+    els.forEach(render);
+  }
+  window.addEventListener('beforeprint', function () { els.forEach(render); });
 })();
 </script>
 """
@@ -5043,34 +5340,21 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
         except Exception:  # noqa: BLE001
             pass
         try:
-            src = df[spark_field] if spark_field in df.columns else cl
-            vol = df["Volume"] if "Volume" in df.columns else None
-            # Keep the FULL source series so the MA overlay (when requested) is valid
-            # across the whole displayed window; slice the INDEX to the last spark_n
-            # for the volume bars / up-day shading.
-            if weekly_spark:
-                src_full = src.resample("W-FRI").last().dropna()
-                idx = src_full.index[-spark_n:]
-                cls_s = cl.resample("W-FRI").last().reindex(src_full.index).loc[idx]
-                vol_s = vol.resample("W-FRI").sum().reindex(src_full.index).loc[idx] if vol is not None else None
-            else:
-                src_full = src.dropna()
-                idx = src_full.index[-spark_n:]
-                cls_s = cl.loc[idx]
-                vol_s = vol.loc[idx] if vol is not None else None
-            if spark_ma_spec:
-                price_svg = make_sparkline(src_full.tolist(), width=132, height=34, pad=3,
-                                           window=spark_n, show_ma=True, ma_spec=spark_ma_spec,
-                                           price_sw=1.5, ma_sw=0.8, ma_labels=False)
-            else:
-                price_svg = make_sparkline(src_full.iloc[-spark_n:].tolist())
-            vol_svg = ""
-            if vol_s is not None and len(vol_s) >= 2:
-                ups = [True] + [float(cls_s.iloc[k]) >= float(cls_s.iloc[k - 1])
-                                for k in range(1, len(cls_s))]
-                vol_svg = make_volume_bars(vol_s.tolist(), ups,
-                                           width=132 if spark_ma_spec else 88)
-            r["_spark"] = price_svg + vol_svg
+            # Candlestick chart (weekly bars for Trilogy). Plan overlay = the
+            # engine's own pivot/stop; Trilogy has no explicit stop, so mirror
+            # its -8%-of-pivot convention used for _risk_pct above.
+            entry = r.get("pivot") if isinstance(r.get("pivot"), (int, float)) \
+                else (r.get("ideal_buy") if isinstance(r.get("ideal_buy"), (int, float)) else None)
+            stop = r.get("stop") if isinstance(r.get("stop"), (int, float)) else None
+            if stop is None and weekly_spark and entry is not None:
+                stop = round(float(entry) * 0.92, 2)
+            plan = {}
+            if entry is not None:
+                plan["entry"] = entry
+            if stop is not None:
+                plan["stop"] = stop
+            r["_spark"] = make_candle_chart(df, plan, max(spark_n, 60) if not weekly_spark else spark_n,
+                                            weekly=weekly_spark)
         except Exception:  # noqa: BLE001
             pass
     # 52wk-high persistence + ANTS + RS-line leadership (self-fetch 2y + SPY).
@@ -5210,7 +5494,7 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
     out = [
         f"<div class='ext-asof'>🏛️ Minervini engine · daily VCP/SEPA buy list · as of {esc(asof)} · "
         f"{len(rows)} names · trade plan from <code>minervini_engine</code> · "
-        f"M.E.T.A./ANTS/sparkline (daily close · 60d + 10·20·50 MA + volume)/leader badges computed by MADRRY</div>",
+        f"M.E.T.A./ANTS/candlestick chart (daily · 60 bars + 10·20·50 MA + volume)/leader badges computed by MADRRY</div>",
         "<div class='table-container'><table data-schema='minervini'>",
         "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP, or an equivalent 20-day calc on the external/HTF tabs)'>ADR</th>"
         "<th data-col='rs'>RS</th><th data-col='meta'>M.E.T.A.</th><th class='num' data-col='ants'>ANTS</th>"
@@ -5318,7 +5602,7 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
     out = [
         f"<div class='ext-asof'>📚 Trilogy nightly · O'Neil reference-class buy-stop list · as of {esc(asof)} · "
         f"{total} candidates{extra} · trade plan from <code>trilogy webapp</code> · "
-        f"M.E.T.A./ANTS/weekly sparkline (+10-week MA)/leader badges computed by MADRRY</div>",
+        f"M.E.T.A./ANTS/weekly candlestick chart (+10·20·50-week MA)/leader badges computed by MADRRY</div>",
         "<div class='table-container'><table data-schema='trilogy'>",
         "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th data-col='grade'>Grade</th>"
         "<th class='num' data-col='win20'>Win20</th><th data-col='meta'>M.E.T.A.</th><th class='num' data-col='ants'>ANTS</th>"
@@ -7207,6 +7491,7 @@ def run_scanners_and_generate_html() -> str:
         build_mindset_panel(),
         build_diag_panel(diag),
         PAGE_JS.replace("__LIVE_PRICE_PROXY__", LIVE_PRICE_PROXY),
+        CANDLE_JS,
         "</body></html>",
     ]
     html = "".join(parts)
