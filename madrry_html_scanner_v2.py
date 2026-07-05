@@ -4243,7 +4243,7 @@ PAGE_CSS = """
       .tabs { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch;
               position:sticky; top:0; background:var(--bg); z-index:9; }
       .tab-btn { flex:0 0 auto; }
-      .sortsel-bar { display:flex; }
+      div.sortsel-bar { display:flex; }
     }
     /* mobile sort bridge (hidden on desktop; the header row is the desktop UI) */
     .sortsel-bar { display:none; gap:6px; margin:6px 0 10px; }
@@ -7540,8 +7540,8 @@ def run_scanners_and_generate_html() -> str:
         # ---- 52-Week High — New Highs + Pullback as two sub-tabs ----
         "<div class='tab-panel' id='tab-hi52'>",
         "<div class='subtabs' role='tablist'>",
-        f"<button class='subtab-btn active' data-subtab='nh'>🆕 New 52wk Highs<span class='tab-count'>{nh_data.get('total', 0)}</span></button>",
-        f"<button class='subtab-btn' data-subtab='pull'>📉 52wk Pullback<span class='tab-count'>{len(nh52_pullbacks)}</span></button>",
+        f"<button class='subtab-btn active' data-subtab='nh'>New 52wk Highs<span class='tab-count'>{nh_data.get('total', 0)}</span></button>",
+        f"<button class='subtab-btn' data-subtab='pull'>52wk Pullback<span class='tab-count'>{len(nh52_pullbacks)}</span></button>",
         "</div>",
         f"<div class='subtab-panel active' id='subtab-nh'>{new_highs_html}</div>",
         f"<div class='subtab-panel' id='subtab-pull'>{nh52_monitor_html}</div>",
