@@ -261,6 +261,15 @@ def _prefetch_revisions(tickers, budget_s: float = 25.0) -> None:
         pass
 
 
+def _risk_cls(pct, lo: float = 4.0, hi: float = 6.0) -> str:
+    """Risk%% -> utility class (site-specific thresholds preserved via lo/hi)."""
+    try:
+        v = float(pct)
+    except (TypeError, ValueError):
+        return "risk-md"
+    return "risk-lo" if v <= lo else ("risk-md" if v <= hi else "risk-hi")
+
+
 # --- sortable derived columns: price-to-MA distance + forward-quarter revenue YoY ---
 def _ma_dist_data(closes) -> dict:
     """Price % extension above(+)/below(−) its trailing 10/20/50-day SMA, from a daily
@@ -316,11 +325,10 @@ def _ma_cells(d: Optional[dict]) -> str:
             cells.append(f"<td class='num ma-cell c-stat' data-label='Δ{p}MA' data-sort='9999'>—</td>")
         else:
             ab = abs(v)
-            arrow = "▲" if v >= 0 else "▼"
-            col = "var(--green)" if v >= 0 else "var(--red)"
+            arrow, acls = ("▲", "arr-up") if v >= 0 else ("▼", "arr-dn")
             cells.append(
                 f"<td class='num ma-cell c-stat' data-label='Δ{p}MA' data-sort='{ab:.4f}'>{ab:.1f}"
-                f"<span style='color:{col};font-size:var(--fs-micro);'>{arrow}</span></td>")
+                f"<span class='{acls}'>{arrow}</span></td>")
     return "".join(cells)
 
 
@@ -345,7 +353,7 @@ def _fwd_yoy_cell(ticker: str) -> str:
     pct = y * 100.0
     col = "var(--green)" if pct > 0.5 else ("var(--red)" if pct < -0.5 else "var(--text-3)")
     sign = "+" if pct >= 0 else ""
-    sub = (f"<br><span style='font-size:var(--fs-micro);color:var(--text-3);'>{esc(lbl)}</span>"
+    sub = (f"<br><span class='sub'>{esc(lbl)}</span>"
            if lbl else "")
     return (f"<td class='num fy-cell c-stat' data-label='Fwd YoY' data-sort='{pct:.2f}'>"
             f"<span style='color:{col};font-weight:600;'>{sign}{pct:.0f}%</span>{sub}</td>")
@@ -386,7 +394,7 @@ def _eps_accel_cell(ticker: str) -> str:
     path = "→".join(f"{q['yoy'] * 100:.0f}" for q in qs[-3:]) if qs else ""
     ttm = " <span style='color:var(--green);'>✦TTM</span>" if a.get("ttm_new_high") else ""
     if path:
-        sub = (f"<br><span style='font-size:var(--fs-micro);color:var(--text-3);'>"
+        sub = (f"<br><span class='sub'>"
                f"{esc(path)}%{ttm}</span>")
     elif ttm:
         sub = f"<br><span style='font-size:var(--fs-micro);'>{ttm}</span>"
@@ -1831,32 +1839,6 @@ def make_price_spark(closes: Iterable[float], window: int = 40) -> str:
                           show_ma=True, price_sw=2.4, ma_sw=0.8, label_fs=9)
 
 
-def make_volume_bars(volumes: Iterable[float], ups: Optional[List[bool]] = None,
-                     width: int = 88, height: int = 12, pad: int = 1) -> str:
-    """Inline SVG volume histogram sized to sit directly under a make_sparkline
-    price line (same width). Each bar is green on an up-close day, muted on a
-    down/flat day, scaled to the window's max volume."""
-    vals = [float(v) if (v is not None and not (isinstance(v, float) and math.isnan(v))) else 0.0
-            for v in volumes]
-    if len(vals) < 2:
-        return ""
-    hi = max(vals) or 1.0
-    n = len(vals)
-    inner_w = width - 2 * pad
-    inner_h = height - 2 * pad
-    bw = inner_w / n
-    bars = []
-    for i, v in enumerate(vals):
-        h = (v / hi) * inner_h
-        x = pad + i * bw
-        y = height - pad - h
-        col = C_UP if (ups and i < len(ups) and ups[i]) else C_MUTED
-        bars.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{max(bw - 0.4, 0.6):.1f}" '
-                    f'height="{max(h, 0.4):.1f}" fill="{col}" opacity="0.65"/>')
-    return (f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
-            f'style="display:block;margin-top:1px;">' + "".join(bars) + '</svg>')
-
-
 # ----------------------------------------------------------------------------
 # CANDLESTICK CHART (2026-07-05 layout upgrade)
 #
@@ -2327,13 +2309,13 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
 
         if triggered:
             if stopped_out:
-                status_text, status_style = "📉 Failed (Triggered & Stopped Out)", "color:#e06c6a;font-weight:bold;"
+                status_text, status_style = "✗ Failed (Triggered & Stopped Out)", "color:#e06c6a;font-weight:bold;"
             elif t_close >= y_entry:
-                status_text, status_style = f"🚀 Triggered & Holding (+{t_change:.1f}%)", "color:#54b87f;font-weight:bold;"
+                status_text, status_style = f"✓ Triggered & Holding (+{t_change:.1f}%)", "color:#54b87f;font-weight:bold;"
             else:
-                status_text, status_style = "🔄 Triggered & Pulling Back", "color:#d3a04d;font-weight:bold;"
+                status_text, status_style = "~ Triggered & Pulling Back", "color:#d3a04d;font-weight:bold;"
         else:
-            status_text, status_style = "📉 Stopped Out (No Trigger)", "color:#e06c6a;font-weight:bold;"
+            status_text, status_style = "✗ Stopped Out (No Trigger)", "color:#e06c6a;font-weight:bold;"
 
         change_col = "good" if t_change > 0 else "bad"
         tier_badge_style = {
@@ -2367,8 +2349,8 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
         win_bit = (f"<span style='color:#d3a04d;'>⚠️ outcomes withheld — bars end "
                    f"{esc(bar_date or '?')}, need a session newer than {esc(prev_date or 'the picks')}</span>")
     elif n_win or n_loss:
-        win_bit = (f"<span style='color:#54b87f;'>✅ {n_win} win</span> / "
-                   f"<span style='color:#e06c6a;'>❌ {n_loss} loss</span> "
+        win_bit = (f"<span style='color:#54b87f;'>✓ {n_win} win</span> / "
+                   f"<span style='color:#e06c6a;'>✗ {n_loss} loss</span> "
                    f"<span style='color:#82827c;'>this session</span>")
     else:
         win_bit = "<span style='color:#82827c;'>0 triggered this session</span>"
@@ -2376,7 +2358,7 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
     cum_bit = ""
     if cum:
         ccol = "#54b87f" if cum["rate"] > 55 else ("#d3a04d" if cum["rate"] >= 40 else "#e06c6a")
-        cum_bit = (f" &nbsp;|&nbsp; <span style='color:{ccol};font-weight:bold;'>📊 Accumulated win-rate "
+        cum_bit = (f" &nbsp;|&nbsp; <span style='color:{ccol};font-weight:bold;'>Accumulated win-rate "
                    f"{cum['rate']}%</span> <span style='color:#82827c;'>({cum['wins']}W/{cum['losses']}L "
                    f"over {cum['n']} · since {esc(cum['since'])})</span>")
         if cum.get("htf_n"):
@@ -2387,7 +2369,7 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
     coiled_bit = ""
     if coiled_total:
         cb = " · ".join(f"{t} {coiled[t]}" for t in ("A+", "A", "A-") if coiled.get(t))
-        coiled_bit = f" &nbsp;|&nbsp; <span style='color:#82827c;'>🌀 {coiled_total} still coiling ({cb})</span>"
+        coiled_bit = f" &nbsp;|&nbsp; <span style='color:#82827c;'>{coiled_total} still coiling ({cb})</span>"
     # Regime footnote (continuity marker, §3a) — self-activating: shows ONLY once the log carries
     # atr_5day outcomes, so it's invisible on pre-switch reports and marks the boundary once live.
     regime_bit = ""
@@ -2396,7 +2378,7 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
             with open(BREAKOUT_LOG_PATH) as _fh:
                 _bl = json.load(_fh)
             if any(r.get("stop_version") == "atr_5day" for _d in _bl for r in _bl[_d]):
-                regime_bit = (" &nbsp;|&nbsp; <span style='color:#82827c;font-size:var(--fs-micro);'>"
+                regime_bit = (" &nbsp;|&nbsp; <span class='sub'>"
                               "⚙️ coil stop regime: 1.5×ADR + 5-day validity, effective session "
                               "2026-07-06 (first printed on the 2026-07-07 report); earlier picks "
                               "used the tight stop</span>")
@@ -2407,7 +2389,7 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
 
     return f"""
     <div style="background-color:#18181b;border-radius:8px;padding:12px 15px;margin-bottom:25px;box-shadow:0 0 15px rgba(0,0,0,0.5);border-left:4px solid #aecfe8;">
-        <span style="color:#aecfe8;font-weight:bold;font-size:var(--fs-body);text-transform:uppercase;">🔄 Yesterday's Watchlist:</span>
+        <span style="color:#aecfe8;font-weight:bold;font-size:var(--fs-body);text-transform:uppercase;">Yesterday's Watchlist:</span>
         <span style="font-size:var(--fs-table);">&nbsp;{summary}</span>
     </div>
     """
@@ -3672,11 +3654,11 @@ def scan_nh52_pullbacks(history: dict, rs_map: dict, diag: Diagnostics,
         vs_prev = round((close - prev) / prev * 100, 1) if prev > 0 else None
         e = history[t]
         if pullback and low_vol:
-            status, tag = "🟢 Low-vol pullback", "GRN"
+            status, tag = "● Low-vol pullback", "GRN"
         elif pullback and not low_vol:
-            status, tag = "🔴 High-vol breakdown", "RED"
+            status, tag = "● High-vol breakdown", "RED"
         else:
-            status, tag = "⚪ Holding / extending", "HOLD"
+            status, tag = "● Holding / extending", "HOLD"
         rs = rs_map.get(t.upper())
         monitored.append({
             "ticker": t, "close": round(close, 2), "sma50": round(sma50, 2),
@@ -3982,7 +3964,6 @@ PAGE_CSS = """
     .chip { background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:5px 12px; font-size:var(--fs-caption); color:var(--text); }
     .chip b { color:var(--accent); font-family:var(--mono); }
     .chip.green b { color:var(--green); } .chip.red b { color:var(--red); } .chip.warn b { color:var(--yellow); }
-    .chip.telemetry { opacity:0.65; }
 
     #search { display:block; width:100%; max-width:420px; margin:0 auto 24px; padding:10px 14px; border-radius:999px;
               border:1px solid var(--line); background:var(--surface); color:var(--text); font-size:16px; box-sizing:border-box;
@@ -3995,10 +3976,7 @@ PAGE_CSS = """
     .market-card { background-color:var(--raised); padding:10px; border-radius:8px; }
     .market-card h3 { margin:0 0 5px 0; color:var(--text); font-size:var(--fs-body); }
     .val-green { color:var(--green); font-weight:600; } .val-red { color:var(--red); font-weight:600; } .val-warn { color:var(--yellow); font-weight:600; }
-    .market-summary { margin-top:15px; padding:10px; background-color:var(--tint-accent); border-radius:8px; font-size:var(--fs-body); }
 
-    .kill-ok { background:var(--tint-green); border:1px solid var(--bd-green); color:var(--green); border-radius:8px; padding:8px 14px; font-size:var(--fs-table); font-weight:600; }
-    .kill-bad { background:var(--tint-red); border:1px solid var(--bd-red); color:var(--red); border-radius:8px; padding:8px 14px; font-size:var(--fs-table); font-weight:600; }
     .kill-warn { background:var(--tint-yellow); border:1px solid var(--bd-yellow); color:var(--yellow); border-radius:8px; padding:8px 14px; font-size:var(--fs-table); }
 
     .regime { border:1px solid; border-radius:8px; padding:10px 14px; margin:0 0 24px; }
@@ -4039,7 +4017,12 @@ PAGE_CSS = """
     .diag-panel .t { color:var(--red); font-weight:600; margin-bottom:6px; }
     .diag-panel ul { margin:4px 0 0 18px; padding:0; font-size:var(--fs-table); color:var(--red); }
 
-    .section-title { position:relative; padding:10px 15px; margin-top:32px; margin-bottom:0; border-radius:8px 8px 0 0; font-size:var(--fs-title); font-weight:600; text-transform:uppercase; letter-spacing:0.05em; background-color:var(--surface); }
+    .section-title { position:relative; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;
+                     padding:10px 15px; margin-top:32px; margin-bottom:0; border-radius:8px 8px 0 0;
+                     font-size:var(--fs-caption); font-weight:600; text-transform:uppercase; letter-spacing:0.08em;
+                     color:var(--text); background-color:var(--surface); border:1px solid var(--line); border-bottom:none; }
+    .section-title .tdot { width:8px; height:8px; border-radius:50%; align-self:center; flex:none; background:var(--text-3); }
+    .section-sub { font-weight:400; text-transform:none; letter-spacing:0; color:var(--text-3); font-size:var(--fs-micro); }
     .section-title.collapsible { cursor:pointer; user-select:none; }
     .section-title.collapsible::after { content:'▾'; position:absolute; right:15px; top:10px; opacity:0.65; font-weight:400; }
     .section-title.collapsed { border-radius:8px; }
@@ -4056,11 +4039,9 @@ PAGE_CSS = """
     .funnel .fn-crit { font-size:var(--fs-micro); color:var(--text-3); line-height:1.45; margin-top:3px; }
     .funnel .fn-count { font-family:var(--mono); font-weight:700; font-size:var(--fs-table); color:var(--accent); white-space:nowrap; text-align:right; }
     .funnel .fn-dot { color:var(--text-3); }
-    .bg-aplus { color:var(--green); border-bottom:3px solid var(--green); }
-    .bg-a { color:var(--yellow); border-bottom:3px solid var(--yellow); }
-    .bg-aminus { color:var(--red); border-bottom:3px solid var(--red); }
-    .bg-hve { color:var(--red); border-bottom:3px solid var(--bd-red); }
-    .bg-short { color:var(--red); border-bottom:3px solid var(--bd-red); }
+    .bg-aplus .tdot { background:var(--up); }
+    .bg-a .tdot { background:var(--warn); }
+    .bg-aminus .tdot, .bg-hve .tdot, .bg-short .tdot { background:var(--down); }
 
     details.mindset { background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--bd-accent); border-radius:8px; padding:10px 16px; margin:0 0 24px; }
     details.mindset summary { cursor:pointer; color:var(--accent-2); font-weight:600; font-size:var(--fs-body); list-style:none; }
@@ -4099,6 +4080,17 @@ PAGE_CSS = """
     .ep-ticker a { font-weight:600; font-size:1.2em; color:var(--red); text-decoration:none; }
     .good { color:var(--green); font-weight:600; } .warn { color:var(--yellow); font-weight:600; } .bad { color:var(--red); font-weight:600; }
     .good, .warn, .bad, .val-green, .val-red, .val-warn { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+    /* utility classes replacing repeated inline styles (2026-07-05 cleanup) */
+    .sub { font-size:var(--fs-micro); color:var(--text-3); }
+    .arr-up { color:var(--up); font-size:var(--fs-micro); }
+    .arr-dn { color:var(--down); font-size:var(--fs-micro); }
+    .risk-lo { color:var(--up); } .risk-md { color:var(--warn); } .risk-hi { color:var(--down); }
+    .risk-lo, .risk-md, .risk-hi { font-size:var(--fs-caption); font-family:var(--mono); }
+    .meta-pill { font-size:var(--fs-body); font-weight:600; font-family:var(--mono);
+                 padding:4px 8px; border-radius:var(--r-chip); border:1px solid; display:inline-block; }
+    .meta-hi { color:var(--down); background:var(--tint-down); border-color:var(--down); }
+    .meta-md { color:var(--warn); background:var(--tint-warn); border-color:var(--warn); }
+    .meta-lo { color:var(--text-3); background:var(--raised); border-color:var(--text-3); }
     .tag { display:inline-block; padding:3px 6px; border-radius:4px; background:var(--raised); border:1px solid var(--line); font-size:var(--fs-micro); margin:2px 0; color:var(--text-3); }
     .theme-tag { display:inline-block; padding:3px 7px; border-radius:4px; background:var(--tint-accent); border:1px solid var(--bd-accent); font-size:var(--fs-caption); font-weight:500; margin:4px 0; color:var(--accent-2); }
     .score { font-size:var(--fs-body); font-weight:600; color:var(--yellow); background:var(--tint-yellow); padding:4px 8px; border-radius:4px; border:1px solid var(--yellow); font-family:var(--mono); }
@@ -4124,8 +4116,8 @@ PAGE_CSS = """
     /* Tap-to-expand fundamentals on the narrative cell (theme/sector/industry). */
     details.fund > summary { cursor:pointer; list-style:none; display:block; }
     details.fund > summary::-webkit-details-marker { display:none; }
-    details.fund > summary::after { content:'📊'; opacity:.45; font-size:var(--fs-micro); margin-left:4px; }
-    details.fund[open] > summary::after { content:'📊 ▴'; opacity:.7; }
+    details.fund > summary::after { content:' fin ▸'; opacity:.45; font-size:var(--fs-micro); margin-left:4px; }
+    details.fund[open] > summary::after { content:' fin ▴'; opacity:.7; }
     .fund-wrap { margin-top:6px; text-align:left; }
     /* Override the report's global table rules (width:100%, min-width:650px, td
        padding:10px / font 13px) that would otherwise stretch this nested table
@@ -4228,12 +4220,14 @@ PAGE_CSS = """
         background:var(--surface); border:1px solid var(--line); border-radius:10px;
         padding:10px 10px 12px; margin:0 0 12px;
         content-visibility:auto; contain-intrinsic-size:auto 560px; }
-      table.rowcards td { display:block; border-bottom:none; padding:0; font-size:var(--fs-table); }
+      table.rowcards td { display:block; border-bottom:none; padding:0; font-size:var(--fs-table);
+        grid-column:1/-1; }
       table.rowcards td.col-hidden { display:block !important; }   /* cards always show everything */
       table.rowcards th:first-child, table.rowcards td:first-child
         { position:static; background:transparent; }               /* no sticky col in cards */
-      table.rowcards td.ticker { grid-column:1/-1; order:0; display:flex; align-items:baseline;
-                                 gap:10px; flex-wrap:wrap; }
+      table.rowcards td.ticker, table.rowcards td.ep-ticker { grid-column:1/-1; order:0;
+        display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+      #search { top:54px; z-index:8; }
       table.rowcards td.c-chart { grid-column:1/-1; order:1; width:auto; min-width:0; }
       table.rowcards td.c-chart .cchart { max-width:none; }
       table.rowcards td.c-plan { grid-column:1/-1; order:2; }
@@ -4249,7 +4243,14 @@ PAGE_CSS = """
       .tabs { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch;
               position:sticky; top:0; background:var(--bg); z-index:9; }
       .tab-btn { flex:0 0 auto; }
+      .sortsel-bar { display:flex; }
     }
+    /* mobile sort bridge (hidden on desktop; the header row is the desktop UI) */
+    .sortsel-bar { display:none; gap:6px; margin:6px 0 10px; }
+    .sortsel { flex:1; background:var(--surface); color:var(--text); border:1px solid var(--line);
+               border-radius:var(--r-card); padding:9px 10px; font-size:15px; }
+    .sortdir { background:var(--raised); color:var(--text-2); border:1px solid var(--line);
+               border-radius:var(--r-card); padding:9px 13px; font-size:15px; cursor:pointer; }
 """
 
 PAGE_JS = """
@@ -4681,6 +4682,33 @@ async function refreshPrices(btn) {
       t.parentNode.insertBefore(bar, t);                   // colbar = first child of .table-container
     });
     refresh();
+  });
+})();
+
+(function () {
+  // --- mobile sort bridge: a <select> that clicks the hidden header ---
+  // The card layout hides <thead>, so column taps are gone on phones. The
+  // select reuses the whole existing sort engine by programmatically
+  // clicking the matching th; the direction button re-clicks it to flip.
+  document.querySelectorAll('table.rowcards').forEach(function (t) {
+    var ths = Array.prototype.slice.call(t.querySelectorAll('thead th'));
+    if (!ths.length) return;
+    var bar = document.createElement('div'); bar.className = 'sortsel-bar';
+    var sel = document.createElement('select'); sel.className = 'sortsel';
+    var o0 = document.createElement('option'); o0.value = ''; o0.textContent = 'Sort by\u2026';
+    sel.appendChild(o0);
+    ths.forEach(function (th, i) {
+      var o = document.createElement('option'); o.value = String(i);
+      o.textContent = th.textContent.replace(/[\u25b2\u25bc\u2039\u203a\u21c5]/g, '').trim();
+      sel.appendChild(o);
+    });
+    var dir = document.createElement('button'); dir.type = 'button';
+    dir.className = 'sortdir'; dir.textContent = '\u21c5';
+    function cur() { return sel.value === '' ? null : ths[+sel.value]; }
+    sel.addEventListener('change', function () { var th = cur(); if (th) th.click(); });
+    dir.addEventListener('click', function () { var th = cur(); if (th) th.click(); });
+    bar.appendChild(sel); bar.appendChild(dir);
+    t.parentNode.insertBefore(bar, t.parentNode.firstChild);
   });
 })();
 </script>
@@ -5172,7 +5200,7 @@ def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
     s2 = _n(fn.get("stage2_candidates"))
     return (
         "<div class='funnel'>"
-        "<div class='fn-cap'>📊 HOW THIS LIST WAS BUILT — from ~10,000+ US-listed stocks</div>"
+        "<div class='fn-cap'>HOW THIS LIST WAS BUILT — from ~10,000+ US-listed stocks</div>"
         "<div class='fn-stage'><div class='fn-body'>"
         "<div class='fn-title'>Stage 1 · Universe filter <span class='fn-sub'>· TradingView, server-side</span></div>"
         "<div class='fn-crit'>type = stock / DR · close ≥ $10 · day vol ≥ 500k · avg 30d &amp; 60d vol ≥ 500k · close ≥ SMA200 · market cap ≥ $2B</div>"
@@ -5208,7 +5236,7 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
     sub_html = (f"<span class='section-sub'>{esc(subtitle)}</span>"
                 if subtitle else "")
     out = [
-        f'<div class="section-title {bg_class}">{esc(title)}{sub_html}</div>',
+        f'<div class="section-title {bg_class}"><span class="tdot"></span>{esc(title)}{sub_html}</div>',
         '<div class="table-container rowcards-container"><table data-schema="coil2" class="rowcards">',
         "<thead><tr><th data-col='tk'>Ticker</th><th data-col='price'>Chart</th><th data-col='plan'>Trade Plan</th>"
         "<th data-col='narr'>Narrative</th>"
@@ -5218,18 +5246,9 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
         "<th data-col='status'>Status (Vol &amp; MA)</th></tr></thead>",
     ]
     for m in matches:
-        risk_color = "#54b87f" if m["risk_pct"] <= 4.0 else ("#d3a04d" if m["risk_pct"] <= 6.0 else "#e06c6a")
         vol_color = "good" if m["vol_pct"] <= 55 else ("warn" if m["vol_pct"] <= 75 else "bad")
         dist_color = "good" if m["dist_pct"] <= 4.0 else ("warn" if m["dist_pct"] <= 8.0 else "bad")
         dist52_color = "good" if m["dist_52w"] <= 25 else "bad"
-
-        meta_score = m.get("meta_score", 0)
-        if meta_score >= 70:
-            ms_color, ms_bg = "#e06c6a", "var(--tint-red)"
-        elif meta_score >= 50:
-            ms_color, ms_bg = "#d3a04d", "var(--tint-yellow)"
-        else:
-            ms_color, ms_bg = "#82827c", "#1f1f23"
 
         # Binary flags collapse into ONE muted token line (taste pass: badge
         # stacks were the main row-height/noise driver). 🚩 HTF labels stay
@@ -5257,77 +5276,20 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
                    f"style='color:var(--text-3);font-size:var(--fs-micro);vertical-align:super;'>*</span>"
                    if rs_asof else "")
         spark = m.get("spark", "")
-
-        # ANTS (David Ryan accumulation): today's chip + a 3-month prior-accumulation
-        # note. Sortable by today-level, then 3M peak, then chain ("—" parks last).
-        a_lvl = m.get("ants_level", 0)
-        a_chain = m.get("ants_chain", 0)
-        a_3m_peak = m.get("ants_3m_peak", 0)
-        a_3m_days = m.get("ants_3m_days", 0)
-        if m.get("ants_ok") and a_lvl > 0:
-            _ants_col = {1: "#aecfe8", 2: "#d3a04d", 3: "#d3a04d",
-                         4: "#54b87f", 5: "#2f6b4b"}.get(a_lvl, "#82827c")
-            _ants_wt = "700" if a_lvl >= 4 else "500"
-            _ants_suffix = (" ·%db" % a_chain) if a_chain else ""
-            _ants_title = "ANTS L%d %s" % (a_lvl, m.get("ants_label", ""))
-            if a_chain:
-                _ants_title += " · %d consecutive bars" % a_chain
-            _ants_today = ("<span style='color:%s;font-weight:%s;font-family:var(--mono);"
-                           "font-size:var(--fs-caption);' title='%s'>%s%s</span>"
-                           % (_ants_col, _ants_wt, esc(_ants_title),
-                              esc(m.get("ants_label", "")), _ants_suffix))
-        else:
-            _ants_today = "<span style='color:var(--text-3);'>—</span>"
-        _ants_3m_html = ""
-        if m.get("ants_ok") and a_3m_peak >= 1:
-            _p3lbl = _ANTS_LABELS.get(a_3m_peak, "")
-            _p3col = "#54b87f" if a_3m_peak >= 4 else ("#d3a04d" if a_3m_peak >= 2 else "#82827c")
-            _ants_3m_html = ("<div style='font-size:var(--fs-micro);color:%s;' "
-                             "title='Peak ANTS level in the last ~3 months over %d active days'>"
-                             "3M %s·%dd</div>" % (_p3col, a_3m_days, esc(_p3lbl), a_3m_days))
-        ants_html = _ants_today + _ants_3m_html
-        if m.get("ants_ok") and (a_lvl > 0 or a_3m_peak > 0):
-            ants_sort = a_lvl * 100000 + a_3m_peak * 1000 + min(a_chain, 999)
-        else:
-            ants_sort = -1
-
-        # RS-Line STANDOUT badge: flag only the genuine leaders — the RS line
-        # (close/SPY) at a new high (Minervini's "RS new high" tell), and the
-        # stronger "before price" stealth variant. Non-leaders show nothing, so a
-        # blue badge = this name stands out on relative strength. (No per-row line
-        # trend / sparkline — that just duplicated the price spark + RS rating.)
-        rs_badge = ""
-        if m.get("rs_ok"):
-            if m.get("rs_nh_before_price"):
-                rs_badge = ("<div class='fp-badge' style='border-color:#aecfe8;color:#aecfe8;font-weight:bold;' "
-                            "title='RS line near its 1-year high while price has NOT broken out — stealth relative-strength leader'>"
-                            "🔵 RS Leader ‹ Px</div>")
-            elif m.get("rs_new_high"):
-                rs_badge = ("<div class='fp-badge' style='border-color:#aecfe8;color:#aecfe8;' "
-                            "title='RS line (close/SPY) at or near its 1-year high — relative-strength leader vs the market'>🔵 RS Leader</div>")
-
-        # 52-week-high leadership badges: at a fresh high today + persistence
-        # (recurring new highs over the last 13 weeks).
-        nh_html = ""
-        if m.get("at_high"):
-            nh_html += "<div class='fp-badge' style='border-color:#54b87f;color:#54b87f;'>🆕 At 52W High</div>"
-        if m.get("persist_tier"):
-            _star = "⭐⭐" if m["persist_tier"] == "R" else "⭐"
-            _pc = "#d3a04d" if m["persist_tier"] == "R" else "#d3a04d"
-            nh_html += (f"<div class='fp-badge' style='border-color:{_pc};color:{_pc};font-weight:bold;'>"
-                        f"{_star} {esc(m.get('persist_label',''))} · {m.get('nh_3m',0)}NH/3M ({m.get('weeks_3m',0)}w)</div>")
+        # ANTS / M.E.T.A. cells + leadership badges come from the shared
+        # helpers (also used by Minervini/Trilogy) — one implementation.
+        leader_html = _ext_leader_badges(m)
 
         # Martin pullback plan (additive second trade plan)
         pb_html = ""
         pb_risk = m.get("pb_risk")
         if pb_risk is not None:
-            pbc = "#54b87f" if pb_risk <= 4.0 else ("#d3a04d" if pb_risk <= 6.0 else "#e06c6a")
             pb_html = (
                 "<div class='entry-box' style='border-color:var(--bd-accent);background:var(--tint-accent);margin-top:6px;'>"
                 "<span style='color:var(--text-3);font-weight:500;font-size:var(--fs-micro);'>PULLBACK</span><br>"
                 f"<span class='entry-text' style='color:var(--accent-2);'>Buy ≈ ${m.get('pb_entry', m['entry'])}</span> <span class='stop-reason'>(to {esc(m['hugging'])})</span><br>"
                 f"<span class='stop-text'>Stop: ${m['pb_stop']} <span class='stop-reason'>(~3% under 9EMA)</span></span><br>"
-                f"<span style='color:{pbc};font-size:var(--fs-caption);font-family:var(--mono);'>Risk: {pb_risk}%</span></div>"
+                f"<span class='{_risk_cls(pb_risk)}'>Risk: {pb_risk}%</span></div>"
             )
 
         geo_line = _geo_line(m)
@@ -5339,7 +5301,7 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
                     <span class="kicker">BREAKOUT</span>
                     <span class="entry-text">Buy: ${m['entry']}</span><br>
                     <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">({esc(m['stop_reason'])})</span></span><br>
-                    <span style="color:{risk_color};font-size:var(--fs-caption);font-family:var(--mono);">Risk: {m['risk_pct']}%</span>{geo_line}
+                    <span class="{_risk_cls(m['risk_pct'])}">Risk: {m['risk_pct']}%</span>{geo_line}
                 </div>
                 {pb_html}
                 {_edge_details(m, [_lessons_line(m), _support_line(m), _sr_line(m),
@@ -5347,15 +5309,12 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
             </td>
             {_narr_cell(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}
             <td class="num c-stat" data-label="ADR" data-sort="{m['adr']}">{m['adr']}%</td>
-            <td class="c-stat" data-label="RS" data-sort="{rs_val if isinstance(rs_val, int) else 0}"><span class="score">{esc(rs_val)}</span>{rs_mark}<br><span style="font-size:var(--fs-micro);color:var(--text-3);">1M: +{m['perf_1m']}%</span></td>
-            <td class="c-stat" data-label="META" data-sort="{meta_score}">
-                <span style="font-size:var(--fs-body);font-weight:600;font-family:var(--mono);color:{ms_color};background:{ms_bg};padding:4px 8px;border-radius:4px;border:1px solid {ms_color};">{meta_score}</span>
-                {_meta_details_block(m.get('meta_details', []))}
-            </td>
-            <td class="num c-stat" data-label="ANTS" data-sort="{ants_sort}">{ants_html}</td>
+            <td class="c-stat" data-label="RS" data-sort="{rs_val if isinstance(rs_val, int) else 0}"><span class="score">{esc(rs_val)}</span>{rs_mark}<br><span class="sub">1M: +{m['perf_1m']}%</span></td>
+            {_ext_meta_cell(m)}
+            {_ext_ants_cell(m)}
             {_ma_cells(m.get('_ma_dist'))}{_fwd_yoy_cell(m['ticker'])}{_eps_accel_cell(m['ticker'])}
             <td class="c-status" style="text-align:left;" data-sort="{m['vol_pct']}">
-                {nh_html}{rs_badge}{status_html}{fp_html}{trendline_html}
+                {leader_html}{status_html}{fp_html}{trendline_html}
                 <span class="{vol_color}">Vol: {m['vol_pct']}%</span><br>
                 <span class="{dist_color}">Dist to {esc(m['hugging'])}: {m['dist_pct']}%</span><br>
                 <span class="{dist52_color}">Off 52W: -{m['dist_52w']}%</span>
@@ -5474,18 +5433,15 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
 
 
 def _ext_meta_cell(m: dict) -> str:
-    """M.E.T.A. column cell (score badge + expandable details), coil-identical."""
-    score = m.get("_meta_score", 0)
-    if score >= 70:
-        col, bg = "#e06c6a", "var(--tint-red)"
-    elif score >= 50:
-        col, bg = "#d3a04d", "var(--tint-yellow)"
-    else:
-        col, bg = "#82827c", "#1f1f23"
-    return (f'<td data-sort="{score}">'
-            f'<span style="font-size:var(--fs-body);font-weight:600;font-family:var(--mono);'
-            f'color:{col};background:{bg};padding:4px 8px;border-radius:4px;border:1px solid {col};">{score}</span>'
-            f'{_meta_details_block(m.get("_meta_details", []))}</td>')
+    """M.E.T.A. column cell (score badge + expandable details) — shared by the
+    coil tiers (meta_score/meta_details keys) and the external engines
+    (_meta_score/_meta_details keys)."""
+    score = m.get("_meta_score", m.get("meta_score", 0))
+    cls = "meta-hi" if score >= 70 else ("meta-md" if score >= 50 else "meta-lo")
+    details = m.get("_meta_details", m.get("meta_details", []))
+    return (f'<td class="c-stat" data-label="META" data-sort="{score}">'
+            f'<span class="meta-pill {cls}">{score}</span>'
+            f'{_meta_details_block(details)}</td>')
 
 
 def _ext_ants_cell(m: dict) -> str:
@@ -5515,25 +5471,25 @@ def _ext_ants_cell(m: dict) -> str:
         srt = a_lvl * 100000 + a_3m_peak * 1000 + min(a_chain, 999)
     else:
         srt = -1
-    return f'<td class="num" data-sort="{srt}">{today}{p3}</td>'
+    return f'<td class="num c-stat" data-label="ANTS" data-sort="{srt}">{today}{p3}</td>'
 
 
 def _ext_leader_badges(m: dict) -> str:
-    """🔵 RS Leader + ⭐ Persistent/Relentless Leader + 🆕 At 52W High, coil-identical."""
+    """RS▲ Leader + ★ Persistent/Relentless Leader + 🆕 At 52W High, coil-identical."""
     rs_badge = ""
     if m.get("rs_ok"):
         if m.get("rs_nh_before_price"):
             rs_badge = ("<div class='fp-badge' style='border-color:#aecfe8;color:#aecfe8;font-weight:bold;' "
                         "title='RS line near its 1-year high while price has NOT broken out — stealth relative-strength leader'>"
-                        "🔵 RS Leader ‹ Px</div>")
+                        "RS▲ ‹ Px</div>")
         elif m.get("rs_new_high"):
             rs_badge = ("<div class='fp-badge' style='border-color:#aecfe8;color:#aecfe8;' "
-                        "title='RS line (close/SPY) at or near its 1-year high — relative-strength leader vs the market'>🔵 RS Leader</div>")
+                        "title='RS line (close/SPY) at or near its 1-year high — relative-strength leader vs the market'>RS▲ Leader</div>")
     nh_html = ""
     if m.get("at_high"):
-        nh_html += "<div class='fp-badge' style='border-color:#54b87f;color:#54b87f;'>🆕 At 52W High</div>"
+        nh_html += "<div class='fp-badge' style='border-color:#54b87f;color:#54b87f;'>52W HIGH</div>"
     if m.get("persist_tier"):
-        _star = "⭐⭐" if m["persist_tier"] == "R" else "⭐"
+        _star = "★★" if m["persist_tier"] == "R" else "★"
         nh_html += (f"<div class='fp-badge' style='border-color:#d3a04d;color:#d3a04d;font-weight:bold;'>"
                     f"{_star} {esc(m.get('persist_label',''))} · {m.get('nh_3m',0)}NH/3M ({m.get('weeks_3m',0)}w)</div>")
     return nh_html + rs_badge
@@ -5597,20 +5553,21 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
     _prefetch_fundamentals([m.get("ticker") for m in rows], budget_s=30.0)
 
     out = [
-        f"<div class='ext-asof'>🏛️ Minervini engine · daily VCP/SEPA buy list · as of {esc(asof)} · "
+        f"<div class='ext-asof'>Minervini engine · daily VCP/SEPA buy list · as of {esc(asof)} · "
         f"{len(rows)} names · trade plan from <code>minervini_engine</code> · "
         f"M.E.T.A./ANTS/candlestick chart (daily · 60 bars + 10·20·50 MA + volume)/leader badges computed by MADRRY</div>",
-        "<div class='table-container'><table data-schema='minervini'>",
-        "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP, or an equivalent 20-day calc on the external/HTF tabs)'>ADR</th>"
+        "<div class='table-container rowcards-container'><table data-schema='minervini2' class='rowcards'>",
+        "<thead><tr><th data-col='tk'>Ticker</th><th data-col='price'>Chart</th><th data-col='plan'>Trade Plan</th>"
+        "<th data-col='narr'>Narrative</th>"
+        "<th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP, or an equivalent 20-day calc on the external/HTF tabs)'>ADR</th>"
         "<th data-col='rs'>RS</th><th data-col='meta'>M.E.T.A.</th><th class='num' data-col='ants'>ANTS</th>"
         + _MA_YOY_HEADERS +
-        "<th data-col='status'>Status (VCP &amp; Vol)</th></tr>",
+        "<th data-col='status'>Status (VCP &amp; Vol)</th></tr></thead>",
     ]
     for m in rows:
         tk = m.get("ticker", "")
         pivot, stop, close = m.get("pivot"), m.get("stop"), m.get("last_close")
         risk = round((m.get("stop_frac") or 0.0) * 100, 1)
-        risk_color = "#54b87f" if risk <= 4.0 else ("#d3a04d" if risk <= 8.0 else "#e06c6a")
         status = (m.get("status") or "").replace("_", " ")
         triggered = "TRIGGER" in status
         st_color = "#54b87f" if triggered else "#d3a04d"
@@ -5626,9 +5583,9 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
         ptp = m.get("pct_to_pivot")
         offhi = m.get("pct_from_high")
         slope = m.get("vol50_slope")
-        rev_line = (f"<br><span style='font-size:var(--fs-micro);color:var(--text-3);'>Rev YoY {rev:+.0f}%</span>"
+        rev_line = (f"<br><span class='sub'>Rev YoY {rev:+.0f}%</span>"
                     if isinstance(rev, (int, float)) else "")
-        perf6_line = (f"<br><span style='font-size:var(--fs-micro);color:var(--text-3);'>6M: {perf6:+.0f}%</span>"
+        perf6_line = (f"<br><span class='sub'>6M: {perf6:+.0f}%</span>"
                       if isinstance(perf6, (int, float)) else "")
         if ptp is None:
             ptp_line = ""
@@ -5638,31 +5595,29 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
             ptp_line = f"<span class='warn'>{ptp:.1f}% to pivot</span>"
         offhi_line = (f"<br><span class='{'good' if (offhi or 0) >= -8 else 'bad'}'>Off high: {offhi:.1f}%</span>"
                       if isinstance(offhi, (int, float)) else "")
-        slope_line = (f"<br><span style='color:var(--text-3);font-size:var(--fs-micro);'>Vol50 slope: {slope:+.1f}%</span>"
+        slope_line = (f"<br><span class='sub'>Vol50 slope: {slope:+.1f}%</span>"
                       if isinstance(slope, (int, float)) else "")
-        price_cell = _lp(tk, close, entry=pivot, stop=stop) if close is not None else "—"
-        spark_html = f"<div class='spark'>{m.get('_spark','')}</div>" if m.get("_spark") else ""
         leader_html = _ext_leader_badges(m)
         fp_html = _ext_fp_badges(m)
         out.append(f"""<tr data-sector="{esc(sector)}">
-            {_ext_ticker_cell(tk)}
-            <td data-sort="{risk}">
+            {_tk_cell({"ticker": tk, "close": close}, entry=pivot, stop=stop)}
+            {_chart_cell(m.get('_spark', ''), close if close is not None else 0)}
+            <td class="c-plan" data-sort="{risk}">
                 <div class="entry-box">
-                    <span style="color:var(--text-3);font-weight:500;font-size:var(--fs-micro);">VCP PIVOT</span><br>
+                    <span class="kicker">VCP PIVOT</span>
                     <span class="entry-text">Buy: ${pivot}</span><br>
                     <span class="stop-text">Stop: ${stop}</span><br>
-                    <span style="color:{risk_color};font-size:var(--fs-caption);font-family:var(--mono);">Risk: {risk}%</span>
+                    <span class="{_risk_cls(risk, 4.0, 8.0)}">Risk: {risk}%</span>
                 </div>
             </td>
-            <td data-sort="{close if close is not None else 0}">{price_cell}{spark_html}<br>
-                {_narrative(tk, f'''<span class="tag">{esc(foot)}</span>{rev_line}<br>
-                <span class="tag">{esc(sector)}</span>''')}</td>
-            <td class="num" data-sort="{adr}">{adr}%</td>
-            <td data-sort="{rs if isinstance(rs, int) else 0}"><span class="score">{esc(rs)}</span>{perf6_line}</td>
+            {_narr_cell(tk, f'''<span class="tag">{esc(foot)}</span>{rev_line}<br>
+                <span class="tag">{esc(sector)}</span>''')}
+            <td class="num c-stat" data-label="ADR" data-sort="{adr}">{adr}%</td>
+            <td class="c-stat" data-label="RS" data-sort="{rs if isinstance(rs, int) else 0}"><span class="score">{esc(rs)}</span>{perf6_line}</td>
             {_ext_meta_cell(m)}
             {_ext_ants_cell(m)}
             {_ma_cells(m.get('_ma_dist'))}{_fwd_yoy_cell(tk)}{_eps_accel_cell(tk)}
-            <td style="text-align:left;" data-sort="{ptp if ptp is not None else 999}">
+            <td class="c-status" style="text-align:left;" data-sort="{ptp if ptp is not None else 999}">
                 {leader_html}{fp_html}
                 <span class="fp-badge" style="border-color:{st_color};color:{st_color};background:{st_bg};">{esc(status)}</span>
                 <span class="fp-badge" style="border-color:{vc_color};color:{vc_color};" title="Minervini VCP score">VCP {vcp}</span><br>
@@ -5705,14 +5660,15 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
     _prefetch_fundamentals([c.get("ticker") for c in shown], budget_s=30.0)
 
     out = [
-        f"<div class='ext-asof'>📚 Trilogy nightly · O'Neil reference-class buy-stop list · as of {esc(asof)} · "
+        f"<div class='ext-asof'>Trilogy nightly · O'Neil reference-class buy-stop list · as of {esc(asof)} · "
         f"{total} candidates{extra} · trade plan from <code>trilogy webapp</code> · "
         f"M.E.T.A./ANTS/weekly candlestick chart (+10·20·50-week MA)/leader badges computed by MADRRY</div>",
-        "<div class='table-container'><table data-schema='trilogy'>",
-        "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th data-col='grade'>Grade</th>"
+        "<div class='table-container rowcards-container'><table data-schema='trilogy2' class='rowcards'>",
+        "<thead><tr><th data-col='tk'>Ticker</th><th data-col='price'>Chart</th><th data-col='plan'>Trade Plan</th>"
+        "<th data-col='narr'>Narrative</th><th data-col='grade'>Grade</th>"
         "<th class='num' data-col='win20'>Win20</th><th data-col='meta'>M.E.T.A.</th><th class='num' data-col='ants'>ANTS</th>"
         + _MA_YOY_HEADERS +
-        "<th data-col='status'>Status</th></tr>",
+        "<th data-col='status'>Status</th></tr></thead>",
     ]
     grade_col = {"A": "#54b87f", "B": "#aecfe8", "C": "#d3a04d", "D": "#e06c6a", "F": "#e06c6a"}
     for c in shown:
@@ -5726,11 +5682,10 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
             risk = round((ideal - stop) / ideal * 100, 1)
         else:
             risk = 0.0
-        risk_color = "#54b87f" if risk <= 8.0 else ("#d3a04d" if risk <= 12.0 else "#e06c6a")
         grade = c.get("grade", "")
         gcol = grade_col.get(grade, "#82827c")
         likeness = c.get("likeness_q")
-        likeness_line = (f"<br><span style='font-size:var(--fs-micro);color:var(--text-3);'>likeness Q{likeness}</span>"
+        likeness_line = (f"<br><span class='sub'>likeness Q{likeness}</span>"
                          if likeness is not None else "")
         pattern = (c.get("pattern") or "").replace("_", " ")
         family = c.get("family", "")
@@ -5739,7 +5694,7 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
         sector = c.get("sector", "")
         rs_line = (c.get("rs_line") or "").replace("_", " ")
         rs_rank = c.get("sector_rs_rank")
-        rs_rank_line = (f"<br><span style='font-size:var(--fs-micro);color:var(--text-3);'>sector RS #{rs_rank}</span>"
+        rs_rank_line = (f"<br><span class='sub'>sector RS #{rs_rank}</span>"
                         if rs_rank else "")
         win20 = c.get("win20_rate")
         win_txt = f"{win20 * 100:.0f}%" if isinstance(win20, (int, float)) else "—"
@@ -5752,32 +5707,30 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
         st_color = "#e06c6a" if gated else ("#54b87f" if "BUYING RANGE" in status else "#82827c")
         mtail_line = (f"<br><span class='fp-badge fp-warn'>~MONSTER-TAIL d{mdec}</span>" if mtail else "")
         range_txt = f" <span class='stop-reason'>(top ${top})</span>" if top is not None else ""
-        price_cell = _lp(tk, close, entry=ideal, stop=stop) if close is not None else "—"
-        spark_html = f"<div class='spark'>{c.get('_spark','')}</div>" if c.get("_spark") else ""
         leader_html = _ext_leader_badges(c)
         fp_html = _ext_fp_badges(c)
         rs_line_html = ((f"<span style='color:var(--accent-2);font-size:var(--fs-micro);'>RS line: {esc(rs_line)}</span>"
-                         + (f" <span style='color:var(--text-3);font-size:var(--fs-micro);'>· sector RS #{rs_rank}</span>" if rs_rank else "")
+                         + (f" <span class='sub'>· sector RS #{rs_rank}</span>" if rs_rank else "")
                          + "<br>") if rs_line else "")
         out.append(f"""<tr data-sector="{esc(sector)}">
-            {_ext_ticker_cell(tk)}
-            <td data-sort="{risk}">
+            {_tk_cell({"ticker": tk, "close": close}, entry=ideal, stop=stop)}
+            {_chart_cell(c.get('_spark', ''), close if close is not None else 0)}
+            <td class="c-plan" data-sort="{risk}">
                 <div class="entry-box">
-                    <span style="color:var(--text-3);font-weight:500;font-size:var(--fs-micro);">BUY-STOP</span><br>
+                    <span class="kicker">BUY-STOP</span>
                     <span class="entry-text">Buy: ${ideal}</span>{range_txt}<br>
                     <span class="stop-text">Stop: ${stop} <span class="stop-reason">(pivot −8%)</span></span><br>
-                    <span style="color:{risk_color};font-size:var(--fs-caption);font-family:var(--mono);">Risk: {risk}%</span>
+                    <span class="{_risk_cls(risk, 8.0, 12.0)}">Risk: {risk}%</span>
                 </div>
             </td>
-            <td data-sort="{close if close is not None else 0}">{price_cell}{spark_html}<br>
-                {_narrative(tk, f'''<span class="theme-tag">{esc(pattern)}</span><br>
-                <span class="tag">{esc(family)}</span> <span class="tag">{esc(stage_txt)}</span> <span class="tag">{esc(sector)}</span>''')}</td>
-            <td data-sort="{esc(grade)}"><span class="grade-badge" style="color:{gcol};border:1px solid {gcol};background:rgba(0,0,0,0.18);">{esc(grade) or '—'}</span>{likeness_line}</td>
-            <td class="num" data-sort="{win20 if isinstance(win20, (int, float)) else 0}">{win_txt}</td>
+            {_narr_cell(tk, f'''<span class="theme-tag">{esc(pattern)}</span><br>
+                <span class="tag">{esc(family)}</span> <span class="tag">{esc(stage_txt)}</span> <span class="tag">{esc(sector)}</span>''')}
+            <td class="c-stat" data-label="Grade" data-sort="{esc(grade)}"><span class="grade-badge" style="color:{gcol};border:1px solid {gcol};background:rgba(0,0,0,0.18);">{esc(grade) or '—'}</span>{likeness_line}</td>
+            <td class="num c-stat" data-label="Win20" data-sort="{win20 if isinstance(win20, (int, float)) else 0}">{win_txt}</td>
             {_ext_meta_cell(c)}
             {_ext_ants_cell(c)}
             {_ma_cells(c.get('_ma_dist'))}{_fwd_yoy_cell(tk)}{_eps_accel_cell(tk)}
-            <td style="text-align:left;" data-sort="{esc(status)}" title="{esc(detail)}">
+            <td class="c-status" style="text-align:left;" data-sort="{esc(status)}" title="{esc(detail)}">
                 {leader_html}{fp_html}{rs_line_html}
                 <span class="fp-badge" style="border-color:{st_color};color:{st_color};">{esc(status)}</span>
                 <span class="warn-flag" style="font-size:var(--fs-micro);"> {esc(checklist)}</span>{mtail_line}
@@ -5788,9 +5741,9 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
 
 
 def generate_hve_table(ep_matches: List[dict]) -> str:
-    out = ['<div class="section-title bg-hve">💥 HVE (EPISODIC PIVOTS) — LOW FLOAT ≤200M</div>',
-           '<div class="table-container"><table>',
-           "<tr><th>Ticker</th><th>Price &amp; Gap</th><th>Narrative &amp; Conviction</th><th>QM Trade Plan</th></tr>"]
+    out = ['<div class="section-title bg-hve"><span class="tdot"></span>HVE (EPISODIC PIVOTS) — LOW FLOAT ≤200M</div>',
+           '<div class="table-container rowcards-container"><table class="rowcards">',
+           "<thead><tr><th>Ticker</th><th>Price &amp; Gap</th><th>Narrative &amp; Conviction</th><th>QM Trade Plan</th></tr></thead>"]
     if not ep_matches:
         out.append("<tr><td colspan='4' style='color:#82827c;'>No HVE events detected today.</td></tr>")
     else:
@@ -5802,7 +5755,7 @@ def generate_hve_table(ep_matches: List[dict]) -> str:
                 <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])} <span class="good">(+{m['change']}%)</span><br><span style="font-size:var(--fs-caption);color:#82827c;">Gap: {m['gap']}%</span></td>
                 <td data-sort="{m['rel_vol']}">{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}<br><br><span class="hve-badge">{m['rel_vol']}x Avg!</span><br><span style="font-size:var(--fs-caption);color:#82827c;margin-top:4px;display:inline-block;">Float: {float_txt}</span></td>
                 <td data-sort="{m['risk_pct']}">
-                    <div style="font-size:var(--fs-caption);color:#aecfe8;text-align:left;margin-bottom:4px;">✔️ Close Range {m['close_range']}%</div>
+                    <div style="font-size:var(--fs-caption);color:#aecfe8;text-align:left;margin-bottom:4px;">✓ Close Range {m['close_range']}%</div>
                     <div class="entry-box">
                         <span class="entry-text">Buy-Stop: ${m['entry']}</span><br>
                         <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">({esc(m['stop_reason'])})</span></span><br>
@@ -5867,7 +5820,7 @@ def generate_tier_a_study_tab() -> Tuple[str, int]:
     # --- header / methodology ---
     out = [
         "<div class='section-title' style='background-color:var(--surface);"
-        "color:#aecfe8;border-bottom:3px solid #aecfe8;'>📈 TIER-A FORWARD WIN/LOSS STUDY</div>",
+        "color:#aecfe8;border-bottom:3px solid #aecfe8;'>TIER-A FORWARD WIN/LOSS STUDY</div>",
         "<div class='table-container' style='padding:14px 16px;line-height:1.6;'>",
         f"<div style='font-size:var(--fs-body);'>"
         f"<b style='color:#ececea;'>{ov['total']}</b> Tier-A names tracked from first appearance · "
@@ -5956,9 +5909,9 @@ def generate_tier_a_study_tab() -> Tuple[str, int]:
 
 
 def generate_ur_table(ur_matches: List[dict]) -> str:
-    out = ['<div class="section-title" style="background-color:var(--surface);color:#aecfe8;border-bottom:3px solid #aecfe8;">🎯 POST-HVE U&amp;R (PULLBACK &amp; UNDERCUT)</div>',
-           '<div class="table-container"><table>',
-           "<tr><th>Ticker</th><th>Price &amp; 1W Perf</th><th>Narrative &amp; Status</th><th>U&amp;R Trade Plan</th></tr>"]
+    out = ['<div class="section-title"><span class="tdot" style="background:var(--accent);"></span>POST-HVE U&amp;R (PULLBACK &amp; UNDERCUT)</div>',
+           '<div class="table-container rowcards-container"><table class="rowcards">',
+           "<thead><tr><th>Ticker</th><th>Price &amp; 1W Perf</th><th>Narrative &amp; Status</th><th>U&amp;R Trade Plan</th></tr></thead>"]
     if not ur_matches:
         out.append("<tr><td colspan='4' style='color:#82827c;'>No Post-HVE U&amp;R candidates. Waiting for HVE stocks to consolidate...</td></tr>")
     else:
@@ -5972,7 +5925,7 @@ def generate_ur_table(ur_matches: List[dict]) -> str:
                 <td data-sort="{m['vol_contraction']}">{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}<br><br>
                     <span class="squat-badge {vol_color}">Vol: {m['vol_contraction']:.0f}% of Day 1</span><br>
                     <span class="squat-badge {holding_color}">Above D1 Low: {'Yes ✓' if m['holding_above_low'] else 'No ✗'}</span><br>
-                    <span style="font-size:var(--fs-micro);color:#82827c;">D1 High: ${m['day1_high']}</span>
+                    <span class="sub">D1 High: ${m['day1_high']}</span>
                 </td>
                 <td data-sort="{m['risk_pct']}">
                     <div style="font-size:var(--fs-caption);color:#aecfe8;text-align:left;margin-bottom:4px;">⚡ U&amp;R: Undercut D{m['days_since_hve']-1}L then reclaim</div>
@@ -6246,7 +6199,7 @@ def _index_display(tk: str) -> str:
 def build_market_section(market_data: List[dict], breadth: dict,
                          regime: str = "GREEN", allow_breakouts: bool = True) -> Tuple[str, str]:
     """Returns (html, overall_trend)."""
-    out = ['<div class="market-panel"><div class="market-title">🌐 MARKET OVERVIEW (The Bibles + QM)</div><div class="market-grid">']
+    out = ['<div class="market-panel"><div class="market-title">MARKET OVERVIEW — The Bibles + QM</div><div class="market-grid">']
     overall_trend = "GREEN"
     for md in market_data:
         tk = md["ticker"]
@@ -6327,7 +6280,7 @@ def build_runbar(counts: Dict[str, int], market_modifier: float, runtime: float,
 def build_diag_panel(diag: Diagnostics) -> str:
     if not diag.errors and not diag.warnings:
         return ""
-    items = "".join(f"<li>❌ {esc(e)}</li>" for e in diag.errors)
+    items = "".join(f"<li>✗ {esc(e)}</li>" for e in diag.errors)
     items += "".join(f"<li>⚠️ {esc(w)}</li>" for w in diag.warnings)
     return f'<div class="diag-panel"><div class="t">⚠️ DATA DIAGNOSTICS ({len(diag.errors)} errors, {len(diag.warnings)} warnings)</div><ul>{items}</ul></div>'
 
@@ -6582,7 +6535,7 @@ def build_regime(market_data: List[dict], breadth: dict,
     )
     html = (
         f"<div class='regime' style='border-color:{color};background:{bg};'>"
-        f"<div class='reg-head'><span style='color:{color};'>🚦 REGIME: {regime}</span>"
+        f"<div class='reg-head'><span style='color:{color};'>REGIME: {regime}</span>"
         f"<span class='reg-score'>{reds} red / {yellows} amber · {esc(bo_txt)}</span></div>"
         f"<div class='reg-sigs'>{grid}</div>"
         f"<div class='reg-note'>Early-warning tells: leaders rolling over, topping breakdown, T2108 + divergence, "
@@ -6800,7 +6753,7 @@ def build_top_picks(a_plus: List[dict], a: List[dict], a_minus: List[dict],
     """Above-the-fold 'what do I act on today' dashboard: best A+/A names ranked by
     HIGH-CONVICTION (4-of-4) first, then tier -> edges -> M.E.T.A. (2026-06-15 fix).
     `drafted` = tickers the IBKR plan actually staged (top-3, one-per-sector), so
-    each card shows its 🎯 N/4 legs + whether it was ✅ drafted or ⤷ skipped."""
+    each card shows its N/4 legs + whether it was drafted or ⤷ skipped."""
     ranked = _rank_top_picks(a_plus, a, a_minus, ants_boost=True)
     if not ranked:
         return ""
@@ -6818,7 +6771,7 @@ def build_top_picks(a_plus: List[dict], a: List[dict], a_minus: List[dict],
         _sec = s.get("sector") or "N/A"
         if s["ticker"] in draft_pos:
             _ds = (f'<span class="tp-tier" style="color:#54b87f;border-color:#54b87f;" '
-                   f'title="drafted to IBKR — top-3 by high-conviction then tier/edges/M.E.T.A., one per sector">✅ DRAFT #{draft_pos[s["ticker"]]}</span>')
+                   f'title="drafted to IBKR — top-3 by high-conviction then tier/edges/M.E.T.A., one per sector">✓ DRAFT #{draft_pos[s["ticker"]]}</span>')
         elif _sec in drafted_sectors:
             _ds = ('<span class="tp-tier" style="color:#82827c;border-color:#82827c;" '
                    'title="not drafted — one-per-sector rule: this sector is already taken by a higher-ranked pick">⤷ sector taken</span>')
@@ -6828,7 +6781,7 @@ def build_top_picks(a_plus: List[dict], a: List[dict], a_minus: List[dict],
         _legcol = "#aecfe8" if _legs == 4 else ("#aecfe8" if _legs == 3 else "var(--text-3)")
         _score = (f'<span class="tp-meta" style="color:{_legcol};" title="high-conviction legs met (of 4): '
                   f'coiled · RS≥90 · within 10% of 52wk high · risk≤3.5%. 4/4 = ★ the validated SPY-beating edge; '
-                  f'3/4 = one leg away (watch); ≤2/4 = no measured edge.">🎯 {_legs}/4</span>')
+                  f'3/4 = one leg away (watch); ≤2/4 = no measured edge.">{_legs}/4 legs</span>')
         tcol = {"A+": "#54b87f", "A": "#d3a04d", "A-": "#e06c6a"}.get(tr, "#82827c")
         rc = "#54b87f" if s["risk_pct"] <= 4 else ("#d3a04d" if s["risk_pct"] <= 6 else "#e06c6a")
         _atp = ""
@@ -6840,9 +6793,9 @@ def build_top_picks(a_plus: List[dict], a: List[dict], a_minus: List[dict],
                     % esc(_ANTS_LABELS.get(s.get("ants_3m_peak", 0), "")))
         _rsl = ""
         if s.get("rs_ok") and s.get("rs_nh_before_price"):
-            _rsl = "<span class=\"tp-meta\" style=\"color:#aecfe8;\">🔵 RS Lead‹Px</span>"
+            _rsl = "<span class=\"tp-meta\" style=\"color:#aecfe8;\">RS▲ ‹ Px</span>"
         elif s.get("rs_ok") and s.get("rs_new_high"):
-            _rsl = "<span class=\"tp-meta\" style=\"color:#aecfe8;\">🔵 RS Leader</span>"
+            _rsl = "<span class=\"tp-meta\" style=\"color:#aecfe8;\">RS▲ Leader</span>"
         _lc = s.get("lesson_confluence") or []
         _lcb = (f'<span class="tp-tier" style="color:#d3a04d;border-color:#d3a04d;" '
                 f'title="{len(_lc)}/4 tutorial lessons meet their quality entry criteria on this '
@@ -6852,7 +6805,7 @@ def build_top_picks(a_plus: List[dict], a: List[dict], a_minus: List[dict],
         <div class="tp-card">
             <div class="tp-top"><a href="https://www.tradingview.com/chart/?symbol={esc(s['ticker'])}" target="_blank">{esc(s['ticker'])}</a>
                 <span class="tp-tier" style="color:{tcol};border-color:{tcol};">{tr}</span>
-                <span class="tp-edges">⚡{s.get('_edges',0)}</span>{('<span class="tp-tier" style="color:#aecfe8;border-color:#aecfe8;" title="coiled · RS≥90 · within 10% of 52wk high · risk≤3.5% — the validated SPY-beating overlay (study 2026-06-15)">★ HI-CONV</span>') if s.get('_high_conviction') else ''}{_lcb} {_ds}</div>
+                <span class="tp-edges">↯{s.get('_edges',0)}</span>{('<span class="tp-tier" style="color:#aecfe8;border-color:#aecfe8;" title="coiled · RS≥90 · within 10% of 52wk high · risk≤3.5% — the validated SPY-beating overlay (study 2026-06-15)">★ HI-CONV</span>') if s.get('_high_conviction') else ''}{_lcb} {_ds}</div>
             <div class="tp-px">{_lp(s['ticker'], s['close'], style='', entry=s.get('entry'), stop=s.get('stop'))} {_score} <span class="tp-meta">M.E.T.A. {s.get('meta_score',0)}</span> {_atp} {_rsl}</div>
             <div class="tp-theme">{esc(s['theme'])}</div>
             <div class="tp-plan"><span class="entry-text">Buy ${s['entry']}</span> · <span class="stop-text">Stop ${s['stop']}</span> · <span style="color:{rc};">{s['risk_pct']}%</span>{_sr_tp_token(s)}</div>
@@ -6869,7 +6822,7 @@ def build_top_picks(a_plus: List[dict], a: List[dict], a_minus: List[dict],
                   f"read) fires on these names at once'>🎓 4/4-lesson confluence today: "
                   + ", ".join(esc(t) for t in _full) + "</div>")
     return (f"<div class='section-title' style='background-color:var(--surface);color:#54b87f;border-bottom:3px solid #54b87f;'>"
-            f"⭐ TOP PICKS — TODAY'S BEST MULTIPLE-EDGE SETUPS</div>"
+            f"TOP PICKS — TODAY'S BEST MULTIPLE-EDGE SETUPS</div>"
             f"{_strip}<div class='toppicks'>{''.join(cards)}</div>")
 
 
@@ -6898,8 +6851,8 @@ def build_hot_industries(ind: dict, pool: List[dict]) -> str:
     return (
         "<details class='collapsis'><summary class='section-title' style='background-color:var(--surface);"
         "color:#56d364;border-bottom:3px solid #56d364;'>"
-        f"🏭 HOT INDUSTRY GROUPS — Fred6725 RS · {n_strong} groups ≥{IND_RS_STRONG} "
-        f"(top 12 of {len(rows)}; 🎯 = your picks' group)</summary>"
+        f"HOT INDUSTRY GROUPS — Fred6725 RS · {n_strong} groups ≥{IND_RS_STRONG} "
+        f"(top 12 of {len(rows)}; ● = your picks' group)</summary>"
         f"<div class='hot-themes scroll'>{''.join(chips)}</div></details>")
 
 
@@ -6940,14 +6893,14 @@ def build_hot_themes(pool: List[dict]) -> str:
     for strength, th, a, avg in rows:
         ratio = strength / smax
         col = "#54b87f" if ratio >= 0.66 else ("#d3a04d" if ratio >= 0.4 else "#82827c")
-        nh = f" · 🔥{a['near']} NH" if a["near"] >= 2 else ""
+        nh = f" · {a['near']} NH" if a["near"] >= 2 else ""
         chips.append(
             f"<span class='theme-chip' data-sector='{esc(th)}' style='border-color:{col};'>"
             f"{esc(th)} <b style='color:{col};'>{a['n']}</b> · avg {avg:.0f}{nh}</span>"
         )
     chips.append("<span class='theme-chip' id='themeClear' style='border-color:#82827c;display:none;'>✕ Show all</span>")
     return (f"<div class='section-title' style='background-color:var(--surface);color:#d3a04d;border-bottom:3px solid #d3a04d;'>"
-            f"🔥 HOT SECTORS — 今日強勢板塊 (top 3 · scroll → for more · tap to filter)</div>"
+            f"HOT SECTORS — 今日強勢板塊 (top 3 · scroll → for more · tap to filter)</div>"
             f"<div class='hot-themes scroll'>{''.join(chips)}</div>")
 
 
@@ -6962,8 +6915,8 @@ def generate_new_highs_section(nh: dict) -> str:
 
     n_persist = sum(1 for m in green if m.get("persist_tier"))
     summary = (f'<summary class="section-title" style="background-color:var(--tint-green);color:#54b87f;border-bottom:3px solid #54b87f;">'
-               f'🆕 NEW 52-WEEK HIGHS — LEADERSHIP · {total} new highs · '
-               f'{n_persist}⭐ persistent · {len(clusters)} sector clusters</summary>')
+               f'NEW 52-WEEK HIGHS — LEADERSHIP · {total} new highs · '
+               f'{n_persist}★ persistent · {len(clusters)} sector clusters</summary>')
     out = ['<details class="collapsis nh">', summary]
 
     # --- sector-cluster breadth strip ---
@@ -6975,7 +6928,7 @@ def generate_new_highs_section(nh: dict) -> str:
         out.append(
             "<div style='background:var(--tint-green);border-left:4px solid #54b87f;padding:10px 14px;margin:0 0 14px;border-radius:0 8px 8px 0;'>"
             "<div style='color:#54b87f;font-weight:bold;font-size:var(--fs-body);margin-bottom:6px;'>"
-            f"🔥 Sectors making COLLECTIVE new highs today ({total} new highs total · ≥3 = cluster)</div>"
+            f"Sectors making COLLECTIVE new highs today ({total} new highs total · ≥3 = cluster)</div>"
             f"<div class='hot-themes' style='margin:0;'>{''.join(chips)}</div></div>")
     else:
         out.append(f"<div style='color:#82827c;font-size:var(--fs-table);margin-bottom:12px;'>"
@@ -6984,18 +6937,18 @@ def generate_new_highs_section(nh: dict) -> str:
     # --- leaders table: constructive (🟢) + persistent (⭐) names ---
     if not green:
         out.append("<div style='color:#82827c;font-size:var(--fs-body);padding:6px 0;'>"
-                   "No 🟢 constructive or ⭐ persistent names today — "
+                   "No constructive or persistent names today — "
                    "the rest of the new highs are extended or still developing.</div></details>")
         return "".join(out)
 
-    out.append('<div class="table-container"><table data-schema="newhighs">')
-    out.append("<tr><th data-col='tk'>Ticker</th><th data-col='price'>Price &amp; Narrative</th><th data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP, or an equivalent 20-day calc on the external/HTF tabs)'>ADR</th><th data-col='rs'>RS</th>"
+    out.append('<div class="table-container rowcards-container"><table data-schema="newhighs2" class="rowcards">')
+    out.append("<thead><tr><th data-col='tk'>Ticker</th><th data-col='price'>Chart</th><th data-col='plan'>Continuation Plan</th>"
+               "<th data-col='narr'>Narrative</th>"
+               "<th data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP, or an equivalent 20-day calc on the external/HTF tabs)'>ADR</th><th data-col='rs'>RS</th>"
                "<th data-col='pattern'>3-Month Pattern &amp; Persistence</th><th data-col='meta'>M.E.T.A.</th>"
-               + _MA_YOY_HEADERS +
-               "<th data-col='plan'>Continuation Plan</th></tr>")
+               + _MA_YOY_HEADERS + "</tr></thead>")
     _tag_style = {"GRN": ("var(--tint-green)", "#54b87f"), "YEL": ("var(--tint-yellow)", "#d3a04d"), "RED": ("var(--tint-red)", "#e06c6a")}
     for m in green:
-        spark_html = f"<div class='spark'>{m['spark']}</div>" if m.get("spark") else ""
         rs_val = m.get("rs_rating", "N/A")
         base = (f"{m['base_weeks']:.0f}w / {m['base_depth']:.0f}% deep"
                 if m.get("base_depth") is not None else f"{m['base_weeks']:.0f}w base")
@@ -7009,42 +6962,40 @@ def generate_new_highs_section(nh: dict) -> str:
         rc = "#54b87f" if (risk or 9) <= 4 else ("#d3a04d" if (risk or 9) <= 6 else "#e06c6a")
         risk_txt = f"{risk}%" if risk is not None else "n/a"
         # pattern badge colored by grade
-        dot = {"GRN": "🟢", "YEL": "🟡", "RED": "🔴"}.get(m.get("tag"), "🟢")
+        dot = {"GRN": "●", "YEL": "●", "RED": "●"}.get(m.get("tag"), "●")
         pbg, pcol = _tag_style.get(m.get("tag"), ("var(--tint-green)", "#54b87f"))
         pattern_badge = f"<div class='squat-badge' style='background:{pbg};color:{pcol};border-color:{pcol};'>{dot} {esc(m['label'])}</div>"
         # persistence badge (⭐ / ⭐⭐) from recurring new highs
         persist_badge = ""
         if m.get("persist_tier"):
-            star = "⭐⭐" if m["persist_tier"] == "R" else "⭐"
+            star = "★★" if m["persist_tier"] == "R" else "★"
             pc = "#d3a04d" if m["persist_tier"] == "R" else "#d3a04d"
             persist_badge = (f"<div class='squat-badge' style='background:#221d08;color:{pc};border-color:{pc};font-weight:bold;'>"
                              f"{star} {esc(m['persist_label'])} · {m['nh_3m']} NH-days/3M ({m['weeks_3m']} wks) · {m['nh_1m']}/1M</div>")
-        meta_disp_col = "#54b87f" if m.get("tag") == "GRN" else pcol
         out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
-            <td class="ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
-            <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])}{spark_html}<br>{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}</td>
-            <td data-sort="{m['adr']}">{m['adr']}%</td>
-            <td data-sort="{rs_val if isinstance(rs_val,int) else 0}"><span class="score">{esc(rs_val)}</span><br><span style="font-size:var(--fs-micro);color:#82827c;">1M:+{m['perf_1m']}% · 3M:+{m['perf_3m']}%</span></td>
-            <td style="font-size:var(--fs-table);text-align:left;">
-                {persist_badge}{pattern_badge}
-                {fp_html}
-                <div style="margin-top:4px;color:#82827c;">🧱 {esc(base)} · 🏗️ {m['higher_lows']} HL</div>
-                <div><span class="good">+{ext9} vs 9EMA</span> · <span class="{ext50_col}">+{ext50} vs 50EMA</span></div>
-            </td>
-            <td data-sort="{m['meta_score']}"><span style="font-size:var(--fs-title);font-weight:bold;color:{meta_disp_col};">{m['meta_score']}</span></td>
-            {_ma_cells(m.get('_ma_dist'))}{_fwd_yoy_cell(m['ticker'])}{_eps_accel_cell(m['ticker'])}
-            <td data-sort="{risk if risk is not None else 999}">
-                <div class="entry-box" style="border-color:#54b87f;background:rgba(86,211,100,0.07);">
-                    <span style="color:#54b87f;font-weight:bold;font-size:var(--fs-table);">Buy &gt; ${m['entry']}</span><br>
+            {_tk_cell(m, entry=m['entry'], stop=m['stop'])}
+            {_chart_cell(m.get('spark', ''), m['close'])}
+            <td class="c-plan" data-sort="{risk if risk is not None else 999}">
+                <div class="entry-box">
+                    <span class="kicker">CONTINUATION</span>
+                    <span class="entry-text">Buy &gt; ${m['entry']}</span><br>
                     <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">(21EMA / −1.5×ADR)</span></span><br>
                     <span style="color:{rc};font-size:var(--fs-body);">Risk: {risk_txt}</span>
                 </div>
-                {_lessons_line(m)}
-                {_sr_line(m)}
-                {_pb2_line(m)}
-                {_tl_line(m)}
-                {_ch_line(m)}
+                {_edge_details(m, [_lessons_line(m), _sr_line(m), _pb2_line(m),
+                                   _tl_line(m), _ch_line(m)])}
             </td>
+            {_narr_cell(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}
+            <td class="num c-stat" data-label="ADR" data-sort="{m['adr']}">{m['adr']}%</td>
+            <td class="c-stat" data-label="RS" data-sort="{rs_val if isinstance(rs_val,int) else 0}"><span class="score">{esc(rs_val)}</span><br><span class="sub">1M:+{m['perf_1m']}% · 3M:+{m['perf_3m']}%</span></td>
+            <td class="c-status" style="font-size:var(--fs-table);text-align:left;">
+                {persist_badge}{pattern_badge}
+                {fp_html}
+                <div style="margin-top:4px;color:#82827c;">{esc(base)} · {m['higher_lows']} HL</div>
+                <div><span class="good">+{ext9} vs 9EMA</span> · <span class="{ext50_col}">+{ext50} vs 50EMA</span></div>
+            </td>
+            {_ext_meta_cell(m)}
+            {_ma_cells(m.get('_ma_dist'))}{_fwd_yoy_cell(m['ticker'])}{_eps_accel_cell(m['ticker'])}
         </tr>""")
     out.append("</table></div></details>")
     return "".join(out)
@@ -7056,7 +7007,7 @@ def generate_nh52_monitor_section(pullbacks: List[dict], monitored: List[dict]) 
     awareness signal) are sorted to the top and highlighted."""
     n_pull = len(pullbacks)
     n_break = sum(1 for m in monitored if m.get("tag") == "RED")
-    head = (f"<h2 style='margin:4px 0 2px;'>📉 52-Week-High Pullback Monitor</h2>"
+    head = (f"<h2 style='margin:4px 0 2px;'>52-Week-High Pullback Monitor</h2>"
             f"<p class='header-sub' style='margin:0 0 14px;'>Names that printed a new "
             f"52wk high in the last {NH52_WATCH_DAYS} trading days, re-checked each run · "
             f"<b style='color:#54b87f;'>{n_pull}</b> low-vol pullback"
@@ -7073,13 +7024,13 @@ def generate_nh52_monitor_section(pullbacks: List[dict], monitored: List[dict]) 
     if pullbacks:
         out.append("<div style='background:var(--tint-green);border-left:4px solid #54b87f;"
                    "padding:10px 14px;margin:0 0 14px;border-radius:0 8px 8px 0;color:#54b87f;"
-                   "font-size:var(--fs-table);'>🟢 <b>Low-volume pullback</b> = price slipped below "
+                   "font-size:var(--fs-table);'><b>Low-volume pullback</b> = price slipped below "
                    "its 50-day MA or the prior close while volume dried up below its 30-day average "
                    "— supply exhausting, a constructive continuation watch.</div>")
-    out.append('<div class="table-container"><table>')
-    out.append("<tr><th>Ticker</th><th>Status</th><th>Price</th>"
+    out.append('<div class="table-container rowcards-container"><table class="rowcards">')
+    out.append("<thead><tr><th>Ticker</th><th>Status</th><th>Price</th>"
                "<th>vs 50-MA</th><th>vs Prev Close</th><th>Volume vs 30d Avg</th>"
-               "<th>RS</th><th>Watch</th></tr>")
+               "<th>RS</th><th>Watch</th></tr></thead>")
     _tag_col = {"GRN": "#54b87f", "RED": "#e06c6a", "HOLD": "#82827c"}
     for m in monitored:
         col = _tag_col.get(m["tag"], "#82827c")
@@ -7096,11 +7047,11 @@ def generate_nh52_monitor_section(pullbacks: List[dict], monitored: List[dict]) 
             <td class="ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a>{spark_html}</td>
             <td><span class="squat-badge" style="background:rgba(0,0,0,0.12);color:{col};border-color:{col};font-weight:bold;">{esc(m['status'])}</span></td>
             <td data-sort="{m['close']}">${m['close']}</td>
-            <td data-sort="{vs50 if vs50 is not None else 0}"><span style="color:{vs50_col};">{vs50_txt}</span><br><span style="font-size:var(--fs-micro);color:#82827c;">50MA ${m['sma50']}</span></td>
+            <td data-sort="{vs50 if vs50 is not None else 0}"><span style="color:{vs50_col};">{vs50_txt}</span><br><span class="sub">50MA ${m['sma50']}</span></td>
             <td data-sort="{vsprev if vsprev is not None else 0}"><span style="color:{vsprev_col};">{vsprev_txt}</span></td>
-            <td data-sort="{vr if vr is not None else 9}"><span style="color:{vr_col};font-weight:bold;">{vr_txt}</span><br><span style="font-size:var(--fs-micro);color:#82827c;">{'below' if (vr is not None and vr < 1) else 'above'} avg</span></td>
+            <td data-sort="{vr if vr is not None else 9}"><span style="color:{vr_col};font-weight:bold;">{vr_txt}</span><br><span class="sub">{'below' if (vr is not None and vr < 1) else 'above'} avg</span></td>
             <td data-sort="{rs_val if isinstance(rs_val,int) else 0}"><span class="score">{esc(rs_val)}</span></td>
-            <td data-sort="{m['days_since_high']}"><span style="font-size:var(--fs-table);">{m['days_since_high']}d since high</span><br><span style="font-size:var(--fs-micro);color:#82827c;">{m['high_count']}× NH · last {esc(m.get('last_high') or '–')}</span>{_pb2_line(m)}</td>
+            <td data-sort="{m['days_since_high']}"><span style="font-size:var(--fs-table);">{m['days_since_high']}d since high</span><br><span class="sub">{m['high_count']}× NH · last {esc(m.get('last_high') or '–')}</span>{_pb2_line(m)}</td>
         </tr>""")
     out.append("</table></div>")
     return "".join(out)
@@ -7108,11 +7059,11 @@ def generate_nh52_monitor_section(pullbacks: List[dict], monitored: List[dict]) 
 
 def generate_short_table(shorts: List[dict]) -> str:
     out = [
-        '<div class="section-title bg-short">🔻 PARABOLIC SHORT — CLIMAX / EXHAUSTION '
+        '<div class="section-title bg-short"><span class="tdot"></span>PARABOLIC SHORT — CLIMAX / EXHAUSTION '
         '(乖離過大 · 拋物線見頂)</div>',
-        '<div class="table-container"><table>',
-        "<tr><th>Ticker</th><th>Price &amp; Extension</th><th>Climax Stats</th>"
-        "<th>Short Plan (intraday)</th></tr>",
+        '<div class="table-container rowcards-container"><table class="rowcards">',
+        "<thead><tr><th>Ticker</th><th>Price &amp; Extension</th><th>Climax Stats</th>"
+        "<th>Short Plan (intraday)</th></tr></thead>",
     ]
     if not shorts:
         out.append("<tr><td colspan='4' style='color:#82827c;'>No parabolic-short "
@@ -7127,14 +7078,14 @@ def generate_short_table(shorts: List[dict]) -> str:
                 <td class="ep-ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
                 <td data-sort="{m['dist9']}">{_lp(m['ticker'], m['close'])}<br><span class="bad">+{m['dist9']}% above 9EMA</span><br><span style="font-size:var(--fs-caption);color:#82827c;">+{m['dist21']}% above 21EMA</span><br>{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}</td>
                 <td data-sort="{m['vol_ratio']}" style="font-size:var(--fs-table);text-align:left;">
-                    <span class="bad">🔥 Vol {m['vol_ratio']}x</span><br>
-                    <span class="warn">📈 {m['gap_ups']} recent gap-up{'s' if m['gap_ups'] != 1 else ''}</span><br>
+                    <span class="bad">Vol {m['vol_ratio']}x</span><br>
+                    <span class="warn">{m['gap_ups']} recent gap-up{'s' if m['gap_ups'] != 1 else ''}</span><br>
                     <span style="color:#82827c;">⚡ accel +{m['accel']}%</span><br>
                     <span style="color:#82827c;">1M: +{m['perf_1m']}%</span>
                 </td>
                 <td data-sort="{risk if risk is not None else 999}">
                     <div class="entry-box" style="border-color:#8a4341;background:rgba(224,108,106,.08);">
-                        <span style="color:#e06c6a;font-weight:bold;font-size:var(--fs-table);">🔻 Short Setup</span><br>
+                        <span style="color:#e06c6a;font-weight:bold;font-size:var(--fs-table);">SHORT SETUP</span><br>
                         <span class="stop-text">Trigger: break of ORL / AVWAP retest</span><br>
                         <span class="stop-reason">Daily proxy entry ${m['entry']} · stop &gt; day-high ${m['stop']} ({risk_txt})</span><br>
                         <span style="color:#54b87f;">Cover → 21EMA ${m['target']} <span class="stop-reason">({tt_txt})</span></span>
@@ -7215,7 +7166,7 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
     for s in targets:
         tk = s["ticker"]
         is_hve = "rel_vol" in s
-        kind = "💥 HVE" if is_hve else "🏆 A+ VCP"
+        kind = "HVE" if is_hve else "A+ VCP"
         kind_color = "#e06c6a" if is_hve else "#54b87f"
         it = intra.get(tk)
         if not it or it["bars"] < 5:
@@ -7240,7 +7191,7 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
         shares = int(risk_dollar // risk_dist)
 
         vwap_cls = "good" if above_vwap else "bad"
-        vwap_txt = "✔️ Above VWAP (buyers)" if above_vwap else "❌ Below VWAP (CANCEL)"
+        vwap_txt = "✓ Above VWAP (buyers)" if above_vwap else "✗ Below VWAP (CANCEL)"
         vol_cls = "good" if vol_ok else "warn"
         risk_color = "#54b87f" if risk_pct <= 5.0 else "#e06c6a"
 
@@ -7250,7 +7201,7 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
                 f'<span class="{vwap_cls}">{vwap_txt}</span>')
 
         if not above_vwap:
-            protocol = ('<span class="bad">❌ STAND DOWN — price under VWAP, sellers in control.</span>'
+            protocol = ('<span class="bad">✗ STAND DOWN — price under VWAP, sellers in control.</span>'
                         '<br><span class="stop-reason">Re-evaluate only on a reclaim of VWAP.</span>')
         else:
             steps = [
@@ -7539,13 +7490,13 @@ def run_scanners_and_generate_html() -> str:
     tier_a_study_html, tier_a_study_n = generate_tier_a_study_tab()
     tabs_bar = (
         "<div class='tabs' role='tablist'>"
-        "<button class='tab-btn active' data-tab='madrry'>📋 MADRRY Watchlist</button>"
-        f"<button class='tab-btn' data-tab='minervini'>🏛️ Minervini<span class='tab-count'>{minervini_n}</span></button>"
-        f"<button class='tab-btn' data-tab='trilogy'>📚 Trilogy<span class='tab-count'>{trilogy_n}</span></button>"
-        f"<button class='tab-btn' data-tab='pivots'>💥 Pivots &amp; U&amp;R<span class='tab-count'>{len(ep_matches) + len(ur_matches)}</span></button>"
-        f"<button class='tab-btn' data-tab='short'>🔻 Short<span class='tab-count'>{len(short_matches)}</span></button>"
-        f"<button class='tab-btn' data-tab='hi52'>📈 52-Week High<span class='tab-count'>{nh_data.get('total', 0)}</span></button>"
-        f"<button class='tab-btn' data-tab='tracking'>📈 Tracking<span class='tab-count'>{tier_a_study_n}</span></button>"
+        "<button class='tab-btn active' data-tab='madrry'>MADRRY Watchlist</button>"
+        f"<button class='tab-btn' data-tab='minervini'>Minervini<span class='tab-count'>{minervini_n}</span></button>"
+        f"<button class='tab-btn' data-tab='trilogy'>Trilogy<span class='tab-count'>{trilogy_n}</span></button>"
+        f"<button class='tab-btn' data-tab='pivots'>Pivots &amp; U&amp;R<span class='tab-count'>{len(ep_matches) + len(ur_matches)}</span></button>"
+        f"<button class='tab-btn' data-tab='short'>Short<span class='tab-count'>{len(short_matches)}</span></button>"
+        f"<button class='tab-btn' data-tab='hi52'>52-Week High<span class='tab-count'>{nh_data.get('total', 0)}</span></button>"
+        f"<button class='tab-btn' data-tab='tracking'>Tracking<span class='tab-count'>{tier_a_study_n}</span></button>"
         "</div>"
     )
 
@@ -7570,9 +7521,12 @@ def run_scanners_and_generate_html() -> str:
         top_picks_html,
         tracking_html,
         build_filter_funnel(coil_funnel, len(tier_a_plus), len(tier_a), len(tier_a_minus_full)),
-        generate_coil_table(tier_a_plus, "🏆 TIER A+ (strict 3-day flag · ≤1% from EMA · 3-day vol ≤50% of prev-day or 50-day avg · incl. 🚩 HTF) — TRIGGER READY", "bg-aplus"),
-        generate_coil_table(tier_a, "🔥 TIER A (2-day tight candle · ≤1% from EMA · 2-day vol ≤55% of prev-day or 50-day avg) — DEVELOPING", "bg-a"),
-        generate_coil_table(tier_a_minus_full, "🚀 TIER A- (1-day tight candle · ≤2% from EMA · 1-day vol ≤ prev-day or 50-day avg) — EXTENDED / MESSY", "bg-aminus"),
+        generate_coil_table(tier_a_plus, "Tier A+ — trigger ready", "bg-aplus",
+                            subtitle="strict 3-day flag · ≤1% from EMA · 3-day vol ≤50% of prev-day or 50-day avg · incl. HTF"),
+        generate_coil_table(tier_a, "Tier A — developing", "bg-a",
+                            subtitle="2-day tight candle · ≤1% from EMA · 2-day vol ≤55% of prev-day or 50-day avg"),
+        generate_coil_table(tier_a_minus_full, "Tier A− — extended / messy", "bg-aminus",
+                            subtitle="1-day tight candle · ≤2% from EMA · 1-day vol ≤ prev-day or 50-day avg"),
         "</div>",  # /tab-madrry
         f"<div class='tab-panel' id='tab-minervini'>{minervini_html}</div>",
         f"<div class='tab-panel' id='tab-trilogy'>{trilogy_html}</div>",
@@ -7600,6 +7554,9 @@ def run_scanners_and_generate_html() -> str:
         "</body></html>",
     ]
     html = "".join(parts)
+    # strip f-string indentation runs — pure whitespace minify (~3% of the file);
+    # a lone \n renders identically, and JS line comments stay intact.
+    html = re.sub(r"\n[ \t]+", "\n", html)
 
     # ---- persist outputs (atomic) ----
     for s in tier_a_plus:
@@ -7750,9 +7707,9 @@ def build_markdown_report(
             else:
                 ants = "—"
             if s.get("rs_ok") and s.get("rs_nh_before_price"):
-                rsl = "🔵 Lead‹Px"
+                rsl = "RS▲‹Px"
             elif s.get("rs_ok") and s.get("rs_new_high"):
-                rsl = "🔵 Lead"
+                rsl = "RS▲"
             else:
                 rsl = "—"
             out.append(f"| {tk} | {price:.2f} | {score:.0f} | {ants} | {rsl} | {setup} | {entry} | {stop} | {risk:.1f}% |")
