@@ -5374,6 +5374,9 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
                 return (close / float(cl.iloc[-n - 1]) - 1) * 100.0
             return 0.0
         adr = _adr20(df)                          # canonical ADR%: 100×(mean(High/Low,20)−1)
+        r["_adr20"] = round(adr, 2)
+        if adr < 1.5:                             # same dead-stock floor as the coil universe (USER 2026-07-06)
+            r["_drop_adr"] = True
         _hi, _lo = float(df["High"].iloc[-1]), float(df["Low"].iloc[-1])
         day_range_pct = ((_hi / _lo) - 1.0) * 100.0 if _lo else 0.0   # High/Low basis, same as ADR
         hi52 = float(df["High"].iloc[-252:].max())
@@ -5543,6 +5546,7 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
         m["_risk_pct"] = round((m.get("stop_frac") or 0.0) * 100, 1)
     _enrich_external_rows(rows, weekly_spark=False, spark_field="Close", spark_n=60,
                           market_modifier=market_modifier, spark_ma_spec=_MA_SPEC_DARK)
+    rows = [m for m in rows if not m.get("_drop_adr")]   # dead-stock floor (ADR<1.5%)
     _prefetch_fundamentals([m.get("ticker") for m in rows], budget_s=30.0)
 
     out = [
@@ -5650,6 +5654,7 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
                           if isinstance(_ib, (int, float)) and isinstance(_stp, (int, float)) and _ib else 10.0)
     _enrich_external_rows(shown, weekly_spark=True, market_modifier=market_modifier,
                           spark_ma_spec=_MA_SPEC_10W)
+    shown = [c for c in shown if not c.get("_drop_adr")]   # dead-stock floor (ADR<1.5%)
     _prefetch_fundamentals([c.get("ticker") for c in shown], budget_s=30.0)
 
     out = [
