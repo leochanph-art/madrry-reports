@@ -48,6 +48,33 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+# S/R zone engine (entry-quality shadow mode). Guarded import: a broken module
+# must never take the daily report down with it.
+try:
+    import madrry_sr_zones as _srz
+except Exception:  # noqa: BLE001
+    _srz = None
+
+# Pullback-recovery detector (tutorial #2, shadow mode). Same guard, same deal.
+try:
+    import madrry_pullback_buy as _pbb
+except Exception:  # noqa: BLE001
+    _pbb = None
+
+# Trendline engine v2 (tutorial #3, shadow mode). The legacy
+# calculate_trendline_analysis block stays untouched.
+try:
+    import madrry_trendlines as _tlv2
+except Exception:  # noqa: BLE001
+    _tlv2 = None
+
+# Parallel-channel engine (tutorial #4, 2+1 construction, shadow mode).
+# NOT part of the Stage-4 support gate - needs its own user sign-off.
+try:
+    import madrry_channels as _chv
+except Exception:  # noqa: BLE001
+    _chv = None
+
 # ----------------------------------------------------------------------------
 # CONFIG  (paths unchanged — centralised so they live in one place)
 # ----------------------------------------------------------------------------
@@ -114,8 +141,12 @@ EXCLUDED_TICKERS = _load_excluded_tickers()
 # ---- META v4 (enhanced signed-feature score) — ranking driver, with fallback ----
 try:
     from madrry_meta_v4 import meta_v4_score as _meta_v4_score
+    from madrry_meta_v4 import meta_v4_score_prob as _meta_v4_score_prob
 except Exception:  # noqa: BLE001 — missing model/module => legacy score
     def _meta_v4_score(_df):
+        return None
+
+    def _meta_v4_score_prob(_df):
         return None
 
 # ---- Fundamentals (past-2Q + next-2Q revenue/EPS) for the tap-to-expand narrative.
@@ -247,9 +278,9 @@ def _fwd_yoy_cell(ticker: str) -> str:
             rec = _fund.get(ticker)
             if rec:
                 for r in rec.get("rev", []):
-                    if r.get("est") and r.get("yoy") is not None:
-                        y, lbl = r["yoy"], r.get("lbl", "")
-                        break
+                    if r.get("est"):                 # the NEXT forward quarter, whatever its YoY
+                        y, lbl = r.get("yoy"), r.get("lbl", "")
+                        break                        # y may be None -> renders '—' (truthful to header)
         except Exception:
             y = None
     if y is None:
@@ -329,6 +360,26 @@ def _ranking_meta_score(hist_df, legacy_score, market_modifier):
     if v4 is not None:
         return v4
     return round(min(legacy_score * market_modifier, 100.0), 1)
+
+
+def _ranking_meta_score_ex(hist_df, legacy_score, market_modifier):
+    """Like _ranking_meta_score, but ALSO returns the raw scores the ledger/Phase-3
+    calibration needs — computed from a SINGLE v4 feature pass (no extra work vs the
+    plain ranking call). Returns (display_score, {legacy_score_raw, v4_prob_raw}).
+      display_score  = v4 percentile (or legacy×modifier fallback) — identical to
+                       _ranking_meta_score, so display/ranking is unchanged.
+      legacy_score_raw = the raw legacy M.E.T.A. component score (pre-modifier).
+      v4_prob_raw    = the raw P(+2ADR win) in [0,1] BEFORE percentile calibration."""
+    try:
+        legacy_raw = round(float(legacy_score), 1)
+    except (TypeError, ValueError):
+        legacy_raw = None
+    sp = _meta_v4_score_prob(hist_df)
+    if sp is not None:
+        pctile, prob = sp
+        return pctile, {"legacy_score_raw": legacy_raw, "v4_prob_raw": prob}
+    disp = round(min(legacy_score * market_modifier, 100.0), 1)
+    return disp, {"legacy_score_raw": legacy_raw, "v4_prob_raw": None}
 
 
 def _meta_award(details: List[str], comp: str, frac: float, label: str,
@@ -1578,13 +1629,25 @@ def get_theme(ticker, industry):
     return ind
 
 
-# MA overlay colours (distinct, GitHub-dark friendly) + the periods we draw.
-# 50-MA deliberately the darkest/most-muted (slowest line, should recede).
-_MA_SPEC = [(10, "#58a6ff"), (20, "#e3b341"), (50, "#8957e5")]   # blue / amber / dark-purple
+# ---- palette constants ("calm editorial dark" 2026-07-05) ------------------
+# Single source of truth for every colour drawn OUTSIDE the CSS cascade
+# (inline SVG fill/stroke attributes can't read CSS variables when the SVG is
+# built server-side). The :root block in PAGE_CSS mirrors these values —
+# keep the two in sync.
+C_UP = "#54b87f"       # bullish / up-day
+C_DOWN = "#e06c6a"     # bearish / down-day
+C_WARN = "#d3a04d"     # caution amber
+C_ACCENT = "#8cb4d6"   # the one UI accent
+C_MUTED = "#4a4a52"    # volume bars, quiet fills
+C_TEXT3 = "#82827c"    # caption gray (SVG labels, doji candles)
+
+# MA overlay colours + the periods we draw.
+# 50-MA deliberately the most muted (slowest line, should recede).
+_MA_SPEC = [(10, C_ACCENT), (20, C_WARN), (50, "#6b6b74")]   # accent / amber / gray
 # Darker, thinner variants for the small external-engine sparklines (Minervini /
-# Trilogy) so the MA lines sit clearly BEHIND the bright green/red price line.
-_MA_SPEC_DARK = [(10, "#1158c7"), (20, "#9e6a00"), (50, "#5a2da0")]  # dark blue / amber / purple
-_MA_SPEC_10W = [(10, "#1158c7")]                                     # single 10-week MA (Trilogy)
+# Trilogy) so the MA lines sit clearly BEHIND the price line.
+_MA_SPEC_DARK = [(10, "#567a99"), (20, "#8a6a36"), (50, "#4d4d55")]
+_MA_SPEC_10W = [(10, "#567a99")]                             # single 10-week MA (Trilogy)
 
 
 def _trailing_sma(vals: List[float], period: int) -> List[Optional[float]]:
@@ -1692,7 +1755,7 @@ def make_sparkline(closes: Iterable[float], width: int = 88, height: int = 26, p
             f'<text x="{width - label_w + 2:.1f}" y="{y:.1f}" font-size="{label_fs}" '
             f'font-family="ui-monospace,monospace" fill="{col}">{p}</text>')
 
-    color = "#3fb950" if disp[-1] >= disp[0] else "#ff7b72"
+    color = C_UP if disp[-1] >= disp[0] else C_DOWN
     ppts = " ".join(f"{X(i):.1f},{Y(v):.1f}" for i, v in enumerate(disp))
     parts.append(
         f'<polyline points="{ppts}" fill="none" stroke="{color}" '
@@ -1730,7 +1793,7 @@ def make_volume_bars(volumes: Iterable[float], ups: Optional[List[bool]] = None,
         h = (v / hi) * inner_h
         x = pad + i * bw
         y = height - pad - h
-        col = "#3fb950" if (ups and i < len(ups) and ups[i]) else "#6e7681"
+        col = C_UP if (ups and i < len(ups) and ups[i]) else C_MUTED
         bars.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{max(bw - 0.4, 0.6):.1f}" '
                     f'height="{max(h, 0.4):.1f}" fill="{col}" opacity="0.65"/>')
     return (f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
@@ -2074,7 +2137,10 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
         if triggered and ticker_fresh:
             outcome = "win" if (t_close >= y_entry and not stopped_out) else "loss"
             log_records.append({"ticker": ticker, "tier": y_tier, "outcome": outcome,
-                                "htf": bool(s.get("is_htf"))})
+                                "htf": bool(s.get("is_htf")),
+                                # regime marker so the rolling win-rate series isn't misread across
+                                # the 2026-07-06 stop-geometry boundary (graded on THIS pick's y_stop).
+                                "stop_version": s.get("stop_version", "tight_3day")})
             n_win += outcome == "win"
             n_loss += outcome == "loss"
 
@@ -2087,28 +2153,28 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
 
         if triggered:
             if stopped_out:
-                status_text, status_style = "📉 Failed (Triggered & Stopped Out)", "color:#ff7b72;font-weight:bold;"
+                status_text, status_style = "📉 Failed (Triggered & Stopped Out)", "color:#e06c6a;font-weight:bold;"
             elif t_close >= y_entry:
-                status_text, status_style = f"🚀 Triggered & Holding (+{t_change:.1f}%)", "color:#3fb950;font-weight:bold;"
+                status_text, status_style = f"🚀 Triggered & Holding (+{t_change:.1f}%)", "color:#54b87f;font-weight:bold;"
             else:
-                status_text, status_style = "🔄 Triggered & Pulling Back", "color:#f2cc60;font-weight:bold;"
+                status_text, status_style = "🔄 Triggered & Pulling Back", "color:#d3a04d;font-weight:bold;"
         else:
-            status_text, status_style = "📉 Stopped Out (No Trigger)", "color:#ff7b72;font-weight:bold;"
+            status_text, status_style = "📉 Stopped Out (No Trigger)", "color:#e06c6a;font-weight:bold;"
 
         change_col = "good" if t_change > 0 else "bad"
         tier_badge_style = {
-            "A+": "background:var(--tint-green);color:#3fb950;border:1px solid #3fb950;",
-            "A":  "background:var(--tint-yellow);color:#f2cc60;border:1px solid #f2cc60;",
-            "A-": "background:#21262d;color:#8b949e;border:1px solid #8b949e;",
-        }.get(y_tier, "background:#21262d;color:#8b949e;border:1px solid #8b949e;")
+            "A+": "background:var(--tint-green);color:#54b87f;border:1px solid #54b87f;",
+            "A":  "background:var(--tint-yellow);color:#d3a04d;border:1px solid #d3a04d;",
+            "A-": "background:#1f1f23;color:#82827c;border:1px solid #82827c;",
+        }.get(y_tier, "background:#1f1f23;color:#82827c;border:1px solid #82827c;")
         rows.append(f"""
-            <tr style="border-bottom:1px solid #30363d;text-align:center;">
+            <tr style="border-bottom:1px solid #26262b;text-align:center;">
                 <td style="padding:10px;font-weight:bold;" class="ticker"><a href="https://tradingview.com/symbols/{esc(ticker)}" target="_blank">{esc(ticker)}</a></td>
                 <td style="padding:10px;"><span style="font-size:var(--fs-table);font-weight:bold;padding:3px 6px;border-radius:4px;{tier_badge_style}">Tier {esc(y_tier)}</span></td>
-                <td style="padding:10px;"><span class="score" style="border-color:#79c0ff;color:#79c0ff;background:var(--tint-accent);">{y_score}</span></td>
-                <td style="padding:10px;color:#3fb950;font-weight:bold;">${y_entry:.2f}</td>
-                <td style="padding:10px;color:#ff7b72;font-weight:bold;">${y_stop:.2f}</td>
-                <td style="padding:10px;font-size:var(--fs-body);color:#8b949e;">${t_low:.2f} - ${t_high:.2f}</td>
+                <td style="padding:10px;"><span class="score" style="border-color:#aecfe8;color:#aecfe8;background:var(--tint-accent);">{y_score}</span></td>
+                <td style="padding:10px;color:#54b87f;font-weight:bold;">${y_entry:.2f}</td>
+                <td style="padding:10px;color:#e06c6a;font-weight:bold;">${y_stop:.2f}</td>
+                <td style="padding:10px;font-size:var(--fs-body);color:#82827c;">${t_low:.2f} - ${t_high:.2f}</td>
                 <td style="padding:10px;" class="{change_col}">{t_change:+.2f}%</td>
                 <td style="padding:10px;{status_style}">{status_text}</td>
             </tr>""")
@@ -2121,42 +2187,289 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
 
     # ---- summary only (full grading still logged to the win-rate; the per-name
     #      table is intentionally omitted to keep the report short) ----
-    src_bit = (f" <span style='color:#8b949e;'>(picks of {prev_date})</span>"
+    src_bit = (f" <span style='color:#82827c;'>(picks of {prev_date})</span>"
                if prev_date else "")
     if not may_log:
-        win_bit = (f"<span style='color:#f2cc60;'>⚠️ outcomes withheld — bars end "
+        win_bit = (f"<span style='color:#d3a04d;'>⚠️ outcomes withheld — bars end "
                    f"{esc(bar_date or '?')}, need a session newer than {esc(prev_date or 'the picks')}</span>")
     elif n_win or n_loss:
-        win_bit = (f"<span style='color:#3fb950;'>✅ {n_win} win</span> / "
-                   f"<span style='color:#ff7b72;'>❌ {n_loss} loss</span> "
-                   f"<span style='color:#8b949e;'>this session</span>")
+        win_bit = (f"<span style='color:#54b87f;'>✅ {n_win} win</span> / "
+                   f"<span style='color:#e06c6a;'>❌ {n_loss} loss</span> "
+                   f"<span style='color:#82827c;'>this session</span>")
     else:
-        win_bit = "<span style='color:#8b949e;'>0 triggered this session</span>"
+        win_bit = "<span style='color:#82827c;'>0 triggered this session</span>"
     cum = breakout_cumulative()
     cum_bit = ""
     if cum:
-        ccol = "#3fb950" if cum["rate"] > 55 else ("#f2cc60" if cum["rate"] >= 40 else "#ff7b72")
+        ccol = "#54b87f" if cum["rate"] > 55 else ("#d3a04d" if cum["rate"] >= 40 else "#e06c6a")
         cum_bit = (f" &nbsp;|&nbsp; <span style='color:{ccol};font-weight:bold;'>📊 Accumulated win-rate "
-                   f"{cum['rate']}%</span> <span style='color:#8b949e;'>({cum['wins']}W/{cum['losses']}L "
+                   f"{cum['rate']}%</span> <span style='color:#82827c;'>({cum['wins']}W/{cum['losses']}L "
                    f"over {cum['n']} · since {esc(cum['since'])})</span>")
         if cum.get("htf_n"):
             hr = round(100 * cum["htf_wins"] / cum["htf_n"])
-            hcol = "#3fb950" if hr > 55 else ("#f2cc60" if hr >= 40 else "#ff7b72")
+            hcol = "#54b87f" if hr > 55 else ("#d3a04d" if hr >= 40 else "#e06c6a")
             cum_bit += (f" <span style='color:{hcol};'>🚩 HTF {hr}%</span> "
-                        f"<span style='color:#8b949e;'>({cum['htf_wins']}W/{cum['htf_losses']}L)</span>")
+                        f"<span style='color:#82827c;'>({cum['htf_wins']}W/{cum['htf_losses']}L)</span>")
     coiled_bit = ""
     if coiled_total:
         cb = " · ".join(f"{t} {coiled[t]}" for t in ("A+", "A", "A-") if coiled.get(t))
-        coiled_bit = f" &nbsp;|&nbsp; <span style='color:#8b949e;'>🌀 {coiled_total} still coiling ({cb})</span>"
-    summary = (f"<span style='color:#c9d1d9;'>Graded <b>{n_eval}</b> prior picks{src_bit}</span> "
-               f"&nbsp;|&nbsp; {win_bit}{cum_bit}{coiled_bit}")
+        coiled_bit = f" &nbsp;|&nbsp; <span style='color:#82827c;'>🌀 {coiled_total} still coiling ({cb})</span>"
+    # Regime footnote (continuity marker, §3a) — self-activating: shows ONLY once the log carries
+    # atr_5day outcomes, so it's invisible on pre-switch reports and marks the boundary once live.
+    regime_bit = ""
+    try:
+        if os.path.exists(BREAKOUT_LOG_PATH):
+            with open(BREAKOUT_LOG_PATH) as _fh:
+                _bl = json.load(_fh)
+            if any(r.get("stop_version") == "atr_5day" for _d in _bl for r in _bl[_d]):
+                regime_bit = (" &nbsp;|&nbsp; <span style='color:#82827c;font-size:var(--fs-micro);'>"
+                              "⚙️ coil stop regime: 1.5×ADR + 5-day validity, effective session "
+                              "2026-07-06 (first printed on the 2026-07-07 report); earlier picks "
+                              "used the tight stop</span>")
+    except Exception:  # noqa: BLE001 — a footnote must never break the report
+        regime_bit = ""
+    summary = (f"<span style='color:#ececea;'>Graded <b>{n_eval}</b> prior picks{src_bit}</span> "
+               f"&nbsp;|&nbsp; {win_bit}{cum_bit}{coiled_bit}{regime_bit}")
 
     return f"""
-    <div style="background-color:#161b22;border-radius:8px;padding:12px 15px;margin-bottom:25px;box-shadow:0 0 15px rgba(0,0,0,0.5);border-left:4px solid #79c0ff;">
-        <span style="color:#79c0ff;font-weight:bold;font-size:var(--fs-body);text-transform:uppercase;">🔄 Yesterday's Watchlist:</span>
+    <div style="background-color:#18181b;border-radius:8px;padding:12px 15px;margin-bottom:25px;box-shadow:0 0 15px rgba(0,0,0,0.5);border-left:4px solid #aecfe8;">
+        <span style="color:#aecfe8;font-weight:bold;font-size:var(--fs-body);text-transform:uppercase;">🔄 Yesterday's Watchlist:</span>
         <span style="font-size:var(--fs-table);">&nbsp;{summary}</span>
     </div>
     """
+
+
+# ----------------------------------------------------------------------------
+# GEOMETRY RATIFICATION (user-approved 2026-07-04): coil A+/A/A- switch to the
+# 1.5×ADR stop + 5 trading-day validity, effective for sessions on/after the
+# switch session. DATE-GATED so pre-switch sessions (incl. a holiday re-run of
+# older data) are byte-identical — the switch cannot fire on stale data. The
+# M.E.T.A. score/tier are already computed on the STRUCTURAL risk (continuity
+# preserved, no re-calibration); this pass only overrides the PRINTED stop, its
+# risk_pct (→ IBKR sizing follows: wider stop → smaller position), and stamps
+# valid_until + stop_version. The structural level is kept as stop_tight (+reason)
+# for the report's "support" line and as a stable ledger field.
+# ----------------------------------------------------------------------------
+STOP_REGIME_SWITCH_SESSION = "2026-07-06"   # first session under ATR+5d (first printed on the 2026-07-07 run)
+_ATR_STOP_MULT = 1.5
+_VALIDITY_TRADING_DAYS = 5
+
+
+def _sr_quality(hist_df, entry, direction):
+    """S/R entry-quality features (madrry_sr_zones). INFORMATIONAL SHADOW MODE
+    per WINNER_RADAR_CONTINUATION.md 2.7 — the sr_* keys are displayed and logged
+    to the ledger but filter nothing and change no printed entry/stop. Never
+    raises; returns {} when the module or history is unavailable."""
+    if _srz is None or hist_df is None or entry is None:
+        return {}
+    try:
+        out = _srz.analyze(hist_df, entry, direction)
+        return out if isinstance(out, dict) and "sr_error" not in out else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _pb2_quality(hist_df):
+    """Pullback-recovery features (madrry_pullback_buy). INFORMATIONAL SHADOW
+    MODE per WINNER_RADAR_CONTINUATION.md 2.7 — displayed and logged, filters
+    nothing, changes no printed entry/stop. Never raises."""
+    if _pbb is None or hist_df is None:
+        return {}
+    try:
+        out = _pbb.analyze_pullback(hist_df)
+        return out if isinstance(out, dict) and "pb2_error" not in out else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _edge_support(m: dict) -> List[str]:
+    """Which verified entry engines back this pick — the USER-RATIFIED Stage-3
+    support gate (2026-07-04): a coil pick must be backed by at least one of
+      SR = S/R zone structure grade A/B (protecting zone, flip/retest read),
+      PB = a valid 8-rule pullback-recovery (setup or recovery, vetoes clear),
+      TL = a governing diagonal supports the entry (at the UTL/TSL, a fresh
+           break-up, or diagonal support within 1.5 ATR).
+    Each engine was verified point-in-time against its tutorial's own trades
+    (27/27, 23/23, 16/16 — see VERIFICATION.md). Never raises."""
+    out: List[str] = []
+    try:
+        if m.get("sr_grade") in ("A", "B"):
+            out.append("SR")
+        if m.get("pb2_state") in ("setup", "recovery"):
+            out.append("PB")
+        tf = [str(f) for f in (m.get("tl_flags") or [])]
+        d = m.get("tl_sup_dist_atr")
+        if (any(f.startswith(("at_UTL", "at_TSL", "fresh_break_up")) for f in tf)
+                or (isinstance(d, (int, float)) and d <= 1.5)):
+            out.append("TL")
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _lesson_confluence(m: dict) -> List[str]:
+    """Which of the four tutorial lessons' ENTRY criteria this pick meets with
+    QUALITY (USER-DIRECTED 2026-07-05: surface these as important). Stricter
+    than the Stage-4 gate on purpose - the gate asks "is the pick backed",
+    this asks "is it a textbook example":
+      L1 S&R       - protecting zone graded A (flip/shakeout/confluence live
+                     inside the grade),
+      L2 pullback  - valid setup/recovery with risk <= 6% (the tutorial's
+                     ideal band; vetoes already cleared by the state),
+      L3 trendline - at the governing UTL/TSL or a fresh line break-up,
+      L4 channel   - inside an UP channel whose read carries quality
+                     (fresh 2+1 projection or a top confluent with a
+                     horizontal zone - both era-consistent in ch_study).
+    Display + dashboard-ranking only; never a filter; the IBKR draft plan
+    ranking is untouched. Never raises."""
+    out: List[str] = []
+    try:
+        if m.get("sr_grade") == "A":
+            out.append("S&R")
+        r = m.get("pb2_risk_pct")
+        if m.get("pb2_state") in ("setup", "recovery") \
+                and isinstance(r, (int, float)) and r <= 6.0:
+            out.append("PB")
+        tf = [str(f) for f in (m.get("tl_flags") or [])]
+        if any(f.startswith(("at_UTL", "at_TSL", "fresh_break_up")) for f in tf):
+            out.append("TL")
+        cf = [str(f) for f in (m.get("ch_flags") or [])]
+        if m.get("ch_dir") == "up" and (
+                "fresh_projection" in cf or "top_sr_confluence" in cf):
+            out.append("CH")
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _lessons_line(m: dict) -> str:
+    """Gold 🎓 badge when >=3 of the four lessons agree on the entry - the
+    instructor's multiple-edge trading area, surfaced per the user's
+    2026-07-05 direction. Never raises - '' when below the bar."""
+    try:
+        ls = m.get("lesson_confluence")
+        if not ls or len(ls) < 3:
+            return ""
+        label = " + ".join(esc(str(x)) for x in ls)
+        tip = (f"LESSON CONFLUENCE {len(ls)}/4 - this entry is a textbook case of "
+               f"{len(ls)} tutorial lessons at once: "
+               + ", ".join({"S&R": "grade-A protecting zone (flip/shakeout/confluence)",
+                            "PB": "valid pullback-recovery, risk <= 6%",
+                            "TL": "at the governing trendline or fresh break-up",
+                            "CH": "up channel with a quality 2+1 rail read"}.get(str(x), str(x))
+                           for x in ls)
+               + ". Multiple independent edges stacking on one entry - the "
+                 "multiple-edge trading area. Boosts dashboard Top-Picks ranking; "
+                 "filters nothing; draft order plan unaffected.")
+        return (f"<div class='edge-line' title='{esc(tip)}'>🎓 "
+                f"<span style='color:#d3a04d;font-weight:700;'>LESSONS {len(ls)}/4"
+                f"</span> <span style='color:#d3a04d;'>{label}</span></div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _tl_quality(hist_df, entry, direction):
+    """Trendline-v2 features (madrry_trendlines). INFORMATIONAL SHADOW MODE
+    per WINNER_RADAR_CONTINUATION.md 2.7 — displayed and logged, filters
+    nothing, changes no printed plan. Never raises."""
+    if _tlv2 is None or hist_df is None or entry is None:
+        return {}
+    try:
+        out = _tlv2.analyze_lines(hist_df, entry, direction)
+        return out if isinstance(out, dict) and "tl_error" not in out else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _ch_quality(hist_df, entry, direction):
+    """Parallel-channel features (madrry_channels, tutorial #4). INFORMATIONAL
+    SHADOW MODE per WINNER_RADAR_CONTINUATION.md 2.7 — displayed and logged,
+    filters nothing, changes no printed plan, and does NOT count toward the
+    Stage-4 support gate. Never raises."""
+    if _chv is None or hist_df is None or entry is None:
+        return {}
+    try:
+        out = _chv.analyze_channels(hist_df, entry, direction)
+        return out if isinstance(out, dict) and "ch_error" not in out else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _atr_stop(entry, adr, direction):
+    """1.5×ADR stop, direction-aware. Long: below entry; short: above. None if unusable."""
+    if entry is None or adr is None:
+        return None
+    try:
+        entry = float(entry)
+        adr = float(adr)
+    except (TypeError, ValueError):
+        return None
+    if adr <= 0 or entry <= 0:
+        return None
+    if direction == "short":
+        return round(entry * (1 + _ATR_STOP_MULT * adr / 100.0), 2)
+    return round(entry * (1 - _ATR_STOP_MULT * adr / 100.0), 2)
+
+
+def _valid_until(data_date, n=_VALIDITY_TRADING_DAYS):
+    """The date `n` TRADING days after `data_date` (weekend + US-holiday aware). Returns None
+    if the calendar can't answer (out-of-range year) so the report simply omits the field —
+    never guesses a validity that could count a holiday."""
+    try:
+        import us_market_calendar as _cal
+        d = data_date
+        for _ in range(int(n)):
+            d = _cal.next_trading_day(d).isoformat()
+        return d
+    except Exception:
+        return None
+
+
+def _geo_line(m):
+    """Secondary info line for an atr_5day coil card: the structural level as "support" (real
+    market structure, no longer the printed stop) + the 5-day validity. Empty string for
+    tight_3day / pre-switch picks so their cards render byte-identically. All-`.get()` (no KeyError)."""
+    if m.get("stop_version") != "atr_5day":
+        return ""
+    bits = []
+    if m.get("stop_tight") is not None:
+        bits.append(f"support: {esc(m.get('stop_structural_reason') or 'struct')} ${m['stop_tight']}")
+    if m.get("valid_until"):
+        bits.append(f"valid until {esc(m['valid_until'])}")
+    if not bits:
+        return ""
+    return "<br><span class='stop-reason' style='color:var(--text-3);'>" + " · ".join(bits) + "</span>"
+
+
+def _apply_stop_regime(picks, data_date):
+    """Switch coil picks to the ratified ATR+5d geometry for sessions >= the switch session.
+    Idempotent (skips a pick already carrying stop_version) and mutates dicts IN PLACE so the
+    HTML cards, the IBKR order plan, and the ledger snapshot all see the same switched stop.
+    Pre-switch it only stamps stop_version='tight_3day' + the stable stop_tight/stop_atr fields,
+    changing nothing the report prints."""
+    switched = bool(data_date) and str(data_date) >= STOP_REGIME_SWITCH_SESSION
+    vu = _valid_until(data_date) if switched else None
+    for p in picks:
+        if not isinstance(p, dict) or p.get("stop_version"):
+            continue
+        direction = p.get("direction")
+        # always preserve the structural stop + expose the ATR stop (stable ledger fields)
+        p["stop_tight"] = p.get("stop")
+        p["stop_structural_reason"] = p.get("stop_reason")
+        a_stop = _atr_stop(p.get("entry"), p.get("adr"), direction)
+        if a_stop is not None:
+            p["stop_atr"] = a_stop
+        if switched and a_stop is not None:
+            entry = float(p["entry"])
+            p["stop"] = a_stop
+            p["risk_pct"] = (round((a_stop - entry) / entry * 100, 1) if direction == "short"
+                             else round((entry - a_stop) / entry * 100, 1))
+            p["stop_reason"] = "1.5×ADR"
+            p["valid_until"] = vu
+            p["stop_version"] = "atr_5day"
+        else:
+            p["stop_version"] = "tight_3day"
+    return picks
 
 
 # ----------------------------------------------------------------------------
@@ -2174,12 +2487,13 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             {"left": "close", "operation": "egreater", "right": "SMA200"},
             {"left": "market_cap_basic", "operation": "egreater", "right": 2000000000},
         ],
-        # NOTE on the 52-week bands (within 0-20% of the 52w high, >=50% above the
-        # 52w low): TradingView's /scan API rejects arithmetic on the RHS
-        # (price_52_week_low * 1.5 -> HTTP 400) and exposes no precomputed % field,
-        # so those two gates can't live in the server filter. They are enforced
-        # below in the parse loop from price_52_week_high / price_52_week_low —
-        # the net universe is identical to doing it server-side.
+        # NOTE on the 52-week band (within 0-20% of the 52w high): TradingView's
+        # /scan API rejects arithmetic on the RHS (price_52_week_high * 0.8 ->
+        # HTTP 400) and exposes no precomputed % field, so the gate can't live in
+        # the server filter; it is enforced below in the parse loop. (An earlier
+        # version of this note also claimed a ">=50% above the 52w low" gate —
+        # AUDIT 2026-07-04: no such gate exists anywhere in the loop and the
+        # report never advertised one; price_52_week_low is fetched but unused.)
         "columns": [
             "name", "close", "open", "volume", "average_volume_30d_calc",
             "EMA9", "EMA21", "SMA50", "SMA200",
@@ -2201,6 +2515,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
     n_universe = None          # TradingView totalCount matching the Stage-1 filter
     n_stage1 = 0               # rows actually fetched (range-capped at 5000)
     drop_missing = drop_proximity = drop_52w = drop_dead = 0
+    drop_unsupported = 0       # met a tier but no verified entry engine backs it
     n_aplus_raw = n_a_raw = n_aminus_raw = n_aminus_total = 0
 
     try:
@@ -2349,7 +2664,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 "mcap": c["mcap"], "float_shares": c["float_shares_raw"],
             }
             meta_score_data = calculate_meta_momentum_score(meta_input, hist_df)
-            meta_score = _ranking_meta_score(hist_df, meta_score_data["score"], market_modifier)
+            meta_score, _raw_scores = _ranking_meta_score_ex(hist_df, meta_score_data["score"], market_modifier)
             c["status_labels"].extend(meta_score_data["badges"])
             trendline_data = calculate_trendline_analysis(c["ticker"], hist_df)
 
@@ -2400,13 +2715,17 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 "mcap": c["mcap"], "float_shares": c["float_shares"], "sector": c["sector"],
                 "theme": c["theme"], "entry": c["entry"], "stop": c["stop"], "risk_pct": c["risk_pct"],
                 "stop_reason": c["stop_reason"], "status_labels": c["status_labels"],
-                "dist_52w": c["dist_52w"], "meta_score": meta_score,
+                "dist_52w": c["dist_52w"], "meta_score": meta_score, "section": "coil", **_raw_scores,
                 "meta_details": meta_score_data["details"], "trendline_data": trendline_data,
                 "spark": spark, "footprint": footprint,
                 "_ma_dist": (_ma_dist_data(hist_df["Close"].tolist())
                              if (hist_df is not None and len(hist_df) >= 2) else None),
                 "pb_entry": c["pb_entry"], "pb_stop": c["pb_stop"], "pb_risk": c["pb_risk"], "ema9": c["ema9"],
                 "below_20dma": below_20dma, "below_50dma": below_50dma, "days_since_high": days_since_high,
+                **_sr_quality(hist_df, c["entry"], "long"),
+                **_pb2_quality(hist_df),
+                **_tl_quality(hist_df, c["entry"], "long"),
+                **_ch_quality(hist_df, c["entry"], "long"),
             }
 
             is_tight_flag_3d = meta_score_data.get("is_flag", False)
@@ -2436,6 +2755,17 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             is_a = (is_tight_2d and min_dist <= 0.01 and vol_a and not is_a_plus)
             is_a_minus = (is_tight_1d and min_dist <= 0.02 and vol_aminus
                           and not is_a_plus and not is_a)
+
+            # Stage-3 support gate (USER-RATIFIED 2026-07-04): structural tier
+            # criteria alone no longer suffice — the pick must ALSO be backed by
+            # at least one verified entry engine (SR zones / pullback-recovery /
+            # trendlines v2). Names that met a tier but lack support are counted
+            # for the funnel and dropped from the tiers.
+            stock_data["edge_support"] = _edge_support(stock_data)
+            stock_data["lesson_confluence"] = _lesson_confluence(stock_data)
+            if (is_a_plus or is_a or is_a_minus) and not stock_data["edge_support"]:
+                drop_unsupported += 1
+                is_a_plus = is_a = is_a_minus = False
 
             if is_a_plus:
                 tier_a_plus.append(stock_data)
@@ -2478,6 +2808,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         "drop_dead": drop_dead,
         "drop_proximity": drop_proximity,
         "stage2_candidates": len(coil_candidates),
+        "drop_unsupported": drop_unsupported,
         "stage3_aplus": n_aplus_raw,
         "stage3_a": n_a_raw,
         "stage3_aminus": n_aminus_total,
@@ -2650,7 +2981,7 @@ def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
         vol = float(m.get("vol", 0)); avg_vol = float(m.get("avg_vol", 0)) or 1.0
         vol_pct = vol / avg_vol * 100
         high = float(m.get("high", close)); low = float(m.get("low", close))
-        day_range_pct = (high - low) / close * 100 if close else 0.0
+        day_range_pct = ((high / low) - 1.0) * 100 if low else 0.0   # High/Low basis, same as ADRP
 
         # 9/21 EMA from the history we already have (for the Dist-to-MA read).
         cl = pd.Series(C)
@@ -2679,7 +3010,7 @@ def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
             "mcap": (m.get("mcap", 0) or 0) / 1e9, "float_shares": m.get("float_shares", 0),
         }
         meta_score_data = calculate_meta_momentum_score(meta_input, df)
-        meta_score = _ranking_meta_score(df, meta_score_data["score"], market_modifier)
+        meta_score, _raw_scores = _ranking_meta_score_ex(df, meta_score_data["score"], market_modifier)
 
         spark = make_price_spark(df["Close"].tolist(), 40) if len(df) >= 2 else ""
         footprint = analyze_footprint(df)
@@ -2720,9 +3051,10 @@ def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
             "sector": m.get("sector", "N/A"), "theme": theme,
             "entry": entry, "stop": stop, "risk_pct": risk_pct,
             "stop_reason": "HTF · −1.5×ADR20", "status_labels": status_labels,
-            "dist_52w": dist_52w, "meta_score": meta_score,
+            "dist_52w": dist_52w, "meta_score": meta_score, "section": "coil", **_raw_scores,
             "meta_details": meta_score_data["details"], "trendline_data": trendline_data,
             "spark": spark, "footprint": footprint,
+            "_ma_dist": _ma_dist_data(cl.tolist()),   # HTF fires merge into A+; wire the vs-MA columns
             "pb_entry": None, "pb_stop": None, "pb_risk": None, "ema9": ema9,
             "below_20dma": below_20dma, "below_50dma": below_50dma,
             "days_since_high": days_since_high, "is_htf": True,
@@ -3041,6 +3373,7 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
                    "vol_pct": 100, "risk_pct": 5, "day_range_pct": adr,
                    "dist_52w": 0.0, "mcap": info["mcap"], "float_shares": 0}
         ms = calculate_meta_momentum_score(meta_in, df)
+        nh_meta, nh_raw = _ranking_meta_score_ex(df, ms["score"], 1.0)
         entry = round(high + 0.10, 2)
         stop = round(min(low, e21) - 0.05, 2)
         if stop >= entry:
@@ -3051,7 +3384,7 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
             "ticker": t, "close": close, "adr": adr, "perf_1m": round(info["p1m"], 1),
             "perf_3m": round(info["p3m"], 1), "base_weeks": fp.get("base_weeks", 0.0),
             "base_depth": fp.get("base_depth"), "higher_lows": fp.get("higher_lows", 0),
-            "ext9": fp.get("ext9"), "ext50": ext50, "meta_score": _ranking_meta_score(df, ms["score"], 1.0),
+            "ext9": fp.get("ext9"), "ext50": ext50, "meta_score": nh_meta, "section": "nh52", **nh_raw,
             "rs_rating": rs if isinstance(rs, int) else "N/A", "sector": info["sector"],
             "theme": get_theme(t, info["industry"]), "tag": tag, "label": label,
             "entry": entry, "stop": stop, "risk_pct": risk_pct,
@@ -3060,7 +3393,12 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
             "fp_badges": fp.get("badges", []),
             "persist_tier": rec["tier"], "persist_label": rec["label"],
             "nh_1m": rec["nh_1m"], "nh_3m": rec["nh_3m"], "weeks_3m": rec["weeks_3m"],
+            **_sr_quality(df, entry, "long"),
+            **_pb2_quality(df),
+            **_tl_quality(df, entry, "long"),
+            **_ch_quality(df, entry, "long"),
         })
+        rows[-1]["lesson_confluence"] = _lesson_confluence(rows[-1])
 
     # Persistent leaders first (relentless > persistent > none), then by M.E.T.A.
     p_rank = {"R": 2, "P": 1, "": 0}
@@ -3132,7 +3470,12 @@ def scan_nh52_pullbacks(history: dict, rs_map: dict, diag: Diagnostics,
     if not tickers:
         return [], []
     try:
-        hist_map = fetch_histories_batch(tickers, period="6mo", min_rows=50)
+        # 1y (was 6mo): every existing metric here is a trailing .iloc[-k<=60:]
+        # window and the spark takes the last 60 closes, so the display is
+        # byte-identical — the deeper frame exists so the pb2 read applies the
+        # SAME Stage-2 200MA gate as the coil/NH52 surfaces (a 6mo frame
+        # silently skipped it) and clears the detector's 120-bar floor.
+        hist_map = fetch_histories_batch(tickers, period="1y", min_rows=50)
     except Exception as exc:  # noqa: BLE001
         diag.error(f"52wk monitor (history fetch): {exc}")
         return [], []
@@ -3171,6 +3514,7 @@ def scan_nh52_pullbacks(history: dict, rs_map: dict, diag: Diagnostics,
             "rs_rating": rs if isinstance(rs, int) else "N/A",
             "status": status, "tag": tag,
             "spark": make_price_spark(cl.tolist(), 60) if len(cl) >= 2 else "",
+            **_pb2_quality(df),
         })
 
     order = {"GRN": 0, "RED": 1, "HOLD": 2}
@@ -3365,6 +3709,9 @@ def _parabolic_short_signal(hist_df: Optional[pd.DataFrame], ticker: str,
         "perf_1m": round(perf_1m, 1), "theme": theme, "sector": sector,
         "entry": entry, "stop": stop, "risk_pct": risk_pct,
         "target": target, "to_target": to_target,
+        **_sr_quality(hist_df, entry, "short"),
+        **_tl_quality(hist_df, entry, "short"),
+        **_ch_quality(hist_df, entry, "short"),
     }
 
 
@@ -3420,23 +3767,41 @@ def scan_parabolic_short(diag: Diagnostics) -> List[dict]:
 # REPORT BUILDING
 # ----------------------------------------------------------------------------
 PAGE_CSS = """
-    /* ---- design tokens (taste-skill pass 2026-06) ---- */
+    /* ---- design tokens ("calm editorial dark" 2026-07-05) ----
+       Hex values mirror the Python palette constants next to _MA_SPEC —
+       keep the two blocks in sync. */
     :root {
-      --bg:#0d1117; --surface:#161b22; --raised:#21262d; --line:#30363d;
-      --text:#c9d1d9; --text-2:#a8b2bc; --text-3:#8b949e;
-      --accent:#58a6ff; --accent-2:#79c0ff; --green:#3fb950; --yellow:#f2cc60; --red:#ff7b72;
-      --bd-green:#2ea043; --bd-yellow:#9e8420; --bd-red:#da3633; --bd-accent:#1f6feb;
-      --tint-green:rgba(63,185,80,.10); --tint-yellow:rgba(242,204,96,.10);
-      --tint-red:rgba(218,54,51,.10); --tint-accent:rgba(88,166,255,.10);
+      /* neutrals — warm graphite, no blue cast */
+      --bg:#111113; --surface:#18181b; --raised:#1f1f23; --hover:#232327;
+      --line:#26262b; --line-2:#36363c;
+      --text:#ececea; --text-2:#b4b4ae; --text-3:#82827c;
+      /* ONE accent — desaturated sky */
+      --accent:#8cb4d6; --accent-2:#aecfe8; --tint-accent:rgba(140,180,214,.08);
+      --tint-accent-2:rgba(140,180,214,.16);
+      /* semantic trio — trading load-bearing only */
+      --up:#54b87f;   --tint-up:rgba(84,184,127,.08);    --bd-up:#2f6b4b;
+      --down:#e06c6a; --tint-down:rgba(224,108,106,.08); --bd-down:#8a4341;
+      --warn:#d3a04d; --tint-warn:rgba(211,160,77,.08);  --bd-warn:#7d6231;
+      /* migration aliases — every legacy var() reference keeps working */
+      --green:var(--up); --red:var(--down); --yellow:var(--warn);
+      --bd-green:var(--bd-up); --bd-red:var(--bd-down); --bd-yellow:var(--bd-warn);
+      --bd-accent:var(--accent); --tint-green:var(--tint-up);
+      --tint-red:var(--tint-down); --tint-yellow:var(--tint-warn);
+      /* candlestick chart */
+      --candle-up:#54b87f; --candle-down:#e06c6a; --candle-doji:#82827c;
+      --vol-bar:#4a4a52; --vol-bar-up:rgba(84,184,127,.45);
+      --chart-grid:#232327; --chart-axis:#82827c;
+      --ma-fast:#8cb4d6; --ma-mid:#d3a04d; --ma-slow:#6b6b74;
       --mono:ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
       --fs-micro:0.6875rem; --fs-caption:0.75rem; --fs-table:0.8125rem;
-      --fs-body:0.875rem; --fs-title:1rem; --fs-h1:1.375rem;
+      --fs-body:0.875rem; --fs-title:1rem; --fs-h1:1.125rem;
+      --r-chip:3px; --r-card:6px;
     }
     body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,
                        'PingFang TC','Hiragino Sans TC','Microsoft JhengHei','Noto Sans TC',sans-serif;
            background-color:var(--bg); color:var(--text); margin:10px auto; max-width:1400px; padding:0 4px;
            line-height:1.5; font-variant-numeric:tabular-nums; -webkit-text-size-adjust:100%; }
-    h1 { color:var(--text); text-align:center; font-size:var(--fs-h1); text-transform:uppercase; letter-spacing:1px; margin-bottom:5px; }
+    h1 { color:var(--text-2); text-align:center; font-size:var(--fs-h1); font-weight:600; text-transform:uppercase; letter-spacing:.14em; margin-bottom:5px; }
     .header-sub { text-align:center; color:var(--text-3); font-size:var(--fs-caption); margin-top:0; margin-bottom:14px; }
 
     .runbar { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin:0 0 24px; }
@@ -3599,7 +3964,7 @@ PAGE_CSS = """
     .fund-tbl td:first-child { text-align:left; }
     .fund-tbl tr.fund-act td { color:var(--text); }
     .fund-tbl tr.fund-est td { color:var(--text-3); font-style:italic; }
-    .fund-up { color:#3fb950; } .fund-dn { color:#ff7b72; } .fund-flat, .fund-na { color:var(--text-3); }
+    .fund-up { color:#54b87f; } .fund-dn { color:#e06c6a; } .fund-flat, .fund-na { color:var(--text-3); }
     .fund-src { color:var(--text-3); font-size:10px; margin-top:3px; opacity:.7; }
     .spark { margin-top:4px; }
     .livebtn { cursor:pointer; font:inherit; border:1px solid var(--bd-accent) !important; color:var(--accent-2) !important; background:var(--tint-accent) !important; min-width:9.5em; min-height:32px; }
@@ -3610,10 +3975,10 @@ PAGE_CSS = """
 
     /* ---- interaction guards ---- */
     @media (hover:hover) {
-      tr:hover { background-color:#1f242c; }
-      .theme-chip:hover { background:#1f242c; }
+      tr:hover { background-color:var(--hover); }
+      .theme-chip:hover { background:var(--hover); }
       th.sortable:hover { color:var(--text); }
-      .livebtn:hover { background:#13314f !important; }
+      .livebtn:hover { background:var(--tint-accent-2) !important; }
     }
     @media (pointer:coarse) {
       .chip, .theme-chip { padding:9px 14px; }
@@ -3707,7 +4072,7 @@ async function refreshPrices(btn) {
       // Index symbols (^IXIC) are points, not dollars — match the server render.
       var unit = (e.getAttribute('data-tkr') || '').charAt(0) === '^' ? "" : "$";
       e.textContent = unit + px.toFixed(2);
-      e.style.color = px > snap ? "#3fb950" : (px < snap ? "#ff7b72" : "");
+      e.style.color = px > snap ? "#54b87f" : (px < snap ? "#e06c6a" : "");
       e.classList.remove('flag-up', 'flag-down');
       var entry = parseFloat(e.getAttribute('data-entry'));
       var stop = parseFloat(e.getAttribute('data-stop'));
@@ -3716,12 +4081,12 @@ async function refreshPrices(btn) {
     });
     if (stamp) {
       stamp.textContent = "🟢 LIVE " + new Date().toLocaleTimeString() + " · " + updated + "/" + tickers.length;
-      stamp.style.color = "#3fb950";
+      stamp.style.color = "#54b87f";
     }
   } catch (err) {
     if (stamp) {
       stamp.textContent = "⚠️ fetch failed — set a proxy (see notes)";
-      stamp.style.color = "#ff7b72";
+      stamp.style.color = "#e06c6a";
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🔄 Refresh Prices'; }
@@ -3736,6 +4101,7 @@ async function refreshPrices(btn) {
     var q = box ? box.value.trim().toUpperCase() : '';
     document.querySelectorAll('table tr').forEach(function (tr) {
       if (tr.querySelector('th')) return;
+      if (tr.closest('.fund-tbl')) return;   // never hide nested fundamentals mini-table rows
       var tickerCell = tr.querySelector('.ticker a, .ep-ticker a');
       var okQ = !q || (tickerCell && tickerCell.textContent.toUpperCase().indexOf(q) !== -1);
       var okT = !activeTheme || (tr.getAttribute('data-sector') === activeTheme);
@@ -3858,12 +4224,12 @@ async function refreshPrices(btn) {
       var on = multiSortMode;
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
       btn.textContent = on ? '⇅ Multi-sort: ON — tap columns to add' : '⇅ Multi-sort: off';
-      btn.style.background = on ? 'var(--accent,#3a86ff)' : 'var(--surface,#1b1b1b)';
-      btn.style.color = on ? 'var(--bg,#0b0b0b)' : 'var(--text,#eaeaea)';
-      btn.style.borderColor = 'var(--accent,#3a86ff)';
+      btn.style.background = on ? 'var(--accent,#8cb4d6)' : 'var(--surface,#18181b)';
+      btn.style.color = on ? 'var(--bg,#111113)' : 'var(--text,#ececea)';
+      btn.style.borderColor = 'var(--accent,#8cb4d6)';
     }
     btn.style.cssText = 'position:fixed;z-index:9999;right:12px;bottom:12px;padding:9px 13px;'
-      + 'border-radius:20px;border:1px solid var(--accent,#3a86ff);font:600 13px system-ui,-apple-system,sans-serif;'
+      + 'border-radius:20px;border:1px solid var(--accent,#8cb4d6);font:600 13px system-ui,-apple-system,sans-serif;'
       + 'box-shadow:0 2px 10px rgba(0,0,0,.45);cursor:pointer;opacity:.95;-webkit-tap-highlight-color:transparent;';
     paint();
     btn.addEventListener('click', function () { multiSortMode = !multiSortMode; paint(); });
@@ -3927,7 +4293,17 @@ async function refreshPrices(btn) {
     var keys = keysOf(table);
     if (!keys.length || keys.indexOf(null) >= 0) return;        // only fully-keyed tables
     var desired = order.filter(function (k) { return keys.indexOf(k) >= 0; });
-    keys.forEach(function (k) { if (desired.indexOf(k) < 0) desired.push(k); });  // unknown/new cols keep place
+    // A column added to the schema AFTER the user saved an order is absent from
+    // `order`; splice it in at its natural header position (relative to already-placed
+    // neighbours) instead of appending it last.
+    keys.forEach(function (k, hi) {
+      if (desired.indexOf(k) >= 0) return;
+      var pos = desired.length;
+      for (var j = 0; j < desired.length; j++) {
+        if (keys.indexOf(desired[j]) > hi) { pos = j; break; }
+      }
+      desired.splice(pos, 0, k);
+    });
     if (desired.length !== keys.length) return;
     var perm = desired.map(function (k) { return keys.indexOf(k); });
     if (perm.every(function (v, i) { return v === i; })) return;   // already in order
@@ -4083,7 +4459,7 @@ def _ind_badge(m: dict) -> str:
     pct = m.get("ind_rs")
     if not isinstance(pct, int):
         return ""
-    col = "#3fb950" if pct >= IND_RS_STRONG else ("#f2cc60" if pct >= 70 else "#8b949e")
+    col = "#54b87f" if pct >= IND_RS_STRONG else ("#d3a04d" if pct >= 70 else "#82827c")
     return (f"<br><span class='tag' style='border-color:{col};color:{col};' "
             f"title='Industry-group RS percentile (Fred6725)'>🏭 {esc(m.get('ind_name') or '')} {pct}</span>")
 
@@ -4095,29 +4471,283 @@ def _meta_details_block(meta_details: List[str]) -> str:
     return f"<details class='meta'><summary>▸ M.E.T.A. breakdown</summary><ul>{items}</ul></details>"
 
 
-def _trendline_block(tl_data: dict) -> str:
-    if not (tl_data and tl_data.get("has_data")):
+_SR_FLAG_LABELS = {
+    "flip": "flip", "shakeout": "shakeout", "wk_confl": "wkly",
+    "lowvol_pullback": "lo-vol", "blue_sky": "blue-sky",
+    "barrier_worn": "lid-worn", "prot_worn": "⚠️ worn",
+    "extended": "⚠️ extended", "no_headroom": "⚠️ lid",
+    "wide_zone_stop": "⚠️ wide", "no_protection": "⚠️ no-zone",
+}
+
+
+def _sr_tp_token(s: dict) -> str:
+    """Compact S/R grade chip for the Top Picks card. Never raises."""
+    try:
+        g = s.get("sr_grade")
+        if not g:
+            return ""
+        col = {"A": "#54b87f", "B": "#d3a04d"}.get(g, "#82827c")
+        rr = s.get("sr_rr_wk") if s.get("sr_rr_wk") is not None else s.get("sr_rr")
+        rr_txt = f" R:R {rr}" if rr is not None else ""
+        return (f" <span class=\"tp-meta\" style=\"color:{col};\" title=\"S/R entry quality "
+                f"(informational): zone structure grade per the S&R playbook\">📐 SR {esc(str(g))}{esc(rr_txt)}</span>")
+    except Exception:  # noqa: BLE001
         return ""
-    parts = []
-    if tl_data["utl"]["exists"] and tl_data["utl"]["distance_pct"] is not None:
-        d = tl_data["utl"]["distance_pct"]
-        if d <= 3:
-            parts.append(f"<span style='color:#3fb950;'>🎯 UTL: {d:.1f}%</span>")
-        elif d <= 8:
-            parts.append(f"<span style='color:#f2cc60;'>📐 UTL: {d:.1f}%</span>")
-    if tl_data["dtl"]["breakout"]:
-        parts.append("<span style='color:#ff7b72;font-weight:bold;'>🔥 DTL Break</span>")
-    elif tl_data["dtl"]["exists"] and tl_data["dtl"]["distance_pct"] is not None:
-        d = tl_data["dtl"]["distance_pct"]
-        if 0 < d <= 3:
-            parts.append(f"<span style='color:#f2cc60;'>⚡ Near DTL: {d:.1f}%</span>")
-    if tl_data["trl"]["exists"] and tl_data["trl"]["distance_pct"] is not None:
-        d = tl_data["trl"]["distance_pct"]
-        if 0 < d <= 50:
-            parts.append(f"<span style='color:#79c0ff;'>🎯 TRL: +{d:.1f}%</span>")
-    if not parts:
+
+
+def _sr_line(m: dict) -> str:
+    """One-line S/R entry-quality annotation under the trade plan (shadow mode:
+    informational only, filters nothing). Copies the never-raises cell pattern —
+    any problem returns '' so a bad pick can't take the report down."""
+    try:
+        g = m.get("sr_grade")
+        if not g:
+            return ""
+        col = {"A": "#54b87f", "B": "#d3a04d"}.get(g, "#82827c")
+        toks = []
+        for f in (m.get("sr_flags") or []):
+            f = str(f)
+            if f.startswith("ma_confl:"):
+                toks.append(esc(f.split(":", 1)[1]))
+            elif f in _SR_FLAG_LABELS:
+                lbl = _SR_FLAG_LABELS[f]
+                toks.append(f"<span class='warn-flag'>{esc(_strip_lead_emoji(lbl))}</span>"
+                            if lbl.startswith("⚠️") else esc(lbl))
+        bits = []
+        lo, hi = m.get("sr_prot_lo"), m.get("sr_prot_hi")
+        if lo is not None and hi is not None:
+            bits.append(esc(f"zone ${lo}–${hi}"))
+        if toks:
+            bits.append("+".join(toks))
+        if m.get("sr_stop_suggest") is not None:
+            bits.append(esc(f"zone-stop ${m['sr_stop_suggest']}"))
+        rr, rrw = m.get("sr_rr"), m.get("sr_rr_wk")
+        if rr is not None:
+            bits.append(esc(f"R:R {rr}" + (f" (wk {rrw})" if rrw is not None else "")))
+        tip = ("S/R entry quality (informational — filters nothing, printed stop unchanged): "
+               "grade from zone structure per the S&R playbook: flip (broken level changed sides), "
+               "shakeout (overshoot & reclaim), weekly-zone confluence, MA confluence, low-volume "
+               "pullback, headroom to the next opposing zone. zone-stop = suggested stop just "
+               "OUTSIDE the protecting zone; R:R measured to the first daily barrier (wk = to the "
+               "first weekly barrier).")
+        return (f"<div class='edge-line' title='{esc(tip)}'>📐 <span style='color:{col};"
+                f"font-weight:600;'>SR-entry {esc(str(g))}</span> · " + " · ".join(bits) + "</div>")
+    except Exception:  # noqa: BLE001
         return ""
-    return "<div style='font-size:var(--fs-caption);margin-bottom:6px;font-weight:500;'>" + " | ".join(parts) + "</div>"
+
+
+def _support_line(m: dict) -> str:
+    """Which verified entry engines back this pick (the Stage-4 gate). Never
+    raises - '' when the key is absent (HVE/UR/HTF rows, older snapshots)."""
+    try:
+        eng = m.get("edge_support")
+        if not eng:
+            return ""
+        names = {"SR": "S/R zone", "PB": "pullback-recovery", "TL": "trendline"}
+        label = " + ".join(esc(str(e)) for e in eng)
+        tip = ("Backed by: " + ", ".join(names.get(str(e), str(e)) for e in eng)
+               + " — the Stage-4 entry-engine gate (each engine verified on its "
+                 "tutorial's own trades; details in the lines below)")
+        return (f"<div class='edge-line' title='{esc(tip)}'>🧩 "
+                f"<span style='color:#54b87f;font-weight:600;'>backed by {label}</span></div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _tl_line(m: dict, short: bool = False) -> str:
+    """One-line trendline-v2 annotation (shadow mode, filters nothing).
+    Never raises - returns '' on any problem. short=True relabels the overhead
+    line as the RISK side (a '+7%' there is adverse move, not headroom)."""
+    try:
+        sup_k, res_k = m.get("tl_sup_kind"), m.get("tl_res_kind")
+        if not sup_k and not res_k:
+            return ""
+        flags = [str(f) for f in (m.get("tl_flags") or [])]
+        bits = []
+        if sup_k:
+            tf = "" if m.get("tl_sup_tf") == "D" else " (wk)"
+            tail = "below (cover target)" if short else "below"
+            bits.append(esc(f"{sup_k}{tf} ${m.get('tl_sup_at')} "
+                            f"{m.get('tl_sup_dist_atr')}ATR {tail}"))
+        if res_k:
+            tf = "" if m.get("tl_res_tf") == "D" else " (wk)"
+            lbl = (f"risk-to-line +{m.get('tl_res_headroom_pct')}%" if short
+                   else f"+{m.get('tl_res_headroom_pct')}%")
+            bits.append(esc(f"{res_k}{tf} ${m.get('tl_res_at')} {lbl}"))
+        show = [f for f in flags if f.startswith(("at_", "fresh_break", "sup_steep",
+                                                  "sup_worn", "res_worn", "sup_shakeout"))]
+        if show:
+            bits.append(esc("+".join(f.replace("sup_steep", "⚠steep-line")
+                                     .replace("sup_worn", "⚠line-worn") for f in show)))
+        anch = []
+        if m.get("tl_sup_anchors"):
+            anch.append(f"{m.get('tl_sup_kind')} drawn through "
+                        + " & ".join(str(a) for a in m["tl_sup_anchors"]))
+        if m.get("tl_res_anchors"):
+            anch.append(f"{m.get('tl_res_kind')} drawn through "
+                        + " & ".join(str(a) for a in m["tl_res_anchors"]))
+        tip = ("Trendline read (informational - filters nothing): nearest governing "
+               "diagonal support (UTL/TSL) and overhead line (TRL/DTL = the diagonal "
+               "profit-target/lid), two-point swing construction with zone semantics; "
+               "steep lines are weak; (wk) = weekly timeframe dominates daily. "
+               + ("; ".join(anch) + ". " if anch else "")
+               + "Flags: " + (", ".join(flags) if flags else "none"))
+        return (f"<div class='edge-line' title='{esc(tip)}'>📉 "
+                f"<span style='color:#aecfe8;font-weight:600;'>TL</span> · "
+                + " · ".join(bits) + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+# Label valence follows the EVIDENCE, not the tutorial's swing-trading frame:
+# ch_study (n=12,871, era-consistent) shows near_top longs OUTPERFORM in this
+# breakout universe (+0.096 vs +0.046) - an entry trigger at the lid is the
+# lid breaking, not a swing at the rail - so no warning styling there. Only
+# fake_break_watch keeps the warning (explicit trap, no contrary evidence).
+_CH_FLAG_LABELS = {
+    "near_top": "at-channel-top",
+    "near_bottom": "at-channel-bottom",
+    "fresh_projection": "fresh-rail",
+    "proj_worn": "rail-worn",
+    "steep": "steep-channel",
+    "counter_trend": "counter-trend",
+    "fake_break_watch": "⚠️fake-break-watch",
+    "top_overshoot_recent": "top-shakeout",
+    "bot_overshoot_recent": "bottom-shakeout",
+    "top_sr_confluence": "top=SR-zone",
+    "higher_tf": "",          # already shown as (wk)
+}
+
+
+def _ch_line(m: dict, short: bool = False) -> str:
+    """One-line parallel-channel annotation (tutorial #4, shadow mode, filters
+    nothing, NOT in the Stage-4 gate). Never raises - '' on any problem.
+    short=True relabels the rails: the bottom is the cover map, the top is
+    the risk side."""
+    try:
+        d = m.get("ch_dir")
+        flags = [str(f) for f in (m.get("ch_flags") or [])]
+        if not d:
+            # a fresh channel break can outlive the channel itself (no alive
+            # governing structure left) - the break IS the event, show it
+            ev = [f for f in flags
+                  if f.startswith("fresh_ch_break") or f == "fake_break_watch"]
+            if not ev:
+                return ""
+            toks = []
+            for f in ev:
+                lbl = _CH_FLAG_LABELS.get(f, f)
+                toks.append(f"<span class='warn-flag'>{esc(_strip_lead_emoji(lbl))}</span>"
+                            if lbl.startswith("⚠️") else esc(lbl))
+            tip = ("Parallel channel break event (informational - filters nothing): "
+                   "a rail was decisively broken within the last 3 bars and no alive "
+                   "channel contains the entry. An upside break OUT of a down channel "
+                   "is squeeze bait until proven (fake-break-watch). Flags: "
+                   + ", ".join(flags))
+            return (f"<div class='edge-line' title='{esc(tip)}'>📦 "
+                    f"<span style='color:#d3a04d;font-weight:600;'>CH break</span> · "
+                    + "+".join(toks) + "</div>")
+        tf = "" if m.get("ch_tf") == "D" else ",wk"
+        col = "#54b87f" if d == "up" else "#f85149"
+        bits = [f"<span style='color:{col};font-weight:600;'>CH({esc(str(d))}{tf})</span>"]
+        if m.get("ch_pos_pct") is not None:
+            bits.append(esc(f"pos {m['ch_pos_pct']}%"))
+        if m.get("ch_top_at") is not None:
+            lbl = (f"risk-to-rail +{m.get('ch_top_headroom_pct')}%" if short
+                   else f"+{m.get('ch_top_headroom_pct')}%")
+            bits.append(esc(f"top ${m['ch_top_at']} {lbl}"))
+        if m.get("ch_bot_at") is not None:
+            tail = "cover rail" if short else "floor"
+            bits.append(esc(f"{tail} ${m['ch_bot_at']} {m.get('ch_bot_dist_atr')}ATR"))
+        toks = []
+        for f in flags:
+            lbl = _CH_FLAG_LABELS.get(f, f if f.startswith("fresh_ch_break") else "")
+            if not lbl:
+                continue
+            toks.append(f"<span class='warn-flag'>{esc(_strip_lead_emoji(lbl))}</span>"
+                        if lbl.startswith("⚠️") else esc(lbl))
+        if toks:
+            bits.append("+".join(toks))
+        drawn = ""
+        if m.get("ch_anchors"):
+            drawn = (f"Drawn: {esc(str(m.get('ch_base_kind') or 'base'))} through "
+                     + " & ".join(str(a) for a in m["ch_anchors"])
+                     + (f", copied parallel through {m.get('ch_proj_anchor')}"
+                        if m.get("ch_proj_anchor") else "") + ". ")
+        tip = ("Parallel channel read (informational - filters nothing, not part of "
+               "the Stage-4 gate): 2+1 construction (a two-anchor trendline copied "
+               "through one opposite swing pivot); rails are zones; the projected "
+               "rail is most reliable on its first touches and wears out from the "
+               "3rd on. " + drawn
+               + "The channel top is the swing take-profit rail - but in this "
+               "breakout universe at-the-lid entries have historically OUTPERFORMED "
+               "(era-consistent, ch_study n=12.9k): the trigger at the lid is the "
+               "lid breaking. Flags: "
+               + (", ".join(flags) if flags else "none"))
+        return (f"<div class='edge-line' title='{esc(tip)}'>📦 "
+                + " · ".join(bits) + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _pb2_line(m: dict) -> str:
+    """One-line pullback-recovery annotation (shadow mode, filters nothing).
+    Never raises - returns '' on any problem."""
+    try:
+        st = m.get("pb2_state")
+        if not st:
+            return ""
+        col = "#54b87f" if st == "recovery" else "#aecfe8"
+        flags = [str(f) for f in (m.get("pb2_flags") or [])]
+        tip = ("Pullback-recovery read (informational - filters nothing, printed plan "
+               "unchanged): Stage-2 name in a short natural pullback whose mini downtrend "
+               "line is breaking (recovery) or pending (setup - the trigger is tomorrow's "
+               "buy-stop level). Stop goes under the prior low; risk capped at 10%. "
+               "Flags: " + (", ".join(flags) if flags else "none"))
+        parts = [f"🪃 <span style='color:{col};font-weight:600;'>PB-{esc(str(st))}</span>"]
+        if m.get("pb2_trigger") is not None:
+            parts.append(esc(f"trig ${m['pb2_trigger']}"))
+        if m.get("pb2_stop") is not None:
+            parts.append(esc(f"stop ${m['pb2_stop']}"))
+        if m.get("pb2_risk_pct") is not None:
+            parts.append(esc(f"risk {m['pb2_risk_pct']}%"))
+        if flags:
+            parts.append(esc("+".join(flags)))
+        return f"<div class='edge-line' title='{esc(tip)}'>" + " · ".join(parts) + "</div>"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _trendline_block(m: dict) -> str:
+    """Setup-column trendline badges — REPLACED (USER-RATIFIED 2026-07-04) to
+    read the verified v2 engine (tl_* keys) instead of the legacy
+    calculate_trendline_analysis lines, which carried no validity/break
+    checking (a line price had crashed through still displayed). The legacy
+    trendline_data stays computed+persisted for snapshot continuity only.
+    Never raises - '' on anything unexpected."""
+    try:
+        parts = []
+        flags = [str(f) for f in (m.get("tl_flags") or [])]
+        d_sup = m.get("tl_sup_dist_atr")
+        sup_k = m.get("tl_sup_kind")
+        if sup_k and isinstance(d_sup, (int, float)):
+            if any(f.startswith(("at_UTL", "at_TSL")) for f in flags):
+                parts.append(f"<span style='color:#54b87f;'>🎯 {esc(str(sup_k))}: {d_sup:.1f} ATR</span>")
+            elif d_sup <= 3:
+                parts.append(f"<span style='color:#d3a04d;'>📐 {esc(str(sup_k))}: {d_sup:.1f} ATR</span>")
+        if any(f.startswith("fresh_break_up") for f in flags):
+            parts.append("<span style='color:#e06c6a;font-weight:bold;'>🔥 Line Break ↑</span>")
+        hr = m.get("tl_res_headroom_pct")
+        res_k = m.get("tl_res_kind")
+        if res_k and isinstance(hr, (int, float)) and 0 < hr <= 50:
+            worn = " (worn)" if "res_worn" in flags else ""
+            parts.append(f"<span style='color:#aecfe8;'>🎯 {esc(str(res_k))}: +{hr:.1f}%{esc(worn)}</span>")
+        if not parts:
+            return ""
+        return ("<div style='font-size:var(--fs-caption);margin-bottom:6px;font-weight:500;'>"
+                + " | ".join(parts) + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
@@ -4153,6 +4783,16 @@ def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
         f"</div><div class='fn-count'><span style='color:var(--green);'>A+ {n_aplus}</span> <span class='fn-dot'>·</span> "
         f"<span style='color:var(--yellow);'>A {n_a}</span> <span class='fn-dot'>·</span> "
         f"<span style='color:var(--red);'>A− {n_aminus}</span></div></div>"
+        "<div class='fn-stage'><div class='fn-body'>"
+        "<div class='fn-title'>Stage 4 · Entry-engine gate <span class='fn-sub'>· verified on each tutorial's own trades — a tier pick must be backed by ≥1 of:</span></div>"
+        "<div class='fn-crit'>🧩 <b>SR</b> — S/R zones with memory: flip detection, shakeout/overshoot traps, multi-TF confluence, "
+        "entry = low-volume retest of a flipped zone, stop outside the zone (grade A/B) · "
+        "<b>PB</b> — pullback-recovery buy (拉回買入法, 8 rules): Stage-2 name, short natural pullback, buy the break "
+        "of the mini downtrend line, stop under the prior low, risk ≤10% · "
+        "<b>TL</b> — trendlines (UTL/TSL/TRL/DTL, two-point construction, zone semantics, steepness = weakness, "
+        "micro-adjustment, diagonal targets): at the governing support line, a fresh break-up, or support ≤1.5 ATR</div>"
+        f"</div><div class='fn-count'>{_n(fn.get('drop_unsupported')) if fn.get('drop_unsupported') is not None else '–'}"
+        "<span class='fn-sub'> dropped</span></div></div>"
         "</div>"
     )
 
@@ -4166,24 +4806,24 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
     out = [
         f'<div class="section-title {bg_class}">{esc(title)}{sub_html}</div>',
         '<div class="table-container"><table data-schema="coil">',
-        "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP)'>ADR</th>"
+        "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP, or an equivalent 20-day calc on the external/HTF tabs)'>ADR</th>"
         "<th data-col='rs'>RS</th><th data-col='meta'>M.E.T.A.</th><th class='num' data-col='ants'>ANTS</th>"
         + _MA_YOY_HEADERS +
         "<th data-col='status'>Status (Vol &amp; MA)</th></tr>",
     ]
     for m in matches:
-        risk_color = "#3fb950" if m["risk_pct"] <= 4.0 else ("#f2cc60" if m["risk_pct"] <= 6.0 else "#ff7b72")
+        risk_color = "#54b87f" if m["risk_pct"] <= 4.0 else ("#d3a04d" if m["risk_pct"] <= 6.0 else "#e06c6a")
         vol_color = "good" if m["vol_pct"] <= 55 else ("warn" if m["vol_pct"] <= 75 else "bad")
         dist_color = "good" if m["dist_pct"] <= 4.0 else ("warn" if m["dist_pct"] <= 8.0 else "bad")
         dist52_color = "good" if m["dist_52w"] <= 25 else "bad"
 
         meta_score = m.get("meta_score", 0)
         if meta_score >= 70:
-            ms_color, ms_bg = "#ff7b72", "var(--tint-red)"
+            ms_color, ms_bg = "#e06c6a", "var(--tint-red)"
         elif meta_score >= 50:
-            ms_color, ms_bg = "#f2cc60", "var(--tint-yellow)"
+            ms_color, ms_bg = "#d3a04d", "var(--tint-yellow)"
         else:
-            ms_color, ms_bg = "#8b949e", "#21262d"
+            ms_color, ms_bg = "#82827c", "#1f1f23"
 
         # Binary flags collapse into ONE muted token line (taste pass: badge
         # stacks were the main row-height/noise driver). 🚩 HTF labels stay
@@ -4204,7 +4844,7 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
                 edge_tokens.append(esc(_strip_lead_emoji(b)))
         status_html = "".join(boxed)
         fp_html = f"<div class='edge-line'>{' · '.join(edge_tokens)}</div>" if edge_tokens else ""
-        trendline_html = _trendline_block(m.get("trendline_data", {}))
+        trendline_html = _trendline_block(m)
         rs_val = m.get("rs_rating", "N/A")
         rs_asof = m.get("rs_asof")
         rs_mark = (f"<span title='carried-forward from {esc(rs_asof)} — not in today&#39;s RS source' "
@@ -4220,8 +4860,8 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
         a_3m_peak = m.get("ants_3m_peak", 0)
         a_3m_days = m.get("ants_3m_days", 0)
         if m.get("ants_ok") and a_lvl > 0:
-            _ants_col = {1: "#79c0ff", 2: "#f2cc60", 3: "#f2cc60",
-                         4: "#3fb950", 5: "#2ea043"}.get(a_lvl, "#8b949e")
+            _ants_col = {1: "#aecfe8", 2: "#d3a04d", 3: "#d3a04d",
+                         4: "#54b87f", 5: "#2f6b4b"}.get(a_lvl, "#82827c")
             _ants_wt = "700" if a_lvl >= 4 else "500"
             _ants_suffix = (" ·%db" % a_chain) if a_chain else ""
             _ants_title = "ANTS L%d %s" % (a_lvl, m.get("ants_label", ""))
@@ -4236,7 +4876,7 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
         _ants_3m_html = ""
         if m.get("ants_ok") and a_3m_peak >= 1:
             _p3lbl = _ANTS_LABELS.get(a_3m_peak, "")
-            _p3col = "#3fb950" if a_3m_peak >= 4 else ("#f2cc60" if a_3m_peak >= 2 else "#8b949e")
+            _p3col = "#54b87f" if a_3m_peak >= 4 else ("#d3a04d" if a_3m_peak >= 2 else "#82827c")
             _ants_3m_html = ("<div style='font-size:var(--fs-micro);color:%s;' "
                              "title='Peak ANTS level in the last ~3 months over %d active days'>"
                              "3M %s·%dd</div>" % (_p3col, a_3m_days, esc(_p3lbl), a_3m_days))
@@ -4254,21 +4894,21 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
         rs_badge = ""
         if m.get("rs_ok"):
             if m.get("rs_nh_before_price"):
-                rs_badge = ("<div class='fp-badge' style='border-color:#79c0ff;color:#79c0ff;font-weight:bold;' "
+                rs_badge = ("<div class='fp-badge' style='border-color:#aecfe8;color:#aecfe8;font-weight:bold;' "
                             "title='RS line near its 1-year high while price has NOT broken out — stealth relative-strength leader'>"
                             "🔵 RS Leader ‹ Px</div>")
             elif m.get("rs_new_high"):
-                rs_badge = ("<div class='fp-badge' style='border-color:#79c0ff;color:#79c0ff;' "
+                rs_badge = ("<div class='fp-badge' style='border-color:#aecfe8;color:#aecfe8;' "
                             "title='RS line (close/SPY) at or near its 1-year high — relative-strength leader vs the market'>🔵 RS Leader</div>")
 
         # 52-week-high leadership badges: at a fresh high today + persistence
         # (recurring new highs over the last 13 weeks).
         nh_html = ""
         if m.get("at_high"):
-            nh_html += "<div class='fp-badge' style='border-color:#3fb950;color:#3fb950;'>🆕 At 52W High</div>"
+            nh_html += "<div class='fp-badge' style='border-color:#54b87f;color:#54b87f;'>🆕 At 52W High</div>"
         if m.get("persist_tier"):
             _star = "⭐⭐" if m["persist_tier"] == "R" else "⭐"
-            _pc = "#f2cc60" if m["persist_tier"] == "R" else "#f2cc60"
+            _pc = "#d3a04d" if m["persist_tier"] == "R" else "#d3a04d"
             nh_html += (f"<div class='fp-badge' style='border-color:{_pc};color:{_pc};font-weight:bold;'>"
                         f"{_star} {esc(m.get('persist_label',''))} · {m.get('nh_3m',0)}NH/3M ({m.get('weeks_3m',0)}w)</div>")
 
@@ -4276,7 +4916,7 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
         pb_html = ""
         pb_risk = m.get("pb_risk")
         if pb_risk is not None:
-            pbc = "#3fb950" if pb_risk <= 4.0 else ("#f2cc60" if pb_risk <= 6.0 else "#ff7b72")
+            pbc = "#54b87f" if pb_risk <= 4.0 else ("#d3a04d" if pb_risk <= 6.0 else "#e06c6a")
             pb_html = (
                 "<div class='entry-box' style='border-color:var(--bd-accent);background:var(--tint-accent);margin-top:6px;'>"
                 "<span style='color:var(--text-3);font-weight:500;font-size:var(--fs-micro);'>PULLBACK</span><br>"
@@ -4285,6 +4925,7 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
                 f"<span style='color:{pbc};font-size:var(--fs-caption);font-family:var(--mono);'>Risk: {pb_risk}%</span></div>"
             )
 
+        geo_line = _geo_line(m)
         out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
             <td class="ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
             <td data-sort="{m['risk_pct']}">
@@ -4292,9 +4933,15 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
                     <span style="color:var(--text-3);font-weight:500;font-size:var(--fs-micro);">BREAKOUT</span><br>
                     <span class="entry-text">Buy: ${m['entry']}</span><br>
                     <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">({esc(m['stop_reason'])})</span></span><br>
-                    <span style="color:{risk_color};font-size:var(--fs-caption);font-family:var(--mono);">Risk: {m['risk_pct']}%</span>
+                    <span style="color:{risk_color};font-size:var(--fs-caption);font-family:var(--mono);">Risk: {m['risk_pct']}%</span>{geo_line}
                 </div>
                 {pb_html}
+                {_lessons_line(m)}
+                {_support_line(m)}
+                {_sr_line(m)}
+                {_pb2_line(m)}
+                {_tl_line(m)}
+                {_ch_line(m)}
             </td>
             <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])}{spark_html}<br>{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}</td>
             <td class="num" data-sort="{m['adr']}">{m['adr']}%</td>
@@ -4441,11 +5088,11 @@ def _ext_meta_cell(m: dict) -> str:
     """M.E.T.A. column cell (score badge + expandable details), coil-identical."""
     score = m.get("_meta_score", 0)
     if score >= 70:
-        col, bg = "#ff7b72", "var(--tint-red)"
+        col, bg = "#e06c6a", "var(--tint-red)"
     elif score >= 50:
-        col, bg = "#f2cc60", "var(--tint-yellow)"
+        col, bg = "#d3a04d", "var(--tint-yellow)"
     else:
-        col, bg = "#8b949e", "#21262d"
+        col, bg = "#82827c", "#1f1f23"
     return (f'<td data-sort="{score}">'
             f'<span style="font-size:var(--fs-body);font-weight:600;font-family:var(--mono);'
             f'color:{col};background:{bg};padding:4px 8px;border-radius:4px;border:1px solid {col};">{score}</span>'
@@ -4459,7 +5106,7 @@ def _ext_ants_cell(m: dict) -> str:
     a_3m_peak = m.get("ants_3m_peak", 0)
     a_3m_days = m.get("ants_3m_days", 0)
     if m.get("ants_ok") and a_lvl > 0:
-        _col = {1: "#79c0ff", 2: "#f2cc60", 3: "#f2cc60", 4: "#3fb950", 5: "#2ea043"}.get(a_lvl, "#8b949e")
+        _col = {1: "#aecfe8", 2: "#d3a04d", 3: "#d3a04d", 4: "#54b87f", 5: "#2f6b4b"}.get(a_lvl, "#82827c")
         _wt = "700" if a_lvl >= 4 else "500"
         _suffix = (" ·%db" % a_chain) if a_chain else ""
         _title = "ANTS L%d %s" % (a_lvl, m.get("ants_label", ""))
@@ -4472,7 +5119,7 @@ def _ext_ants_cell(m: dict) -> str:
     p3 = ""
     if m.get("ants_ok") and a_3m_peak >= 1:
         _p3lbl = _ANTS_LABELS.get(a_3m_peak, "")
-        _p3col = "#3fb950" if a_3m_peak >= 4 else ("#f2cc60" if a_3m_peak >= 2 else "#8b949e")
+        _p3col = "#54b87f" if a_3m_peak >= 4 else ("#d3a04d" if a_3m_peak >= 2 else "#82827c")
         p3 = ("<div style='font-size:var(--fs-micro);color:%s;' title='Peak ANTS level in the last ~3 months "
               "over %d active days'>3M %s·%dd</div>" % (_p3col, a_3m_days, esc(_p3lbl), a_3m_days))
     if m.get("ants_ok") and (a_lvl > 0 or a_3m_peak > 0):
@@ -4487,18 +5134,18 @@ def _ext_leader_badges(m: dict) -> str:
     rs_badge = ""
     if m.get("rs_ok"):
         if m.get("rs_nh_before_price"):
-            rs_badge = ("<div class='fp-badge' style='border-color:#79c0ff;color:#79c0ff;font-weight:bold;' "
+            rs_badge = ("<div class='fp-badge' style='border-color:#aecfe8;color:#aecfe8;font-weight:bold;' "
                         "title='RS line near its 1-year high while price has NOT broken out — stealth relative-strength leader'>"
                         "🔵 RS Leader ‹ Px</div>")
         elif m.get("rs_new_high"):
-            rs_badge = ("<div class='fp-badge' style='border-color:#79c0ff;color:#79c0ff;' "
+            rs_badge = ("<div class='fp-badge' style='border-color:#aecfe8;color:#aecfe8;' "
                         "title='RS line (close/SPY) at or near its 1-year high — relative-strength leader vs the market'>🔵 RS Leader</div>")
     nh_html = ""
     if m.get("at_high"):
-        nh_html += "<div class='fp-badge' style='border-color:#3fb950;color:#3fb950;'>🆕 At 52W High</div>"
+        nh_html += "<div class='fp-badge' style='border-color:#54b87f;color:#54b87f;'>🆕 At 52W High</div>"
     if m.get("persist_tier"):
         _star = "⭐⭐" if m["persist_tier"] == "R" else "⭐"
-        nh_html += (f"<div class='fp-badge' style='border-color:#f2cc60;color:#f2cc60;font-weight:bold;'>"
+        nh_html += (f"<div class='fp-badge' style='border-color:#d3a04d;color:#d3a04d;font-weight:bold;'>"
                     f"{_star} {esc(m.get('persist_label',''))} · {m.get('nh_3m',0)}NH/3M ({m.get('weeks_3m',0)}w)</div>")
     return nh_html + rs_badge
 
@@ -4548,7 +5195,8 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
     asof = latest[len("buy_list_"):-len(".json")]
     try:
         rows = _read_json_retry(os.path.join(MINERVINI_DIR, latest))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        log.error("Minervini feed unreadable (%s): %r", latest, exc)
         return _ext_empty(f"Minervini engine: could not read {latest}."), 0
     if not rows:
         return _ext_empty(f"Minervini engine: 0 picks on {asof}."), 0
@@ -4564,7 +5212,7 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
         f"{len(rows)} names · trade plan from <code>minervini_engine</code> · "
         f"M.E.T.A./ANTS/sparkline (daily close · 60d + 10·20·50 MA + volume)/leader badges computed by MADRRY</div>",
         "<div class='table-container'><table data-schema='minervini'>",
-        "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP)'>ADR</th>"
+        "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP, or an equivalent 20-day calc on the external/HTF tabs)'>ADR</th>"
         "<th data-col='rs'>RS</th><th data-col='meta'>M.E.T.A.</th><th class='num' data-col='ants'>ANTS</th>"
         + _MA_YOY_HEADERS +
         "<th data-col='status'>Status (VCP &amp; Vol)</th></tr>",
@@ -4573,13 +5221,13 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
         tk = m.get("ticker", "")
         pivot, stop, close = m.get("pivot"), m.get("stop"), m.get("last_close")
         risk = round((m.get("stop_frac") or 0.0) * 100, 1)
-        risk_color = "#3fb950" if risk <= 4.0 else ("#f2cc60" if risk <= 8.0 else "#ff7b72")
+        risk_color = "#54b87f" if risk <= 4.0 else ("#d3a04d" if risk <= 8.0 else "#e06c6a")
         status = (m.get("status") or "").replace("_", " ")
         triggered = "TRIGGER" in status
-        st_color = "#3fb950" if triggered else "#f2cc60"
+        st_color = "#54b87f" if triggered else "#d3a04d"
         st_bg = "var(--tint-green)" if triggered else "var(--tint-yellow)"
         vcp = m.get("vcp_score", 0) or 0
-        vc_color = "#ff7b72" if vcp >= 85 else ("#f2cc60" if vcp >= 75 else "#8b949e")
+        vc_color = "#e06c6a" if vcp >= 85 else ("#d3a04d" if vcp >= 75 else "#82827c")
         rs = m.get("rs", "N/A")
         adr = m.get("adr", 0)
         sector = m.get("sector", "")
@@ -4641,7 +5289,11 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
     limit=None shows ALL candidates (default); pass an int to cap the display."""
     try:
         data = _read_json_retry(TRILOGY_RTB)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        # Surface the real errno — a background launchd run failing here on a file that
+        # a manual run reads fine is the TCC/Full-Disk-Access signature (PermissionError),
+        # NOT the write-race the retry guards. Logging it makes the cause visible.
+        log.error("Trilogy feed unreadable (%s): %r", TRILOGY_RTB, exc)
         return _ext_empty("Trilogy: ready_to_buy.json not found / unreadable."), 0
     cands = data.get("candidates", []) or []
     asof = data.get("asof", "")
@@ -4673,7 +5325,7 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
         + _MA_YOY_HEADERS +
         "<th data-col='status'>Status</th></tr>",
     ]
-    grade_col = {"A": "#3fb950", "B": "#79c0ff", "C": "#f2cc60", "D": "#ff7b72", "F": "#ff7b72"}
+    grade_col = {"A": "#54b87f", "B": "#aecfe8", "C": "#d3a04d", "D": "#e06c6a", "F": "#e06c6a"}
     for c in shown:
         tk = c.get("ticker", "")
         ideal = c.get("ideal_buy")
@@ -4685,9 +5337,9 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
             risk = round((ideal - stop) / ideal * 100, 1)
         else:
             risk = 0.0
-        risk_color = "#3fb950" if risk <= 8.0 else ("#f2cc60" if risk <= 12.0 else "#ff7b72")
+        risk_color = "#54b87f" if risk <= 8.0 else ("#d3a04d" if risk <= 12.0 else "#e06c6a")
         grade = c.get("grade", "")
-        gcol = grade_col.get(grade, "#8b949e")
+        gcol = grade_col.get(grade, "#82827c")
         likeness = c.get("likeness_q")
         likeness_line = (f"<br><span style='font-size:var(--fs-micro);color:var(--text-3);'>likeness Q{likeness}</span>"
                          if likeness is not None else "")
@@ -4708,7 +5360,7 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
         mtail = c.get("monster_tail")
         mdec = c.get("monster_tail_decile")
         detail = c.get("detail", "")
-        st_color = "#ff7b72" if gated else ("#3fb950" if "BUYING RANGE" in status else "#8b949e")
+        st_color = "#e06c6a" if gated else ("#54b87f" if "BUYING RANGE" in status else "#82827c")
         mtail_line = (f"<br><span class='fp-badge fp-warn'>~MONSTER-TAIL d{mdec}</span>" if mtail else "")
         range_txt = f" <span class='stop-reason'>(top ${top})</span>" if top is not None else ""
         price_cell = _lp(tk, close, entry=ideal, stop=stop) if close is not None else "—"
@@ -4751,17 +5403,17 @@ def generate_hve_table(ep_matches: List[dict]) -> str:
            '<div class="table-container"><table>',
            "<tr><th>Ticker</th><th>Price &amp; Gap</th><th>Narrative &amp; Conviction</th><th>QM Trade Plan</th></tr>"]
     if not ep_matches:
-        out.append("<tr><td colspan='4' style='color:#8b949e;'>No HVE events detected today.</td></tr>")
+        out.append("<tr><td colspan='4' style='color:#82827c;'>No HVE events detected today.</td></tr>")
     else:
         for m in ep_matches:
-            risk_color = "#3fb950" if m["risk_pct"] <= 4.0 else ("#f2cc60" if m["risk_pct"] <= 6.0 else "#ff7b72")
+            risk_color = "#54b87f" if m["risk_pct"] <= 4.0 else ("#d3a04d" if m["risk_pct"] <= 6.0 else "#e06c6a")
             float_txt = f"{m['float_shares']}M" if m["float_shares"] else "N/A"
             out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
                 <td class="ep-ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
-                <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])} <span class="good">(+{m['change']}%)</span><br><span style="font-size:var(--fs-caption);color:#8b949e;">Gap: {m['gap']}%</span></td>
-                <td data-sort="{m['rel_vol']}">{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}<br><br><span class="hve-badge">{m['rel_vol']}x Avg!</span><br><span style="font-size:var(--fs-caption);color:#8b949e;margin-top:4px;display:inline-block;">Float: {float_txt}</span></td>
+                <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])} <span class="good">(+{m['change']}%)</span><br><span style="font-size:var(--fs-caption);color:#82827c;">Gap: {m['gap']}%</span></td>
+                <td data-sort="{m['rel_vol']}">{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}<br><br><span class="hve-badge">{m['rel_vol']}x Avg!</span><br><span style="font-size:var(--fs-caption);color:#82827c;margin-top:4px;display:inline-block;">Float: {float_txt}</span></td>
                 <td data-sort="{m['risk_pct']}">
-                    <div style="font-size:var(--fs-caption);color:#a5d6ff;text-align:left;margin-bottom:4px;">✔️ Close Range {m['close_range']}%</div>
+                    <div style="font-size:var(--fs-caption);color:#aecfe8;text-align:left;margin-bottom:4px;">✔️ Close Range {m['close_range']}%</div>
                     <div class="entry-box">
                         <span class="entry-text">Buy-Stop: ${m['entry']}</span><br>
                         <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">({esc(m['stop_reason'])})</span></span><br>
@@ -4785,16 +5437,16 @@ def generate_tier_a_study_tab() -> Tuple[str, int]:
             db = json.load(fh)
         s = db["study_summary"]
     except Exception as exc:  # noqa: BLE001
-        return (f"<div class='table-container' style='padding:16px;color:#8b949e;'>"
+        return (f"<div class='table-container' style='padding:16px;color:#82827c;'>"
                 f"Tier-A tracking study not available yet "
                 f"({esc(str(exc))}). It is generated after the next scan by "
                 f"<code>madrry_tier_a_tracker.py</code>.</div>", 0)
 
     def wr_color(wr):
         if wr is None:
-            return "#8b949e"
+            return "#82827c"
         if wr >= 60:
-            return "#3fb950"
+            return "#54b87f"
         if wr >= 50:
             return "#d29922"
         if wr >= 40:
@@ -4803,16 +5455,16 @@ def generate_tier_a_study_tab() -> Tuple[str, int]:
 
     def bucket_table(title, rows, label="bucket"):
         h = [f"<div class='section-title' style='background-color:var(--surface);"
-             f"color:#79c0ff;border-bottom:2px solid #30363d;'>{title}</div>",
+             f"color:#aecfe8;border-bottom:2px solid #26262b;'>{title}</div>",
              "<div class='table-container'><table>",
              f"<tr><th>{label}</th><th>Win</th><th>Loss</th><th>N</th><th>Win%</th></tr>"]
         if not rows:
-            h.append("<tr><td colspan='5' style='color:#8b949e;'>No resolved names yet.</td></tr>")
+            h.append("<tr><td colspan='5' style='color:#82827c;'>No resolved names yet.</td></tr>")
         for r in rows:
             wr = r.get("wr")
             h.append(
                 f"<tr><td style='text-align:left;font-weight:600;'>{esc(r.get('k', r.get('bucket','')))}</td>"
-                f"<td style='color:#3fb950;'>{r['w']}</td>"
+                f"<td style='color:#54b87f;'>{r['w']}</td>"
                 f"<td style='color:#f85149;'>{r['l']}</td>"
                 f"<td>{r['n']}</td>"
                 f"<td style='color:{wr_color(wr)};font-weight:700;'>"
@@ -4826,14 +5478,14 @@ def generate_tier_a_study_tab() -> Tuple[str, int]:
     # --- header / methodology ---
     out = [
         "<div class='section-title' style='background-color:var(--surface);"
-        "color:#d2a8ff;border-bottom:3px solid #d2a8ff;'>📈 TIER-A FORWARD WIN/LOSS STUDY</div>",
+        "color:#aecfe8;border-bottom:3px solid #aecfe8;'>📈 TIER-A FORWARD WIN/LOSS STUDY</div>",
         "<div class='table-container' style='padding:14px 16px;line-height:1.6;'>",
         f"<div style='font-size:var(--fs-body);'>"
-        f"<b style='color:#c9d1d9;'>{ov['total']}</b> Tier-A names tracked from first appearance · "
-        f"<b style='color:#3fb950;'>{ov['w']} win</b> / <b style='color:#f85149;'>{ov['l']} loss</b> resolved · "
+        f"<b style='color:#ececea;'>{ov['total']}</b> Tier-A names tracked from first appearance · "
+        f"<b style='color:#54b87f;'>{ov['w']} win</b> / <b style='color:#f85149;'>{ov['l']} loss</b> resolved · "
         f"overall win-rate <b style='color:{wr_color(ov['wr'])};'>{ov['wr']}%</b> · "
-        f"<span style='color:#8b949e;'>{ov['open']} still open · data as-of {esc(s.get('asof',''))}</span></div>",
-        "<div style='font-size:var(--fs-caption);color:#8b949e;margin-top:6px;'>"
+        f"<span style='color:#82827c;'>{ov['open']} still open · data as-of {esc(s.get('asof',''))}</span></div>",
+        "<div style='font-size:var(--fs-caption);color:#82827c;margin-top:6px;'>"
         "WIN = fresh 52-week high after pick · LOSS = intraday touch of entry×0.92 (−8%) · "
         "40-bar window · first event wins · one tracker per ticker (first appearance). "
         "Young sample — buckets firm up as open names resolve.</div>",
@@ -4849,10 +5501,10 @@ def generate_tier_a_study_tab() -> Tuple[str, int]:
 
     # --- active weights vs next-fit preview ---
     rt = ["<div class='section-title' style='background-color:var(--surface);"
-          "color:#79c0ff;border-bottom:2px solid #30363d;'>"
+          "color:#aecfe8;border-bottom:2px solid #26262b;'>"
           "M.E.T.A. WEIGHTS — active (live) vs next-fit preview</div>",
           "<div class='table-container' style='padding:8px 12px;font-size:var(--fs-caption);"
-          "color:#8b949e;'>Active weights are LIVE in scoring now. ‘Preview’ = the "
+          "color:#82827c;'>Active weights are LIVE in scoring now. ‘Preview’ = the "
           "weekend re-fit candidate; it is applied only if it separates winners "
           "strictly better than the active set (else held). Edge &gt;0 = component "
           "scored higher on winners.</div>",
@@ -4860,8 +5512,8 @@ def generate_tier_a_study_tab() -> Tuple[str, int]:
           "<tr><th>Component</th><th>Active</th><th>Edge</th><th>Preview</th><th>Δ</th></tr>"]
     for w in recal["weights"]:
         d = w["new"] - w["cur"]
-        dcol = "#3fb950" if d > 0 else ("#f85149" if d < 0 else "#8b949e")
-        ecol = "#3fb950" if w["edge"] > 0 else ("#f85149" if w["edge"] < 0 else "#8b949e")
+        dcol = "#54b87f" if d > 0 else ("#f85149" if d < 0 else "#82827c")
+        ecol = "#54b87f" if w["edge"] > 0 else ("#f85149" if w["edge"] < 0 else "#82827c")
         rt.append(f"<tr><td style='text-align:left;'>{esc(w['comp'])}</td>"
                   f"<td style='font-weight:700;'>{w['cur']}</td>"
                   f"<td style='color:{ecol};'>{w['edge']:+.2f}</td>"
@@ -4882,13 +5534,13 @@ def generate_tier_a_study_tab() -> Tuple[str, int]:
 
     # --- component edges ---
     ct = ["<div class='section-title' style='background-color:var(--surface);"
-          "color:#79c0ff;border-bottom:2px solid #30363d;'>"
+          "color:#aecfe8;border-bottom:2px solid #26262b;'>"
           "META COMPONENT — winner vs loser average points</div>",
           "<div class='table-container'><table>",
           "<tr><th>Component</th><th>Win avg</th><th>Loss avg</th><th>Edge</th></tr>"]
     for c in s["components"]:
         e = c["edge"]
-        ecol = "#3fb950" if (e or 0) > 0 else ("#f85149" if (e or 0) < 0 else "#8b949e")
+        ecol = "#54b87f" if (e or 0) > 0 else ("#f85149" if (e or 0) < 0 else "#82827c")
         ct.append(f"<tr><td style='text-align:left;'>{esc(c['comp'])}</td>"
                   f"<td>{c['win_avg'] if c['win_avg'] is not None else '—'}</td>"
                   f"<td>{c['loss_avg'] if c['loss_avg'] is not None else '—'}</td>"
@@ -4915,28 +5567,28 @@ def generate_tier_a_study_tab() -> Tuple[str, int]:
 
 
 def generate_ur_table(ur_matches: List[dict]) -> str:
-    out = ['<div class="section-title" style="background-color:var(--surface);color:#79c0ff;border-bottom:3px solid #79c0ff;">🎯 POST-HVE U&amp;R (PULLBACK &amp; UNDERCUT)</div>',
+    out = ['<div class="section-title" style="background-color:var(--surface);color:#aecfe8;border-bottom:3px solid #aecfe8;">🎯 POST-HVE U&amp;R (PULLBACK &amp; UNDERCUT)</div>',
            '<div class="table-container"><table>',
            "<tr><th>Ticker</th><th>Price &amp; 1W Perf</th><th>Narrative &amp; Status</th><th>U&amp;R Trade Plan</th></tr>"]
     if not ur_matches:
-        out.append("<tr><td colspan='4' style='color:#8b949e;'>No Post-HVE U&amp;R candidates. Waiting for HVE stocks to consolidate...</td></tr>")
+        out.append("<tr><td colspan='4' style='color:#82827c;'>No Post-HVE U&amp;R candidates. Waiting for HVE stocks to consolidate...</td></tr>")
     else:
         for m in ur_matches:
-            risk_color = "#3fb950" if m["risk_pct"] <= 3.5 else ("#f2cc60" if m["risk_pct"] <= 5.0 else "#ff7b72")
+            risk_color = "#54b87f" if m["risk_pct"] <= 3.5 else ("#d3a04d" if m["risk_pct"] <= 5.0 else "#e06c6a")
             vol_color = "good" if m["vol_contraction"] <= 40 else ("warn" if m["vol_contraction"] <= 60 else "bad")
             holding_color = "good" if m["holding_above_low"] else "bad"
             out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
-                <td class="ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank" style="color:#79c0ff;">{esc(m['ticker'])}</a></td>
-                <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])} <span style="color:#8b949e;">({m['change']:+}%)</span><br><span style="font-size:var(--fs-caption);color:#79c0ff;background:var(--tint-accent);padding:2px 6px;border-radius:4px;">Day {m['days_since_hve']} since HVE</span></td>
+                <td class="ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank" style="color:#aecfe8;">{esc(m['ticker'])}</a></td>
+                <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])} <span style="color:#82827c;">({m['change']:+}%)</span><br><span style="font-size:var(--fs-caption);color:#aecfe8;background:var(--tint-accent);padding:2px 6px;border-radius:4px;">Day {m['days_since_hve']} since HVE</span></td>
                 <td data-sort="{m['vol_contraction']}">{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}<br><br>
                     <span class="squat-badge {vol_color}">Vol: {m['vol_contraction']:.0f}% of Day 1</span><br>
                     <span class="squat-badge {holding_color}">Above D1 Low: {'Yes ✓' if m['holding_above_low'] else 'No ✗'}</span><br>
-                    <span style="font-size:var(--fs-micro);color:#8b949e;">D1 High: ${m['day1_high']}</span>
+                    <span style="font-size:var(--fs-micro);color:#82827c;">D1 High: ${m['day1_high']}</span>
                 </td>
                 <td data-sort="{m['risk_pct']}">
-                    <div style="font-size:var(--fs-caption);color:#79c0ff;text-align:left;margin-bottom:4px;">⚡ U&amp;R: Undercut D{m['days_since_hve']-1}L then reclaim</div>
-                    <div class="entry-box" style="border-color:#79c0ff;background-color:rgba(210,168,255,0.1);">
-                        <span class="entry-text" style="color:#79c0ff;">Buy: ${m['entry']}</span><br>
+                    <div style="font-size:var(--fs-caption);color:#aecfe8;text-align:left;margin-bottom:4px;">⚡ U&amp;R: Undercut D{m['days_since_hve']-1}L then reclaim</div>
+                    <div class="entry-box" style="border-color:#aecfe8;background-color:rgba(210,168,255,0.1);">
+                        <span class="entry-text" style="color:#aecfe8;">Buy: ${m['entry']}</span><br>
                         <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">({esc(m['stop_reason'])})</span></span><br>
                         <span style="color:{risk_color};font-size:var(--fs-body);">Risk: {m['risk_pct']}%</span>
                     </div>
@@ -4944,9 +5596,9 @@ def generate_ur_table(ur_matches: List[dict]) -> str:
             </tr>""")
     out.append("</table></div>")
     out.append("""
-    <div style="background-color:var(--tint-accent);border-left:4px solid #79c0ff;padding:15px;margin:20px 0;border-radius:0 8px 8px 0;">
-        <div style="color:#79c0ff;font-weight:bold;margin-bottom:8px;">📖 Post-HVE U&amp;R Strategy (Like MXL Apr 28)</div>
-        <div style="font-size:var(--fs-table);color:#c9d1d9;line-height:1.6;">
+    <div style="background-color:var(--tint-accent);border-left:4px solid #aecfe8;padding:15px;margin:20px 0;border-radius:0 8px 8px 0;">
+        <div style="color:#aecfe8;font-weight:bold;margin-bottom:8px;">📖 Post-HVE U&amp;R Strategy (Like MXL Apr 28)</div>
+        <div style="font-size:var(--fs-table);color:#ececea;line-height:1.6;">
             <strong>Setup:</strong> Day 2-5 after massive HVE breakout. Volume dries to &lt;50% of Day 1 (institutional holding).<br>
             <strong>Trigger:</strong> Price undercuts Previous Day Low, flushes stops, then violently reclaims.<br>
             <strong>Entry:</strong> On reclaim of the undercut level with volume expansion.<br>
@@ -5088,9 +5740,9 @@ def forward_ext_baserate(ticker: str, ext10: float, ext20: float, ext50: float,
 def _fwd_num(cell: Optional[dict]) -> str:
     """Format one horizon cell as 'med +2.3%·71%' colored by sign of the median."""
     if not cell:
-        return "<span style='color:#6e7681;'>—</span>"
+        return "<span style='color:#4a4a52;'>—</span>"
     med, win = cell["median"], cell["win"]
-    col = "val-green" if med > 0 else ("val-red" if med < 0 else "#c9d1d9")
+    col = "val-green" if med > 0 else ("val-red" if med < 0 else "#ececea")
     return f"<span class='{col}'>{med:+.1f}%·{win:.0f}%</span>"
 
 
@@ -5106,14 +5758,14 @@ def _forward_block(md: dict) -> str:
     # dominated by the 1987/2001/2020 capitulation lows and reads strongly bullish
     # while QQQ's same cell (2008/2022 mid-bear grind) reads bearish — so a thin
     # cell is composition-sensitive, not a stable base rate (audit 2026-07-02).
-    small_n = " <span style='color:var(--yellow,#e3b341);' title=\"Thin sample — this state is rare, so the stats lean on a few historical episodes; treat as context, not a stable base rate.\">⚠️ small n</span>" if n < 100 else ""
-    rows = (f"<div style='margin-top:6px;border-top:1px solid #21262d;padding-top:5px;"
-            f"font-size:var(--fs-table);color:#8b949e;'>"
+    small_n = " <span style='color:var(--yellow,#d3a04d);' title=\"Thin sample — this state is rare, so the stats lean on a few historical episodes; treat as context, not a stable base rate.\">⚠️ small n</span>" if n < 100 else ""
+    rows = (f"<div style='margin-top:6px;border-top:1px solid #1f1f23;padding-top:5px;"
+            f"font-size:var(--fs-table);color:#82827c;'>"
             f"<span title=\"Historical forward price return after days in the SAME state "
             f"(median · win-rate). Conditioner: 200-day-MA regime × O'Neil distribution-day "
             f"bucket — the most predictive combination in out-of-sample testing. "
             f"Built from full history since inception.\">"
-            f"📊 If this state → forward <span style='color:#6e7681;'>({br['label']}, n={n})</span></span>{small_n}<br>"
+            f"📊 If this state → forward <span style='color:#4a4a52;'>({br['label']}, n={n})</span></span>{small_n}<br>"
             f"&nbsp;&nbsp;1w {_fwd_num(s.get('f1w'))} · "
             f"4w {_fwd_num(s.get('f4w'))} · "
             f"8w {_fwd_num(s.get('f8w'))}")
@@ -5121,7 +5773,7 @@ def _forward_block(md: dict) -> str:
                                md.get("ext_20", 0.0), md.get("ext_50", 0.0), md.get("above_200"))
     if ext:
         es = ext["stats"]
-        rows += (f"<br><span style='color:#6e7681;'>&nbsp;&nbsp;{ext['label']}:</span> "
+        rows += (f"<br><span style='color:#4a4a52;'>&nbsp;&nbsp;{ext['label']}:</span> "
                  f"4w {_fwd_num(es.get('f4w'))}")
     return rows + "</div>"
 
@@ -5151,11 +5803,37 @@ def breadth_day_over_day(br50: float, br200: float) -> Tuple[Optional[float], Op
     return d50, d200
 
 
+def _persist_breadth_history(breadth: dict, data_date: Optional[str]) -> None:
+    """Append the session's S&P breadth to breadth_history.json keyed by the
+    US-session DATA DATE (never wall-clock). This is the durable regime feed for
+    downstream studies. breadth_day_over_day() above used to be the writer but was
+    orphaned when the day-over-day chip switched to Barchart's native priceChange
+    (~2026-06-08), so the file stalled. Re-wired here. Non-fatal, additive, 120-day
+    cap. Same-day re-runs overwrite (final run of a data date wins)."""
+    if not breadth or not breadth.get("ok") or not data_date:
+        return
+    try:
+        hist = {}
+        if os.path.exists(BREADTH_HISTORY_PATH):
+            with open(BREADTH_HISTORY_PATH) as fh:
+                hist = json.load(fh)
+        entry = {"br50": round(float(breadth.get("above50", 0.0)), 1),
+                 "br200": round(float(breadth.get("above200", 0.0)), 1)}
+        a20 = breadth.get("above20")
+        if a20 is not None:
+            entry["br20"] = round(float(a20), 1)
+        hist[data_date] = entry                       # same-day re-run overwrites
+        hist = {k: hist[k] for k in sorted(hist)[-120:]}
+        _atomic_write(BREADTH_HISTORY_PATH, json.dumps(hist))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _ext_line(label: str, ext: float, pct: Optional[float]) -> str:
     """One extension row: '+X.X% · P##' colored by historical percentile."""
     base = f"{ext:+.1f}%"
     if pct is None:
-        return f"{label}: <span style='color:#c9d1d9;'>{base}</span>"
+        return f"{label}: <span style='color:#ececea;'>{base}</span>"
     pcol = "val-red" if pct >= 90 else ("val-warn" if pct >= 75 else "val-green")
     flag = " ⚠️ stretched" if pct >= 90 else ("" if pct < 75 else " hot")
     return f"{label}: <span class='{pcol}'>{base} · P{pct:.0f}{flag}</span>"
@@ -5197,10 +5875,10 @@ def build_market_section(market_data: List[dict], breadth: dict,
         out.append(f"""
             <div class="market-card">
                 <h3>{esc(_index_display(tk))} {_lp(tk, md['close'], style="float:right", fmt="{:.2f}")}</h3>
-                <div style="font-size:var(--fs-caption);margin-bottom:4px;"><span class="{chg_col}">{chg:+.2f}% ({chg_pt:+.2f})</span> <span style="color:#8b949e;">vs prev close</span></div>
+                <div style="font-size:var(--fs-caption);margin-bottom:4px;"><span class="{chg_col}">{chg:+.2f}% ({chg_pt:+.2f})</span> <span style="color:#82827c;">vs prev close</span></div>
                 <div class="idx-spark">{spark}</div>
-                <div style="font-size:var(--fs-table);color:#8b949e;margin:5px 0;">10SMA/21SMA: <span class="{trend_col}">{md['trend']}</span></div>
-                <div style="font-size:var(--fs-table);color:#8b949e;">
+                <div style="font-size:var(--fs-table);color:#82827c;margin:5px 0;">10SMA/21SMA: <span class="{trend_col}">{md['trend']}</span></div>
+                <div style="font-size:var(--fs-table);color:#82827c;">
                     {_ext_line("Above 10MA", md.get('ext_10', 0.0), p10)}<br>
                     {_ext_line("Above 20MA", md.get('ext_20', 0.0), p20)}<br>
                     {_ext_line("Above 50MA", md.get('ext_50', 0.0), p50)}<br>
@@ -5217,7 +5895,7 @@ def build_market_section(market_data: List[dict], breadth: dict,
         breadth_html = (
             f"""<div class="market-card">
                 <h3>S&amp;P 500 Breadth</h3>
-                <div style="font-size:var(--fs-table);color:#8b949e;">
+                <div style="font-size:var(--fs-table);color:#82827c;">
                     {brow("20MA (S5TW)", breadth['above20'], breadth.get('chg20'))}<br>
                     {brow("50MA (S5FI)", breadth['above50'], breadth.get('chg50'))}<br>
                     {brow("200MA (S5TH)", breadth['above200'], breadth.get('chg200'))}<br>
@@ -5226,7 +5904,7 @@ def build_market_section(market_data: List[dict], breadth: dict,
             </div>""")
     else:
         breadth_html = ('<div class="market-card"><h3>S&amp;P 500 Breadth</h3>'
-                        '<div style="font-size:var(--fs-table);color:#8b949e;">Unavailable (Barchart fetch failed).</div></div>')
+                        '<div style="font-size:var(--fs-table);color:#82827c;">Unavailable (Barchart fetch failed).</div></div>')
 
     out.append(f"""
             {breadth_html}
@@ -5253,7 +5931,7 @@ def build_runbar(counts: Dict[str, int], market_modifier: float, runtime: float,
         <span class="chip">Mkt Mod <b>{market_modifier}x</b></span>
         <span class="chip">Run <b>{runtime:.1f}s</b></span>
         <button class="chip livebtn" onclick="refreshPrices(this)">🔄 Refresh Prices</button>
-        <span class="chip" id="liveStamp" style="color:#8b949e;">prices frozen at scan — tap 🔄 for live</span>
+        <span class="chip" id="liveStamp" style="color:#82827c;">prices frozen at scan — tap 🔄 for live</span>
     </div>"""
 
 
@@ -5293,7 +5971,6 @@ def _edge_count(m: dict) -> int:
     """Light Multiple-Edge tally from fields the scanner already computed
     (preview of J Law's M.E.T.A. stacking) — used to rank Top Picks."""
     fp = m.get("footprint", {}) or {}
-    tl = m.get("trendline_data", {}) or {}
     e = 0
     _vp = m.get("vol_pct")                                # `or` default would treat 0 as missing
     _dp = m.get("dist_pct")                               # (audit: 0.0% = best-hugging, not absent)
@@ -5305,8 +5982,12 @@ def _edge_count(m: dict) -> int:
         e += 1                                            # 📍 AVWAP hold
     if fp.get("higher_lows", 0) >= 1 and fp.get("coiled"):
         e += 1                                            # 🏗️ higher-lows + coiled
-    if (tl.get("utl", {}).get("score", 0) >= 10) or tl.get("dtl", {}).get("breakout"):
-        e += 1                                            # 📐 trendline / DTL
+    # trendline edge now reads the VERIFIED v2 engine (USER-RATIFIED 2026-07-04:
+    # the legacy block's lines carry no validity/break checking); legacy
+    # trendline_data remains computed+persisted for snapshot continuity only.
+    _tf = [str(f) for f in (m.get("tl_flags") or [])]
+    if any(f.startswith(("at_UTL", "at_TSL", "fresh_break_up")) for f in _tf):
+        e += 1                                            # 📐 trendline v2 (verified)
     if (m.get("meta_score") or 0) >= 60:
         e += 1                                            # ⚡ strong momentum
     rs = m.get("rs_rating")
@@ -5490,9 +6171,9 @@ def build_regime(market_data: List[dict], breadth: dict,
         regime = "GREEN"
     allow_breakouts = regime != "RED" and dist_max < 4 and not hard_override
 
-    color = {"GREEN": "#3fb950", "YELLOW": "#f2cc60", "RED": "#ff7b72"}[regime]
-    bg = {"GREEN": "rgba(63,185,80,0.10)", "YELLOW": "rgba(242,204,96,0.10)",
-          "RED": "rgba(218,54,51,0.12)"}[regime]
+    color = {"GREEN": "#54b87f", "YELLOW": "#d3a04d", "RED": "#e06c6a"}[regime]
+    bg = {"GREEN": "rgba(84,184,127,.08)", "YELLOW": "rgba(211,160,77,.08)",
+          "RED": "rgba(224,108,106,.10)"}[regime]
     if allow_breakouts:
         bo_txt = "Breakouts ALLOWED — trade leaders at multiple-edge pivots."
     elif regime != "RED":
@@ -5505,7 +6186,7 @@ def build_regime(market_data: List[dict], breadth: dict,
     # State carried by a CSS dot + border/text color (was triple-encoded emoji).
     dot = {"g": "<span class='dot dot-g'></span>", "y": "<span class='dot dot-y'></span>",
            "r": "<span class='dot dot-r'></span>", "i": "<span class='dot dot-i'></span>"}
-    cmap = {"g": "#3fb950", "y": "#f2cc60", "r": "#ff7b72", "i": "#79c0ff"}
+    cmap = {"g": "#54b87f", "y": "#d3a04d", "r": "#e06c6a", "i": "#aecfe8"}
     grid = "".join(
         f"<span class='reg-sig' style='border-color:{cmap[s]};color:{cmap[s]};'>{dot[s]}{lbl}</span>"
         for s, lbl in sigs
@@ -5554,8 +6235,17 @@ def _rank_top_picks(a_plus: List[dict], a: List[dict],
     # no 4-leg name. So draft high-conviction names FIRST, then fall back to the
     # scanner's original tier->edges->meta. _overlay no longer sorts (display only).
     if ants_boost:
+        # DASHBOARD-ONLY (same pattern as the ANTS bonus): lesson-confluence
+        # picks (>=3 of the 4 tutorial lessons' entry criteria at once) float
+        # up per the user's 2026-07-05 direction. The order plan calls with
+        # the default, so the IBKR draft ranking is byte-identical.
+        def _lesson_bonus(s):
+            # graded: 4/4 lessons +2, 3/4 +1 (7 vs 42 names on the first
+            # badged run - the full-house is the scarce signal)
+            return max(0, len(s.get("lesson_confluence") or []) - 2)
         pool.sort(key=lambda r: (not r[1]["_high_conviction"], r[0],
-                                 -(r[1]["_edges"] + _ants_edge_bonus(r[1])),
+                                 -(r[1]["_edges"] + _ants_edge_bonus(r[1])
+                                   + _lesson_bonus(r[1])),
                                  -(r[1].get("meta_score") or 0)))
     else:
         pool.sort(key=lambda r: (not r[1]["_high_conviction"], r[0], -r[1]["_edges"],
@@ -5738,20 +6428,20 @@ def build_top_picks(a_plus: List[dict], a: List[dict], a_minus: List[dict],
         _legs = _hc_legs(s)
         _sec = s.get("sector") or "N/A"
         if s["ticker"] in draft_pos:
-            _ds = (f'<span class="tp-tier" style="color:#3fb950;border-color:#3fb950;" '
+            _ds = (f'<span class="tp-tier" style="color:#54b87f;border-color:#54b87f;" '
                    f'title="drafted to IBKR — top-3 by high-conviction then tier/edges/M.E.T.A., one per sector">✅ DRAFT #{draft_pos[s["ticker"]]}</span>')
         elif _sec in drafted_sectors:
-            _ds = ('<span class="tp-tier" style="color:#8b949e;border-color:#8b949e;" '
+            _ds = ('<span class="tp-tier" style="color:#82827c;border-color:#82827c;" '
                    'title="not drafted — one-per-sector rule: this sector is already taken by a higher-ranked pick">⤷ sector taken</span>')
         else:
-            _ds = ('<span class="tp-tier" style="color:#8b949e;border-color:#8b949e;" '
+            _ds = ('<span class="tp-tier" style="color:#82827c;border-color:#82827c;" '
                    'title="shown for context — outside the top-3 drafted">— watch</span>')
-        _legcol = "#d2a8ff" if _legs == 4 else ("#79c0ff" if _legs == 3 else "var(--text-3)")
+        _legcol = "#aecfe8" if _legs == 4 else ("#aecfe8" if _legs == 3 else "var(--text-3)")
         _score = (f'<span class="tp-meta" style="color:{_legcol};" title="high-conviction legs met (of 4): '
                   f'coiled · RS≥90 · within 10% of 52wk high · risk≤3.5%. 4/4 = ★ the validated SPY-beating edge; '
                   f'3/4 = one leg away (watch); ≤2/4 = no measured edge.">🎯 {_legs}/4</span>')
-        tcol = {"A+": "#3fb950", "A": "#f2cc60", "A-": "#ff7b72"}.get(tr, "#8b949e")
-        rc = "#3fb950" if s["risk_pct"] <= 4 else ("#f2cc60" if s["risk_pct"] <= 6 else "#ff7b72")
+        tcol = {"A+": "#54b87f", "A": "#d3a04d", "A-": "#e06c6a"}.get(tr, "#82827c")
+        rc = "#54b87f" if s["risk_pct"] <= 4 else ("#d3a04d" if s["risk_pct"] <= 6 else "#e06c6a")
         _atp = ""
         if s.get("ants_ok") and s.get("ants_level", 0) >= 1:
             _atp_s = ("·%db" % s.get("ants_chain", 0)) if s.get("ants_chain") else ""
@@ -5761,21 +6451,37 @@ def build_top_picks(a_plus: List[dict], a: List[dict], a_minus: List[dict],
                     % esc(_ANTS_LABELS.get(s.get("ants_3m_peak", 0), "")))
         _rsl = ""
         if s.get("rs_ok") and s.get("rs_nh_before_price"):
-            _rsl = "<span class=\"tp-meta\" style=\"color:#79c0ff;\">🔵 RS Lead‹Px</span>"
+            _rsl = "<span class=\"tp-meta\" style=\"color:#aecfe8;\">🔵 RS Lead‹Px</span>"
         elif s.get("rs_ok") and s.get("rs_new_high"):
-            _rsl = "<span class=\"tp-meta\" style=\"color:#79c0ff;\">🔵 RS Leader</span>"
+            _rsl = "<span class=\"tp-meta\" style=\"color:#aecfe8;\">🔵 RS Leader</span>"
+        _lc = s.get("lesson_confluence") or []
+        _lcb = (f'<span class="tp-tier" style="color:#d3a04d;border-color:#d3a04d;" '
+                f'title="{len(_lc)}/4 tutorial lessons meet their quality entry criteria on this '
+                f'name at once: {esc(" + ".join(str(x) for x in _lc))}">🎓 {len(_lc)}/4</span>'
+                ) if len(_lc) >= 3 else ""
         cards.append(f"""
         <div class="tp-card">
             <div class="tp-top"><a href="https://www.tradingview.com/chart/?symbol={esc(s['ticker'])}" target="_blank">{esc(s['ticker'])}</a>
                 <span class="tp-tier" style="color:{tcol};border-color:{tcol};">{tr}</span>
-                <span class="tp-edges">⚡{s.get('_edges',0)}</span>{('<span class="tp-tier" style="color:#d2a8ff;border-color:#d2a8ff;" title="coiled · RS≥90 · within 10% of 52wk high · risk≤3.5% — the validated SPY-beating overlay (study 2026-06-15)">★ HI-CONV</span>') if s.get('_high_conviction') else ''} {_ds}</div>
+                <span class="tp-edges">⚡{s.get('_edges',0)}</span>{('<span class="tp-tier" style="color:#aecfe8;border-color:#aecfe8;" title="coiled · RS≥90 · within 10% of 52wk high · risk≤3.5% — the validated SPY-beating overlay (study 2026-06-15)">★ HI-CONV</span>') if s.get('_high_conviction') else ''}{_lcb} {_ds}</div>
             <div class="tp-px">{_lp(s['ticker'], s['close'], style='', entry=s.get('entry'), stop=s.get('stop'))} {_score} <span class="tp-meta">M.E.T.A. {s.get('meta_score',0)}</span> {_atp} {_rsl}</div>
             <div class="tp-theme">{esc(s['theme'])}</div>
-            <div class="tp-plan"><span class="entry-text">Buy ${s['entry']}</span> · <span class="stop-text">Stop ${s['stop']}</span> · <span style="color:{rc};">{s['risk_pct']}%</span></div>
+            <div class="tp-plan"><span class="entry-text">Buy ${s['entry']}</span> · <span class="stop-text">Stop ${s['stop']}</span> · <span style="color:{rc};">{s['risk_pct']}%</span>{_sr_tp_token(s)}</div>
         </div>""")
-    return (f"<div class='section-title' style='background-color:var(--surface);color:#3fb950;border-bottom:3px solid #3fb950;'>"
+    # today's full-house lesson names, surfaced at the very top (USER-DIRECTED
+    # 2026-07-05: these are the report's "important" picks)
+    _full = [s["ticker"] for _, s in ranked
+             if len(s.get("lesson_confluence") or []) >= 4]
+    _strip = ""
+    if _full:
+        _strip = (f"<div style='padding:6px 12px;font-size:var(--fs-caption);color:#d3a04d;'"
+                  f" title='every one of the four tutorial lessons (S&amp;R zone grade A, "
+                  f"pullback-recovery risk&lt;=6%, at-trendline/fresh break, quality channel "
+                  f"read) fires on these names at once'>🎓 4/4-lesson confluence today: "
+                  + ", ".join(esc(t) for t in _full) + "</div>")
+    return (f"<div class='section-title' style='background-color:var(--surface);color:#54b87f;border-bottom:3px solid #54b87f;'>"
             f"⭐ TOP PICKS — TODAY'S BEST MULTIPLE-EDGE SETUPS</div>"
-            f"<div class='toppicks'>{''.join(cards)}</div>")
+            f"{_strip}<div class='toppicks'>{''.join(cards)}</div>")
 
 
 def build_hot_industries(ind: dict, pool: List[dict]) -> str:
@@ -5792,13 +6498,13 @@ def build_hot_industries(ind: dict, pool: List[dict]) -> str:
             held[nm] = held.get(nm, 0) + 1
     chips = []
     for r in rows[:12]:
-        col = "#3fb950" if r["pct"] >= IND_RS_STRONG else ("#f2cc60" if r["pct"] >= 70 else "#8b949e")
+        col = "#54b87f" if r["pct"] >= IND_RS_STRONG else ("#d3a04d" if r["pct"] >= 70 else "#82827c")
         n = held.get(r["industry"], 0)
         mark = f" <b style='color:#56d364;'>🎯{n}</b>" if n else ""
         chips.append(
             f"<span class='theme-chip' data-sector='{esc(r['sector'])}' style='border-color:{col};'>"
             f"🏭 {esc(r['industry'])} <b style='color:{col};'>{r['pct']}</b>"
-            f"<span style='color:#8b949e;'> · {esc(r['sector'])}</span>{mark}</span>")
+            f"<span style='color:#82827c;'> · {esc(r['sector'])}</span>{mark}</span>")
     n_strong = sum(1 for r in rows if r["pct"] >= IND_RS_STRONG)
     return (
         "<details class='collapsis'><summary class='section-title' style='background-color:var(--surface);"
@@ -5844,14 +6550,14 @@ def build_hot_themes(pool: List[dict]) -> str:
     chips = []
     for strength, th, a, avg in rows:
         ratio = strength / smax
-        col = "#3fb950" if ratio >= 0.66 else ("#f2cc60" if ratio >= 0.4 else "#8b949e")
+        col = "#54b87f" if ratio >= 0.66 else ("#d3a04d" if ratio >= 0.4 else "#82827c")
         nh = f" · 🔥{a['near']} NH" if a["near"] >= 2 else ""
         chips.append(
             f"<span class='theme-chip' data-sector='{esc(th)}' style='border-color:{col};'>"
             f"{esc(th)} <b style='color:{col};'>{a['n']}</b> · avg {avg:.0f}{nh}</span>"
         )
-    chips.append("<span class='theme-chip' id='themeClear' style='border-color:#8b949e;display:none;'>✕ Show all</span>")
-    return (f"<div class='section-title' style='background-color:var(--surface);color:#f2cc60;border-bottom:3px solid #f2cc60;'>"
+    chips.append("<span class='theme-chip' id='themeClear' style='border-color:#82827c;display:none;'>✕ Show all</span>")
+    return (f"<div class='section-title' style='background-color:var(--surface);color:#d3a04d;border-bottom:3px solid #d3a04d;'>"
             f"🔥 HOT SECTORS — 今日強勢板塊 (top 3 · scroll → for more · tap to filter)</div>"
             f"<div class='hot-themes scroll'>{''.join(chips)}</div>")
 
@@ -5866,7 +6572,7 @@ def generate_new_highs_section(nh: dict) -> str:
         return ""
 
     n_persist = sum(1 for m in green if m.get("persist_tier"))
-    summary = (f'<summary class="section-title" style="background-color:var(--tint-green);color:#3fb950;border-bottom:3px solid #3fb950;">'
+    summary = (f'<summary class="section-title" style="background-color:var(--tint-green);color:#54b87f;border-bottom:3px solid #54b87f;">'
                f'🆕 NEW 52-WEEK HIGHS — LEADERSHIP · {total} new highs · '
                f'{n_persist}⭐ persistent · {len(clusters)} sector clusters</summary>')
     out = ['<details class="collapsis nh">', summary]
@@ -5875,30 +6581,30 @@ def generate_new_highs_section(nh: dict) -> str:
     if clusters:
         chips = []
         for s, n in clusters:
-            chips.append(f"<span class='theme-chip' data-sector='{esc(s)}' style='border-color:#3fb950;'>"
-                         f"{esc(s)} <b style='color:#3fb950;'>×{n}</b></span>")
+            chips.append(f"<span class='theme-chip' data-sector='{esc(s)}' style='border-color:#54b87f;'>"
+                         f"{esc(s)} <b style='color:#54b87f;'>×{n}</b></span>")
         out.append(
-            "<div style='background:var(--tint-green);border-left:4px solid #3fb950;padding:10px 14px;margin:0 0 14px;border-radius:0 8px 8px 0;'>"
-            "<div style='color:#3fb950;font-weight:bold;font-size:var(--fs-body);margin-bottom:6px;'>"
+            "<div style='background:var(--tint-green);border-left:4px solid #54b87f;padding:10px 14px;margin:0 0 14px;border-radius:0 8px 8px 0;'>"
+            "<div style='color:#54b87f;font-weight:bold;font-size:var(--fs-body);margin-bottom:6px;'>"
             f"🔥 Sectors making COLLECTIVE new highs today ({total} new highs total · ≥3 = cluster)</div>"
             f"<div class='hot-themes' style='margin:0;'>{''.join(chips)}</div></div>")
     else:
-        out.append(f"<div style='color:#8b949e;font-size:var(--fs-table);margin-bottom:12px;'>"
+        out.append(f"<div style='color:#82827c;font-size:var(--fs-table);margin-bottom:12px;'>"
                    f"{total} new 52-wk highs today · no single sector reached a ≥3 cluster.</div>")
 
     # --- leaders table: constructive (🟢) + persistent (⭐) names ---
     if not green:
-        out.append("<div style='color:#8b949e;font-size:var(--fs-body);padding:6px 0;'>"
+        out.append("<div style='color:#82827c;font-size:var(--fs-body);padding:6px 0;'>"
                    "No 🟢 constructive or ⭐ persistent names today — "
                    "the rest of the new highs are extended or still developing.</div></details>")
         return "".join(out)
 
     out.append('<div class="table-container"><table data-schema="newhighs">')
-    out.append("<tr><th data-col='tk'>Ticker</th><th data-col='price'>Price &amp; Narrative</th><th data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP)'>ADR</th><th data-col='rs'>RS</th>"
+    out.append("<tr><th data-col='tk'>Ticker</th><th data-col='price'>Price &amp; Narrative</th><th data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP, or an equivalent 20-day calc on the external/HTF tabs)'>ADR</th><th data-col='rs'>RS</th>"
                "<th data-col='pattern'>3-Month Pattern &amp; Persistence</th><th data-col='meta'>M.E.T.A.</th>"
                + _MA_YOY_HEADERS +
                "<th data-col='plan'>Continuation Plan</th></tr>")
-    _tag_style = {"GRN": ("var(--tint-green)", "#3fb950"), "YEL": ("var(--tint-yellow)", "#f2cc60"), "RED": ("var(--tint-red)", "#ff7b72")}
+    _tag_style = {"GRN": ("var(--tint-green)", "#54b87f"), "YEL": ("var(--tint-yellow)", "#d3a04d"), "RED": ("var(--tint-red)", "#e06c6a")}
     for m in green:
         spark_html = f"<div class='spark'>{m['spark']}</div>" if m.get("spark") else ""
         rs_val = m.get("rs_rating", "N/A")
@@ -5911,39 +6617,44 @@ def generate_new_highs_section(nh: dict) -> str:
             f"<div class='fp-badge {('fp-good' if ('Higher-Low' in b or 'Coiled' in b) else 'fp-info')}'>{esc(b)}</div>"
             for b in m.get("fp_badges", []))
         risk = m.get("risk_pct")
-        rc = "#3fb950" if (risk or 9) <= 4 else ("#f2cc60" if (risk or 9) <= 6 else "#ff7b72")
+        rc = "#54b87f" if (risk or 9) <= 4 else ("#d3a04d" if (risk or 9) <= 6 else "#e06c6a")
         risk_txt = f"{risk}%" if risk is not None else "n/a"
         # pattern badge colored by grade
         dot = {"GRN": "🟢", "YEL": "🟡", "RED": "🔴"}.get(m.get("tag"), "🟢")
-        pbg, pcol = _tag_style.get(m.get("tag"), ("var(--tint-green)", "#3fb950"))
+        pbg, pcol = _tag_style.get(m.get("tag"), ("var(--tint-green)", "#54b87f"))
         pattern_badge = f"<div class='squat-badge' style='background:{pbg};color:{pcol};border-color:{pcol};'>{dot} {esc(m['label'])}</div>"
         # persistence badge (⭐ / ⭐⭐) from recurring new highs
         persist_badge = ""
         if m.get("persist_tier"):
             star = "⭐⭐" if m["persist_tier"] == "R" else "⭐"
-            pc = "#f2cc60" if m["persist_tier"] == "R" else "#f2cc60"
+            pc = "#d3a04d" if m["persist_tier"] == "R" else "#d3a04d"
             persist_badge = (f"<div class='squat-badge' style='background:#221d08;color:{pc};border-color:{pc};font-weight:bold;'>"
                              f"{star} {esc(m['persist_label'])} · {m['nh_3m']} NH-days/3M ({m['weeks_3m']} wks) · {m['nh_1m']}/1M</div>")
-        meta_disp_col = "#3fb950" if m.get("tag") == "GRN" else pcol
+        meta_disp_col = "#54b87f" if m.get("tag") == "GRN" else pcol
         out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
             <td class="ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
             <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])}{spark_html}<br>{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}</td>
             <td data-sort="{m['adr']}">{m['adr']}%</td>
-            <td data-sort="{rs_val if isinstance(rs_val,int) else 0}"><span class="score">{esc(rs_val)}</span><br><span style="font-size:var(--fs-micro);color:#8b949e;">1M:+{m['perf_1m']}% · 3M:+{m['perf_3m']}%</span></td>
+            <td data-sort="{rs_val if isinstance(rs_val,int) else 0}"><span class="score">{esc(rs_val)}</span><br><span style="font-size:var(--fs-micro);color:#82827c;">1M:+{m['perf_1m']}% · 3M:+{m['perf_3m']}%</span></td>
             <td style="font-size:var(--fs-table);text-align:left;">
                 {persist_badge}{pattern_badge}
                 {fp_html}
-                <div style="margin-top:4px;color:#8b949e;">🧱 {esc(base)} · 🏗️ {m['higher_lows']} HL</div>
+                <div style="margin-top:4px;color:#82827c;">🧱 {esc(base)} · 🏗️ {m['higher_lows']} HL</div>
                 <div><span class="good">+{ext9} vs 9EMA</span> · <span class="{ext50_col}">+{ext50} vs 50EMA</span></div>
             </td>
             <td data-sort="{m['meta_score']}"><span style="font-size:var(--fs-title);font-weight:bold;color:{meta_disp_col};">{m['meta_score']}</span></td>
             {_ma_cells(m.get('_ma_dist'))}{_fwd_yoy_cell(m['ticker'])}{_eps_accel_cell(m['ticker'])}
             <td data-sort="{risk if risk is not None else 999}">
-                <div class="entry-box" style="border-color:#3fb950;background:rgba(86,211,100,0.07);">
-                    <span style="color:#3fb950;font-weight:bold;font-size:var(--fs-table);">Buy &gt; ${m['entry']}</span><br>
+                <div class="entry-box" style="border-color:#54b87f;background:rgba(86,211,100,0.07);">
+                    <span style="color:#54b87f;font-weight:bold;font-size:var(--fs-table);">Buy &gt; ${m['entry']}</span><br>
                     <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">(21EMA / −1.5×ADR)</span></span><br>
                     <span style="color:{rc};font-size:var(--fs-body);">Risk: {risk_txt}</span>
                 </div>
+                {_lessons_line(m)}
+                {_sr_line(m)}
+                {_pb2_line(m)}
+                {_tl_line(m)}
+                {_ch_line(m)}
             </td>
         </tr>""")
     out.append("</table></div></details>")
@@ -5959,20 +6670,20 @@ def generate_nh52_monitor_section(pullbacks: List[dict], monitored: List[dict]) 
     head = (f"<h2 style='margin:4px 0 2px;'>📉 52-Week-High Pullback Monitor</h2>"
             f"<p class='header-sub' style='margin:0 0 14px;'>Names that printed a new "
             f"52wk high in the last {NH52_WATCH_DAYS} trading days, re-checked each run · "
-            f"<b style='color:#3fb950;'>{n_pull}</b> low-vol pullback"
+            f"<b style='color:#54b87f;'>{n_pull}</b> low-vol pullback"
             f"{'' if n_pull == 1 else 's'} · "
-            f"<b style='color:#ff7b72;'>{n_break}</b> high-vol breakdown"
+            f"<b style='color:#e06c6a;'>{n_break}</b> high-vol breakdown"
             f"{'' if n_break == 1 else 's'} · {len(monitored)} watched</p>")
     if not monitored:
-        return (head + "<div style='color:#8b949e;font-size:var(--fs-body);padding:8px 0;'>"
+        return (head + "<div style='color:#82827c;font-size:var(--fs-body);padding:8px 0;'>"
                 "No names on the 52wk-high monitor yet — they accumulate as the daily "
                 "scan prints fresh new highs, then stay here for "
                 f"{NH52_WATCH_DAYS} trading days.</div>")
 
     out = [head]
     if pullbacks:
-        out.append("<div style='background:var(--tint-green);border-left:4px solid #3fb950;"
-                   "padding:10px 14px;margin:0 0 14px;border-radius:0 8px 8px 0;color:#3fb950;"
+        out.append("<div style='background:var(--tint-green);border-left:4px solid #54b87f;"
+                   "padding:10px 14px;margin:0 0 14px;border-radius:0 8px 8px 0;color:#54b87f;"
                    "font-size:var(--fs-table);'>🟢 <b>Low-volume pullback</b> = price slipped below "
                    "its 50-day MA or the prior close while volume dried up below its 30-day average "
                    "— supply exhausting, a constructive continuation watch.</div>")
@@ -5980,15 +6691,15 @@ def generate_nh52_monitor_section(pullbacks: List[dict], monitored: List[dict]) 
     out.append("<tr><th>Ticker</th><th>Status</th><th>Price</th>"
                "<th>vs 50-MA</th><th>vs Prev Close</th><th>Volume vs 30d Avg</th>"
                "<th>RS</th><th>Watch</th></tr>")
-    _tag_col = {"GRN": "#3fb950", "RED": "#ff7b72", "HOLD": "#8b949e"}
+    _tag_col = {"GRN": "#54b87f", "RED": "#e06c6a", "HOLD": "#82827c"}
     for m in monitored:
-        col = _tag_col.get(m["tag"], "#8b949e")
+        col = _tag_col.get(m["tag"], "#82827c")
         spark_html = f"<div class='spark'>{m['spark']}</div>" if m.get("spark") else ""
         rs_val = m.get("rs_rating", "N/A")
         vs50 = m.get("vs_50"); vsprev = m.get("vs_prev"); vr = m.get("vol_ratio")
-        vs50_col = "#ff7b72" if (vs50 is not None and vs50 < 0) else "#3fb950"
-        vsprev_col = "#ff7b72" if (vsprev is not None and vsprev < 0) else "#3fb950"
-        vr_col = "#3fb950" if (vr is not None and vr < 1) else "#ff7b72"
+        vs50_col = "#e06c6a" if (vs50 is not None and vs50 < 0) else "#54b87f"
+        vsprev_col = "#e06c6a" if (vsprev is not None and vsprev < 0) else "#54b87f"
+        vr_col = "#54b87f" if (vr is not None and vr < 1) else "#e06c6a"
         vs50_txt = f"{vs50:+.1f}%" if vs50 is not None else "–"
         vsprev_txt = f"{vsprev:+.1f}%" if vsprev is not None else "–"
         vr_txt = f"{vr:.2f}×" if vr is not None else "–"
@@ -5996,11 +6707,11 @@ def generate_nh52_monitor_section(pullbacks: List[dict], monitored: List[dict]) 
             <td class="ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a>{spark_html}</td>
             <td><span class="squat-badge" style="background:rgba(0,0,0,0.12);color:{col};border-color:{col};font-weight:bold;">{esc(m['status'])}</span></td>
             <td data-sort="{m['close']}">${m['close']}</td>
-            <td data-sort="{vs50 if vs50 is not None else 0}"><span style="color:{vs50_col};">{vs50_txt}</span><br><span style="font-size:var(--fs-micro);color:#8b949e;">50MA ${m['sma50']}</span></td>
+            <td data-sort="{vs50 if vs50 is not None else 0}"><span style="color:{vs50_col};">{vs50_txt}</span><br><span style="font-size:var(--fs-micro);color:#82827c;">50MA ${m['sma50']}</span></td>
             <td data-sort="{vsprev if vsprev is not None else 0}"><span style="color:{vsprev_col};">{vsprev_txt}</span></td>
-            <td data-sort="{vr if vr is not None else 9}"><span style="color:{vr_col};font-weight:bold;">{vr_txt}</span><br><span style="font-size:var(--fs-micro);color:#8b949e;">{'below' if (vr is not None and vr < 1) else 'above'} avg</span></td>
+            <td data-sort="{vr if vr is not None else 9}"><span style="color:{vr_col};font-weight:bold;">{vr_txt}</span><br><span style="font-size:var(--fs-micro);color:#82827c;">{'below' if (vr is not None and vr < 1) else 'above'} avg</span></td>
             <td data-sort="{rs_val if isinstance(rs_val,int) else 0}"><span class="score">{esc(rs_val)}</span></td>
-            <td data-sort="{m['days_since_high']}"><span style="font-size:var(--fs-table);">{m['days_since_high']}d since high</span><br><span style="font-size:var(--fs-micro);color:#8b949e;">{m['high_count']}× NH · last {esc(m.get('last_high') or '–')}</span></td>
+            <td data-sort="{m['days_since_high']}"><span style="font-size:var(--fs-table);">{m['days_since_high']}d since high</span><br><span style="font-size:var(--fs-micro);color:#82827c;">{m['high_count']}× NH · last {esc(m.get('last_high') or '–')}</span>{_pb2_line(m)}</td>
         </tr>""")
     out.append("</table></div>")
     return "".join(out)
@@ -6015,7 +6726,7 @@ def generate_short_table(shorts: List[dict]) -> str:
         "<th>Short Plan (intraday)</th></tr>",
     ]
     if not shorts:
-        out.append("<tr><td colspan='4' style='color:#8b949e;'>No parabolic-short "
+        out.append("<tr><td colspan='4' style='color:#82827c;'>No parabolic-short "
                    "candidates — nothing is climactically extended right now.</td></tr>")
     else:
         for m in shorts:
@@ -6025,21 +6736,24 @@ def generate_short_table(shorts: List[dict]) -> str:
             tt_txt = f"+{tt}% to 21EMA" if tt is not None else ""
             out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
                 <td class="ep-ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
-                <td data-sort="{m['dist9']}">{_lp(m['ticker'], m['close'])}<br><span class="bad">+{m['dist9']}% above 9EMA</span><br><span style="font-size:var(--fs-caption);color:#8b949e;">+{m['dist21']}% above 21EMA</span><br>{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}</td>
+                <td data-sort="{m['dist9']}">{_lp(m['ticker'], m['close'])}<br><span class="bad">+{m['dist9']}% above 9EMA</span><br><span style="font-size:var(--fs-caption);color:#82827c;">+{m['dist21']}% above 21EMA</span><br>{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span>''')}</td>
                 <td data-sort="{m['vol_ratio']}" style="font-size:var(--fs-table);text-align:left;">
                     <span class="bad">🔥 Vol {m['vol_ratio']}x</span><br>
                     <span class="warn">📈 {m['gap_ups']} recent gap-up{'s' if m['gap_ups'] != 1 else ''}</span><br>
-                    <span style="color:#8b949e;">⚡ accel +{m['accel']}%</span><br>
-                    <span style="color:#8b949e;">1M: +{m['perf_1m']}%</span>
+                    <span style="color:#82827c;">⚡ accel +{m['accel']}%</span><br>
+                    <span style="color:#82827c;">1M: +{m['perf_1m']}%</span>
                 </td>
                 <td data-sort="{risk if risk is not None else 999}">
-                    <div class="entry-box" style="border-color:#da3633;background:rgba(218,54,51,0.08);">
-                        <span style="color:#ff7b72;font-weight:bold;font-size:var(--fs-table);">🔻 Short Setup</span><br>
+                    <div class="entry-box" style="border-color:#8a4341;background:rgba(224,108,106,.08);">
+                        <span style="color:#e06c6a;font-weight:bold;font-size:var(--fs-table);">🔻 Short Setup</span><br>
                         <span class="stop-text">Trigger: break of ORL / AVWAP retest</span><br>
                         <span class="stop-reason">Daily proxy entry ${m['entry']} · stop &gt; day-high ${m['stop']} ({risk_txt})</span><br>
-                        <span style="color:#3fb950;">Cover → 21EMA ${m['target']} <span class="stop-reason">({tt_txt})</span></span>
+                        <span style="color:#54b87f;">Cover → 21EMA ${m['target']} <span class="stop-reason">({tt_txt})</span></span>
                     </div>
-                    <div style="font-size:var(--fs-micro);color:#8b949e;margin-top:4px;">⚠️ Intraday stop is far tighter (above ORH, ~0.4–2%). Best when it gaps UP (exhaustion). Stand aside if it reclaims AVWAP.</div>
+                    <div style="font-size:var(--fs-micro);color:#82827c;margin-top:4px;">⚠️ Intraday stop is far tighter (above ORH, ~0.4–2%). Best when it gaps UP (exhaustion). Stand aside if it reclaims AVWAP.</div>
+                    {_sr_line(m)}
+                    {_tl_line(m, short=True)}
+                    {_ch_line(m, short=True)}
                 </td>
             </tr>""")
     out.append("</table></div>")
@@ -6113,12 +6827,12 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
         tk = s["ticker"]
         is_hve = "rel_vol" in s
         kind = "💥 HVE" if is_hve else "🏆 A+ VCP"
-        kind_color = "#ff7b72" if is_hve else "#3fb950"
+        kind_color = "#e06c6a" if is_hve else "#54b87f"
         it = intra.get(tk)
         if not it or it["bars"] < 5:
             rows.append(f"""<tr>
                 <td class="ticker" data-sort="{esc(tk)}"><a href="https://www.tradingview.com/chart/?symbol={esc(tk)}" target="_blank">{esc(tk)}</a><br><span style="font-size:var(--fs-micro);font-weight:bold;color:{kind_color};">{kind}</span></td>
-                <td colspan="3" style="color:#8b949e;text-align:left;">⏳ Waiting for intraday data to populate (market closed or pre-open).</td>
+                <td colspan="3" style="color:#82827c;text-align:left;">⏳ Waiting for intraday data to populate (market closed or pre-open).</td>
             </tr>""")
             continue
 
@@ -6139,7 +6853,7 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
         vwap_cls = "good" if above_vwap else "bad"
         vwap_txt = "✔️ Above VWAP (buyers)" if above_vwap else "❌ Below VWAP (CANCEL)"
         vol_cls = "good" if vol_ok else "warn"
-        risk_color = "#3fb950" if risk_pct <= 5.0 else "#ff7b72"
+        risk_color = "#54b87f" if risk_pct <= 5.0 else "#e06c6a"
 
         live = (f'<span style="font-weight:bold;">${cp:.2f}</span> '
                 f'<span class="stop-reason">VWAP ${vwap:.2f}</span><br>'
@@ -6174,16 +6888,52 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
         return ""
 
     return f"""
-    <div class="section-title" style="background-color:#10243a;color:#79c0ff;border-bottom:3px solid #1f6feb;">⚔️ INTRADAY EXECUTION PLAN — 盤中執行 (ORB + VWAP · Live · Risk ${risk_dollar:.0f})</div>
+    <div class="section-title" style="background-color:#10243a;color:#aecfe8;border-bottom:3px solid #8cb4d6;">⚔️ INTRADAY EXECUTION PLAN — 盤中執行 (ORB + VWAP · Live · Risk ${risk_dollar:.0f})</div>
     <div class="table-container"><table>
         <thead><tr><th>Ticker</th><th>Live (Price / VWAP / ORB)</th><th>Execution Protocol</th><th>Trigger / Stop / Size</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>
     </table></div>
-    <div style="background:#10243a;border-left:4px solid #1f6feb;padding:12px 15px;margin:0 0 20px;border-radius:0 8px 8px 0;font-size:var(--fs-table);color:#c9d1d9;line-height:1.6;">
-        <b style="color:#79c0ff;">紀律：</b> 開盤前 15–30 分鐘別急；等 5m/30m <b>收盤</b>確認、量過均，再進。價在 VWAP 下一律不做多。<br>
+    <div style="background:#10243a;border-left:4px solid #8cb4d6;padding:12px 15px;margin:0 0 20px;border-radius:0 8px 8px 0;font-size:var(--fs-table);color:#ececea;line-height:1.6;">
+        <b style="color:#aecfe8;">紀律：</b> 開盤前 15–30 分鐘別急；等 5m/30m <b>收盤</b>確認、量過均，再進。價在 VWAP 下一律不做多。<br>
         賣在強勢、沿 9/21 EMA 移動停損；風險每筆固定 ${risk_dollar:.0f}（部位是緊停損的副產品）。
     </div>
     """
+
+
+def _minervini_snapshot_rows(data_date: Optional[str] = None) -> List[dict]:
+    """Lightweight Minervini buy-list rows for the ledger snapshot (IMPROVEMENT_PLAN
+    Phase 1a). Reads the external minervini_engine buy_list JSON (prefers the scan's
+    data_date, else the newest file). Additive & best-effort — any failure returns []
+    so it can never break the report. pivot is the buy-stop entry (long, stop-style)."""
+    try:
+        files = [f for f in os.listdir(MINERVINI_DIR)
+                 if f.startswith("buy_list_") and f.endswith(".json")]
+    except OSError:
+        return []
+    if not files:
+        return []
+    want = f"buy_list_{data_date}.json" if data_date else None
+    fname = want if (want and want in files) else sorted(files)[-1]
+    try:
+        rows = json.load(open(os.path.join(MINERVINI_DIR, fname)))
+    except (OSError, ValueError):
+        return []
+    out: List[dict] = []
+    for m in rows or []:
+        tk = m.get("ticker")
+        pivot, stop = m.get("pivot"), m.get("stop")
+        if not tk or pivot is None or stop is None:
+            continue
+        out.append({
+            "ticker": tk, "tier": "MINERVINI", "section": "minervini",
+            "close": m.get("last_close"), "entry": pivot, "stop": stop,
+            "risk_pct": round((m.get("stop_frac") or 0.0) * 100, 1),
+            "status": m.get("status"), "vcp_score": m.get("vcp_score"),
+            "rs_rating": m.get("rs"), "adr": m.get("adr"), "sector": m.get("sector"),
+            "pattern": m.get("pattern"), "pct_to_pivot": m.get("pct_to_pivot"),
+            "buy_list_asof": fname[len("buy_list_"):-len(".json")],
+        })
+    return out
 
 
 # ----------------------------------------------------------------------------
@@ -6192,6 +6942,16 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
 def run_scanners_and_generate_html() -> str:
     diag = Diagnostics()
     t0 = time.time()
+
+    # The lesson engines must never degrade SILENTLY: a failed import would
+    # otherwise produce a report with no zones/pullback/trendline/channel
+    # reads (and an all-None SR/PB/TL would starve the Stage-4 gate). Surface
+    # it in the DONE line's warning count so the morning gate/log shows it.
+    for _name, _mod in (("madrry_sr_zones", _srz), ("madrry_pullback_buy", _pbb),
+                        ("madrry_trendlines", _tlv2), ("madrry_channels", _chv)):
+        if _mod is None:
+            diag.warn(f"lesson engine FAILED TO IMPORT: {_name} — report runs "
+                      f"without its reads (Stage-4 gate affected if SR/PB/TL)")
 
     with timed(diag, "rs_scores"):
         rs_map = fetch_and_load_rs_scores(diag)
@@ -6253,8 +7013,18 @@ def run_scanners_and_generate_html() -> str:
                         f"session is <b>{esc(expected_session)}</b> — vendor data still consolidating; "
                         f"treat tiers/fires as provisional (or re-run later).</div>")
 
+    # Persist S&P breadth to the durable regime feed (keyed by data_date). The
+    # writer had been orphaned since ~2026-06-08; re-wired here. Non-fatal.
+    _persist_breadth_history(breadth, data_date)
+
     with timed(diag, "scan_coil"):
         tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full, coil_funnel = scan_coil(rs_map, market_modifier, diag)
+        # Geometry ratification: switch coil A+/A/A- to the 1.5×ADR stop + 5-day validity for
+        # sessions >= STOP_REGIME_SWITCH_SESSION. Runs BEFORE write_order_plan + HTML render so
+        # the printed stop, IBKR sizing, and the ledger snapshot all follow. Date-gated: on a
+        # pre-switch session (e.g. a holiday re-run of older data) it only stamps stop_version +
+        # the stable stop_tight/stop_atr fields and changes nothing printed. Idempotent.
+        _apply_stop_regime(tier_a_plus + tier_a + tier_a_minus + tier_a_minus_full, data_date)
     with timed(diag, "scan_htf"):
         htf_matches = scan_htf(rs_map, market_modifier, diag, data_date)
         # Merge HTF fires INTO Tier A+ (user's chosen placement). Dedup against
@@ -6457,7 +7227,63 @@ def run_scanners_and_generate_html() -> str:
     # the scan's DATA date — re-running later the same day overwrites the same
     # file (the day's final run wins), so tomorrow's tracking always grades the
     # genuine previous SESSION, never an intermediate intraday run.
-    _setups_payload = json.dumps(tier_a_plus + tier_a + tier_a_minus_full + ep_matches + ur_matches)
+    _base_rows = tier_a_plus + tier_a + tier_a_minus_full + ep_matches + ur_matches
+    # ---- Ledger snapshot enrichment (IMPROVEMENT_PLAN Phase 1a) — ADDITIVE & fully
+    # wrapped so a failure here can NEVER break report persistence (falls back to the
+    # legacy coil+HVE+U&R payload). Adds: a `section` tag on every row; the Short,
+    # 52wk-high and Minervini sections (previously outcome-UNTRACKED — the core gap);
+    # and a `top_pick` flag on the 5 dashboard picks. Existing consumers
+    # (tier_a_tracker, v4_tracker, track_previous_setups, premarket_execution_engine)
+    # all filter to A+/A/A- and ignore the new tier/section values. ----
+    _setup_rows = _base_rows
+    try:
+        for s in ep_matches:
+            s["section"] = "hve"
+        for s in ur_matches:
+            s["section"] = "ur"
+        for s in tier_a_plus + tier_a + tier_a_minus_full:
+            s.setdefault("section", "coil")
+        _short_rows = []
+        for s in (short_matches or []):
+            r = dict(s); r["tier"] = "SHORT"; r["section"] = "short"; r["direction"] = "short"
+            _short_rows.append(r)
+        _nh_rows = []
+        for s in (nh_data.get("green", []) or []):
+            r = dict(s); r["tier"] = "NH52"; r.setdefault("section", "nh52")
+            _nh_rows.append(r)
+        _min_rows = _minervini_snapshot_rows(data_date)
+        _top_tickers = {st.get("ticker") for _, st in
+                        _rank_top_picks(tier_a_plus, tier_a, tier_a_minus, ants_boost=True)[:5]}
+        _setup_rows = _base_rows + _short_rows + _nh_rows + _min_rows
+        for s in _setup_rows:
+            if s.get("ticker") in _top_tickers:
+                s["top_pick"] = True
+        # Phase-4: print the 1.5×ADR alternate stop ALONGSIDE the tight stop (additive, does
+        # NOT change the printed `stop` — that switch is a user decision downstream). Lets the
+        # ledger label BOTH stop geometries on live signals from now on, starting the OOS
+        # validation clock for the stop-width finding. Direction-aware; needs entry + adr.
+        _ATR_STOP_MULT = 1.5
+        for s in _setup_rows:
+            # Every snapshot row carries a stop_version regime marker (coil A+/A/A- get atr_5day
+            # from _apply_stop_regime; all others stay tight_3day — they did not switch, §2.1).
+            s.setdefault("stop_version", "tight_3day")
+            _e, _a = s.get("entry"), s.get("adr")
+            if _e is None or _a is None:
+                continue
+            try:
+                _e = float(_e); _a = float(_a)
+            except (TypeError, ValueError):
+                continue
+            if _a <= 0:
+                continue
+            if s.get("direction") == "short" or s.get("section") == "short":
+                s["stop_atr"] = round(_e * (1 + _ATR_STOP_MULT * _a / 100.0), 2)
+            else:
+                s["stop_atr"] = round(_e * (1 - _ATR_STOP_MULT * _a / 100.0), 2)
+    except Exception as exc:  # noqa: BLE001 — snapshot enrichment must never break persistence
+        diag.warn(f"ledger snapshot enrichment skipped: {exc}")
+        _setup_rows = _base_rows
+    _setups_payload = json.dumps(_setup_rows)
     _atomic_write(LATEST_SETUPS_PATH, _setups_payload)   # legacy/stable alias
     _save_dated_setups(_setups_payload, data_date)
     _atomic_write(HTML_REPORT_PATH, html)
