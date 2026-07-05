@@ -169,6 +169,63 @@ def _narrative(ticker: str, inner_html: str) -> str:
         return inner_html
 
 
+# ---- shared row cells (2026-07-05 layout: chart-centric table / mobile cards) ----
+def _lesson_badge(m: dict) -> str:
+    """Compact lesson-confluence chip for the ticker cell; '' below 3/4."""
+    try:
+        ls = m.get("lesson_confluence")
+        if not ls or len(ls) < 3:
+            return ""
+        return (f"<span class='lesson-ct' title='{len(ls)} of the 4 tutorial lessons "
+                f"agree on this entry ({esc(' + '.join(str(x) for x in ls))})'>"
+                f"{len(ls)}/4 LESSONS</span>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _tk_cell(m: dict, *, entry=None, stop=None, cls: str = "ticker") -> str:
+    """Sticky ticker cell — the card anchor on mobile: link + live price +
+    lesson-confluence chip."""
+    tk = str(m.get("ticker", ""))
+    lp = _lp(tk, m.get("close"), entry=entry, stop=stop) if m.get("close") is not None else ""
+    return (f'<td class="{cls}" data-sort="{esc(tk)}">'
+            f'<a href="https://www.tradingview.com/chart/?symbol={esc(tk)}" target="_blank">{esc(tk)}</a>'
+            + (f"<div>{lp}</div>" if lp else "")
+            + _lesson_badge(m) + "</td>")
+
+
+def _chart_cell(chart_html: str, sort_val) -> str:
+    """The Chart column: the candlestick chart ALONE (sorts by price)."""
+    return f'<td class="c-chart" data-sort="{sort_val}">{chart_html or ""}</td>'
+
+
+def _narr_cell(ticker: str, inner_html: str) -> str:
+    """Narrative column (theme/sector/industry, tap-to-expand fundamentals)."""
+    return f'<td class="c-narr">{_narrative(ticker, inner_html)}</td>'
+
+
+def _edge_details(m: dict, lines: List[str]) -> str:
+    """Collapsible wrapper for the engine detail lines. The summary strip shows
+    which engines have a read (+ the lesson count); the full text lives inside
+    so rows stay short. '' when no engine produced a line."""
+    lines = [x for x in lines if x]
+    if not lines:
+        return ""
+    toks = []
+    ls = m.get("lesson_confluence") or []
+    if len(ls) >= 3:
+        toks.append(f"<span class='lesson-ct'>{len(ls)}/4</span>")
+    for key, has in (("SR", m.get("sr_grade")), ("PB", m.get("pb2_state")),
+                     ("TL", m.get("tl_sup_kind") or m.get("tl_res_kind")),
+                     ("CH", m.get("ch_dir") or m.get("ch_flags"))):
+        if has:
+            toks.append(f"<span class='lbl'>{key}</span>")
+    summary = " ".join(toks) if toks else "<span class='lbl'>ENGINES</span>"
+    return ("<details class='lessons'><summary>" + summary
+            + " <span class='sumhint'>details</span></summary>"
+            + "".join(lines) + "</details>")
+
+
 def _prefetch_fundamentals(tickers, budget_s: float = 90.0) -> None:
     """Warm the fundamentals cache for every ticker in the report. Called once for the
     main MADRRY batch (90s) and again, smaller, inside the Minervini/Trilogy generators
@@ -256,13 +313,13 @@ def _ma_cells(d: Optional[dict]) -> str:
     for p in (10, 20, 50):
         v = d.get(p)
         if v is None:
-            cells.append("<td class='num ma-cell' data-sort='9999'>—</td>")
+            cells.append(f"<td class='num ma-cell c-stat' data-label='Δ{p}MA' data-sort='9999'>—</td>")
         else:
             ab = abs(v)
             arrow = "▲" if v >= 0 else "▼"
             col = "var(--green)" if v >= 0 else "var(--red)"
             cells.append(
-                f"<td class='num ma-cell' data-sort='{ab:.4f}'>{ab:.1f}"
+                f"<td class='num ma-cell c-stat' data-label='Δ{p}MA' data-sort='{ab:.4f}'>{ab:.1f}"
                 f"<span style='color:{col};font-size:var(--fs-micro);'>{arrow}</span></td>")
     return "".join(cells)
 
@@ -284,13 +341,13 @@ def _fwd_yoy_cell(ticker: str) -> str:
         except Exception:
             y = None
     if y is None:
-        return "<td class='num fy-cell' data-sort='-999'>—</td>"
+        return "<td class='num fy-cell c-stat' data-label='Fwd YoY' data-sort='-999'>—</td>"
     pct = y * 100.0
     col = "var(--green)" if pct > 0.5 else ("var(--red)" if pct < -0.5 else "var(--text-3)")
     sign = "+" if pct >= 0 else ""
     sub = (f"<br><span style='font-size:var(--fs-micro);color:var(--text-3);'>{esc(lbl)}</span>"
            if lbl else "")
-    return (f"<td class='num fy-cell' data-sort='{pct:.2f}'>"
+    return (f"<td class='num fy-cell c-stat' data-label='Fwd YoY' data-sort='{pct:.2f}'>"
             f"<span style='color:{col};font-weight:600;'>{sign}{pct:.0f}%</span>{sub}</td>")
 
 
@@ -311,7 +368,7 @@ def _eps_accel_cell(ticker: str) -> str:
     score = a.get("accel_score") if a else None
     verdict = a.get("verdict") if a else None
     if score is None or verdict is None:
-        return "<td class='num accel-cell' data-sort='-9999'>—</td>"
+        return "<td class='num accel-cell c-stat' data-label='EPS Acc' data-sort='-9999'>—</td>"
     if verdict == "accel":
         arrow, acol = ("▲▲" if score >= 20 else "▲"), "var(--green)"
     elif verdict == "decel":
@@ -335,7 +392,7 @@ def _eps_accel_cell(ticker: str) -> str:
         sub = f"<br><span style='font-size:var(--fs-micro);'>{ttm}</span>"
     else:
         sub = ""
-    return (f"<td class='num accel-cell' data-sort='{score:.2f}'>"
+    return (f"<td class='num accel-cell c-stat' data-label='EPS Acc' data-sort='{score:.2f}'>"
             f"<span style='color:{acol};font-weight:700;'>{arrow}</span>{ynum}{sub}</td>")
 
 
@@ -2478,9 +2535,9 @@ def _lessons_line(m: dict) -> str:
                + ". Multiple independent edges stacking on one entry - the "
                  "multiple-edge trading area. Boosts dashboard Top-Picks ranking; "
                  "filters nothing; draft order plan unaffected.")
-        return (f"<div class='edge-line' title='{esc(tip)}'>🎓 "
-                f"<span style='color:#d3a04d;font-weight:700;'>LESSONS {len(ls)}/4"
-                f"</span> <span style='color:#d3a04d;'>{label}</span></div>")
+        return (f"<div class='edge-line' title='{esc(tip)}'>"
+                f"<span class='lbl lbl-hot'>LESSONS {len(ls)}/4</span> "
+                f"<span style='color:#d3a04d;'>{label}</span></div>")
     except Exception:  # noqa: BLE001
         return ""
 
@@ -4143,6 +4200,56 @@ PAGE_CSS = """
     .ext-asof { color:var(--text-3); font-size:var(--fs-caption); margin:6px 0 12px; }
     .ext-asof code { color:var(--text-2); background:var(--raised); padding:1px 5px; border-radius:4px; font-family:var(--mono); }
     .grade-badge { font-family:var(--mono); font-weight:700; font-size:var(--fs-body); padding:3px 9px; border-radius:4px; display:inline-block; }
+
+    /* ---- chart-centric rows + mobile cards (2026-07-05 layout) ---- */
+    .kicker { display:block; color:var(--text-3); font-size:var(--fs-micro); font-weight:600;
+              letter-spacing:.08em; text-transform:uppercase; }
+    .lbl { display:inline-block; font-size:10px; font-weight:600; letter-spacing:.05em; line-height:1.4;
+           border:1px solid var(--line-2); border-radius:var(--r-chip); padding:0 4px; color:var(--text-2); }
+    .lbl-hot { color:var(--warn); border-color:var(--bd-warn); }
+    .lesson-ct { display:inline-block; font-size:10px; font-weight:600; letter-spacing:.04em;
+                 color:var(--warn); border:1px solid var(--bd-warn); border-radius:var(--r-chip);
+                 padding:1px 5px; margin-top:3px; white-space:nowrap; }
+    details.lessons { margin-top:5px; }
+    details.lessons > summary { cursor:pointer; list-style:none; padding:3px 0; }
+    details.lessons > summary::-webkit-details-marker { display:none; }
+    details.lessons > summary .sumhint { color:var(--text-3); font-size:var(--fs-micro); }
+    details.lessons > summary .sumhint::after { content:' ▸'; opacity:.6; }
+    details.lessons[open] > summary .sumhint::after { content:' ▾'; }
+    /* desktop: give the chart column room */
+    table.rowcards th[data-col='price'], table.rowcards td.c-chart { width:360px; min-width:340px; }
+    td.c-chart .cchart { margin-top:0; }
+    td.c-narr { min-width:130px; }
+
+    @media (max-width: 768px) {
+      table.rowcards { min-width:0; border-collapse:separate; }
+      table.rowcards thead { display:none; }
+      table.rowcards tr { display:grid; grid-template-columns:repeat(6,1fr); gap:4px 8px;
+        background:var(--surface); border:1px solid var(--line); border-radius:10px;
+        padding:10px 10px 12px; margin:0 0 12px;
+        content-visibility:auto; contain-intrinsic-size:auto 560px; }
+      table.rowcards td { display:block; border-bottom:none; padding:0; font-size:var(--fs-table); }
+      table.rowcards td.col-hidden { display:block !important; }   /* cards always show everything */
+      table.rowcards th:first-child, table.rowcards td:first-child
+        { position:static; background:transparent; }               /* no sticky col in cards */
+      table.rowcards td.ticker { grid-column:1/-1; order:0; display:flex; align-items:baseline;
+                                 gap:10px; flex-wrap:wrap; }
+      table.rowcards td.c-chart { grid-column:1/-1; order:1; width:auto; min-width:0; }
+      table.rowcards td.c-chart .cchart { max-width:none; }
+      table.rowcards td.c-plan { grid-column:1/-1; order:2; }
+      table.rowcards td.c-narr { grid-column:1/-1; order:3; min-width:0; }
+      table.rowcards td.c-stat { grid-column:span 2; order:4; text-align:left;
+        background:var(--raised); border:1px solid var(--line); border-radius:var(--r-card); padding:4px 6px; }
+      table.rowcards td[data-label]::before { content:attr(data-label); display:block;
+        font-size:10px; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; }
+      table.rowcards td.c-status { grid-column:1/-1; order:5; }
+      table.rowcards td[colspan] { grid-column:1/-1; }
+      .rowcards-container { max-height:none; overflow:visible; }
+      .rowcards-container .colbar { display:none; }                /* column tools are a desktop feature */
+      .tabs { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch;
+              position:sticky; top:0; background:var(--bg); z-index:9; }
+      .tab-btn { flex:0 0 auto; }
+    }
 """
 
 PAGE_JS = """
@@ -4485,7 +4592,7 @@ async function refreshPrices(btn) {
   //     click-to-sort and column reorder (both resolve positions live).
   var PFX = 'madrry.colsel.';
   var LOCKED = 'tk';                       // always visible, not toggleable
-  var DEFAULT = ['tk', 'price'];
+  var DEFAULT = ['tk', 'price', 'plan'];
   function load(s) { try { var v = JSON.parse(localStorage.getItem(PFX + s)); return (v && v.length) ? v : null; } catch (e) { return null; } }
   function save(s, a) { try { localStorage.setItem(PFX + s, JSON.stringify(a)); } catch (e) {} }
   function keysOf(table) {
@@ -4827,8 +4934,9 @@ def _sr_line(m: dict) -> str:
                "pullback, headroom to the next opposing zone. zone-stop = suggested stop just "
                "OUTSIDE the protecting zone; R:R measured to the first daily barrier (wk = to the "
                "first weekly barrier).")
-        return (f"<div class='edge-line' title='{esc(tip)}'>📐 <span style='color:{col};"
-                f"font-weight:600;'>SR-entry {esc(str(g))}</span> · " + " · ".join(bits) + "</div>")
+        return (f"<div class='edge-line' title='{esc(tip)}'><span class='lbl'>SR</span> "
+                f"<span style='color:{col};font-weight:600;'>entry {esc(str(g))}</span> · "
+                + " · ".join(bits) + "</div>")
     except Exception:  # noqa: BLE001
         return ""
 
@@ -4845,7 +4953,7 @@ def _support_line(m: dict) -> str:
         tip = ("Backed by: " + ", ".join(names.get(str(e), str(e)) for e in eng)
                + " — the Stage-4 entry-engine gate (each engine verified on its "
                  "tutorial's own trades; details in the lines below)")
-        return (f"<div class='edge-line' title='{esc(tip)}'>🧩 "
+        return (f"<div class='edge-line' title='{esc(tip)}'><span class='lbl'>GATE</span> "
                 f"<span style='color:#54b87f;font-weight:600;'>backed by {label}</span></div>")
     except Exception:  # noqa: BLE001
         return ""
@@ -4889,8 +4997,7 @@ def _tl_line(m: dict, short: bool = False) -> str:
                "steep lines are weak; (wk) = weekly timeframe dominates daily. "
                + ("; ".join(anch) + ". " if anch else "")
                + "Flags: " + (", ".join(flags) if flags else "none"))
-        return (f"<div class='edge-line' title='{esc(tip)}'>📉 "
-                f"<span style='color:#aecfe8;font-weight:600;'>TL</span> · "
+        return (f"<div class='edge-line' title='{esc(tip)}'><span class='lbl'>TL</span> "
                 + " · ".join(bits) + "</div>")
     except Exception:  # noqa: BLE001
         return ""
@@ -4941,12 +5048,12 @@ def _ch_line(m: dict, short: bool = False) -> str:
                    "channel contains the entry. An upside break OUT of a down channel "
                    "is squeeze bait until proven (fake-break-watch). Flags: "
                    + ", ".join(flags))
-            return (f"<div class='edge-line' title='{esc(tip)}'>📦 "
-                    f"<span style='color:#d3a04d;font-weight:600;'>CH break</span> · "
+            return (f"<div class='edge-line' title='{esc(tip)}'><span class='lbl'>CH</span> "
+                    f"<span style='color:#d3a04d;font-weight:600;'>break</span> · "
                     + "+".join(toks) + "</div>")
         tf = "" if m.get("ch_tf") == "D" else ",wk"
-        col = "#54b87f" if d == "up" else "#f85149"
-        bits = [f"<span style='color:{col};font-weight:600;'>CH({esc(str(d))}{tf})</span>"]
+        col = "#54b87f" if d == "up" else "#e06c6a"
+        bits = [f"<span class='lbl'>CH</span> <span style='color:{col};font-weight:600;'>{esc(str(d))}{tf}</span>"]
         if m.get("ch_pos_pct") is not None:
             bits.append(esc(f"pos {m['ch_pos_pct']}%"))
         if m.get("ch_top_at") is not None:
@@ -4981,7 +5088,7 @@ def _ch_line(m: dict, short: bool = False) -> str:
                "(era-consistent, ch_study n=12.9k): the trigger at the lid is the "
                "lid breaking. Flags: "
                + (", ".join(flags) if flags else "none"))
-        return (f"<div class='edge-line' title='{esc(tip)}'>📦 "
+        return (f"<div class='edge-line' title='{esc(tip)}'>"
                 + " · ".join(bits) + "</div>")
     except Exception:  # noqa: BLE001
         return ""
@@ -5001,7 +5108,7 @@ def _pb2_line(m: dict) -> str:
                "line is breaking (recovery) or pending (setup - the trigger is tomorrow's "
                "buy-stop level). Stop goes under the prior low; risk capped at 10%. "
                "Flags: " + (", ".join(flags) if flags else "none"))
-        parts = [f"🪃 <span style='color:{col};font-weight:600;'>PB-{esc(str(st))}</span>"]
+        parts = [f"<span class='lbl'>PB</span> <span style='color:{col};font-weight:600;'>{esc(str(st))}</span>"]
         if m.get("pb2_trigger") is not None:
             parts.append(esc(f"trig ${m['pb2_trigger']}"))
         if m.get("pb2_stop") is not None:
@@ -5102,11 +5209,13 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
                 if subtitle else "")
     out = [
         f'<div class="section-title {bg_class}">{esc(title)}{sub_html}</div>',
-        '<div class="table-container"><table data-schema="coil">',
-        "<tr><th data-col='tk'>Ticker</th><th data-col='plan'>Trade Plan</th><th data-col='price'>Price &amp; Narrative</th><th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP, or an equivalent 20-day calc on the external/HTF tabs)'>ADR</th>"
+        '<div class="table-container rowcards-container"><table data-schema="coil2" class="rowcards">',
+        "<thead><tr><th data-col='tk'>Ticker</th><th data-col='price'>Chart</th><th data-col='plan'>Trade Plan</th>"
+        "<th data-col='narr'>Narrative</th>"
+        "<th class='num' data-col='adr' title='Average Daily Range — 20-day avg of (High/Low−1), % · how much it typically moves per day (TradingView ADRP, or an equivalent 20-day calc on the external/HTF tabs)'>ADR</th>"
         "<th data-col='rs'>RS</th><th data-col='meta'>M.E.T.A.</th><th class='num' data-col='ants'>ANTS</th>"
         + _MA_YOY_HEADERS +
-        "<th data-col='status'>Status (Vol &amp; MA)</th></tr>",
+        "<th data-col='status'>Status (Vol &amp; MA)</th></tr></thead>",
     ]
     for m in matches:
         risk_color = "#54b87f" if m["risk_pct"] <= 4.0 else ("#d3a04d" if m["risk_pct"] <= 6.0 else "#e06c6a")
@@ -5148,7 +5257,6 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
                    f"style='color:var(--text-3);font-size:var(--fs-micro);vertical-align:super;'>*</span>"
                    if rs_asof else "")
         spark = m.get("spark", "")
-        spark_html = f"<div class='spark'>{spark}</div>" if spark else ""
 
         # ANTS (David Ryan accumulation): today's chip + a 3-month prior-accumulation
         # note. Sortable by today-level, then 3M peak, then chain ("—" parks last).
@@ -5224,32 +5332,29 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
 
         geo_line = _geo_line(m)
         out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
-            <td class="ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
-            <td data-sort="{m['risk_pct']}">
+            {_tk_cell(m, entry=m['entry'], stop=m['stop'])}
+            {_chart_cell(spark, m['close'])}
+            <td class="c-plan" data-sort="{m['risk_pct']}">
                 <div class="entry-box">
-                    <span style="color:var(--text-3);font-weight:500;font-size:var(--fs-micro);">BREAKOUT</span><br>
+                    <span class="kicker">BREAKOUT</span>
                     <span class="entry-text">Buy: ${m['entry']}</span><br>
                     <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">({esc(m['stop_reason'])})</span></span><br>
                     <span style="color:{risk_color};font-size:var(--fs-caption);font-family:var(--mono);">Risk: {m['risk_pct']}%</span>{geo_line}
                 </div>
                 {pb_html}
-                {_lessons_line(m)}
-                {_support_line(m)}
-                {_sr_line(m)}
-                {_pb2_line(m)}
-                {_tl_line(m)}
-                {_ch_line(m)}
+                {_edge_details(m, [_lessons_line(m), _support_line(m), _sr_line(m),
+                                   _pb2_line(m), _tl_line(m), _ch_line(m)])}
             </td>
-            <td data-sort="{m['close']}">{_lp(m['ticker'], m['close'], entry=m['entry'], stop=m['stop'])}{spark_html}<br>{_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}</td>
-            <td class="num" data-sort="{m['adr']}">{m['adr']}%</td>
-            <td data-sort="{rs_val if isinstance(rs_val, int) else 0}"><span class="score">{esc(rs_val)}</span>{rs_mark}<br><span style="font-size:var(--fs-micro);color:var(--text-3);">1M: +{m['perf_1m']}%</span></td>
-            <td data-sort="{meta_score}">
+            {_narr_cell(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}
+            <td class="num c-stat" data-label="ADR" data-sort="{m['adr']}">{m['adr']}%</td>
+            <td class="c-stat" data-label="RS" data-sort="{rs_val if isinstance(rs_val, int) else 0}"><span class="score">{esc(rs_val)}</span>{rs_mark}<br><span style="font-size:var(--fs-micro);color:var(--text-3);">1M: +{m['perf_1m']}%</span></td>
+            <td class="c-stat" data-label="META" data-sort="{meta_score}">
                 <span style="font-size:var(--fs-body);font-weight:600;font-family:var(--mono);color:{ms_color};background:{ms_bg};padding:4px 8px;border-radius:4px;border:1px solid {ms_color};">{meta_score}</span>
                 {_meta_details_block(m.get('meta_details', []))}
             </td>
-            <td class="num" data-sort="{ants_sort}">{ants_html}</td>
+            <td class="num c-stat" data-label="ANTS" data-sort="{ants_sort}">{ants_html}</td>
             {_ma_cells(m.get('_ma_dist'))}{_fwd_yoy_cell(m['ticker'])}{_eps_accel_cell(m['ticker'])}
-            <td style="text-align:left;" data-sort="{m['vol_pct']}">
+            <td class="c-status" style="text-align:left;" data-sort="{m['vol_pct']}">
                 {nh_html}{rs_badge}{status_html}{fp_html}{trendline_html}
                 <span class="{vol_color}">Vol: {m['vol_pct']}%</span><br>
                 <span class="{dist_color}">Dist to {esc(m['hugging'])}: {m['dist_pct']}%</span><br>
