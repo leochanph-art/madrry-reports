@@ -349,6 +349,46 @@ def analyze_lines(df: pd.DataFrame, entry: Any, direction: str = "long",
                     flags.append("fresh_break_down_" + q["kind"] + tf_tag)
                 else:
                     flags.append("fresh_break_up_" + q["kind"] + tf_tag)
+        # --- SALIENT lines for the CHART (USER 2026-07-06) -------------------
+        # analyze_lines above selects the trade-geometry lines (nearest alive
+        # support below entry / resistance above entry). Those are correct for
+        # the gate + text, but they hide the human-obvious multi-touch / recent
+        # lines and can surface a 1-touch line 5 ATR away. Draw the SALIENT line
+        # instead: most construction+retest touches, nearest to price, daily
+        # preferred, INCLUDING a just-broken line (a fresh break IS the event —
+        # EPD's June-highs DTL). Emitted as tl_draw_* so the gate/flags/text
+        # (tl_sup_at, tl_sup_dist_atr, ...) are completely untouched.
+        try:
+            px = float(fr["c"].iloc[-1])
+            _tf_d = {"D": 1.0, "W": 5.0, "M": 21.0}
+
+            def _valnow(q):
+                return q.get("value_today_raw", q["value_today"])
+
+            def _sal(q):
+                dist = abs(_valnow(q) - px) / atr if atr else 0.0
+                eff = q["touches"] + q["snapbacks"] + 2   # 2 construction anchors always count
+                return eff * 2.0 - dist - (2.0 if q.get("steep") else 0.0)
+
+            _cand = [q for q in ld + lw
+                     if ((not q["broken"]) or (q["bars_since_break"] is not None
+                                               and q["bars_since_break"] <= SNAPBACK_BARS))
+                     and abs(_valnow(q) - px) <= 4.0 * atr]     # only lines near the action
+            _cand_d = [q for q in _cand if q["timeframe"] == "D"]
+            _pool = _cand_d or _cand                            # a daily chart reads daily lines
+            _sup2 = max((q for q in _pool if q["kind"] in sup_kinds), key=_sal, default=None)
+            _res2 = max((q for q in _pool if q["kind"] in res_kinds), key=_sal, default=None)
+            if _sup2 is not None:
+                out["tl_draw_sup_now"] = float(_valnow(_sup2))
+                out["tl_draw_sup_slope_d"] = float(_sup2["slope_abs"]) / _tf_d.get(_sup2["timeframe"], 1.0)
+                out["tl_draw_sup_kind"] = _sup2["kind"]
+            if _res2 is not None:
+                out["tl_draw_res_now"] = float(_valnow(_res2))
+                out["tl_draw_res_slope_d"] = float(_res2["slope_abs"]) / _tf_d.get(_res2["timeframe"], 1.0)
+                out["tl_draw_res_kind"] = _res2["kind"]
+        except Exception:  # noqa: BLE001 — never break a scan over the chart hint
+            pass
+
         if not out and not flags:
             return {}
         out["tl_flags"] = sorted(set(str(f) for f in flags))

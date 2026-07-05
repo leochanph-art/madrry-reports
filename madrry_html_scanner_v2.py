@@ -1843,11 +1843,11 @@ def make_price_spark(closes: Iterable[float], window: int = 40) -> str:
 # CANDLESTICK CHART (2026-07-05 layout upgrade)
 #
 # The chart cell ships a compact JSON payload in a data attribute; ONE shared
-# client-side renderer (CANDLE_JS) lazily draws candles + volume + 10/20/50
-# MAs + the lesson-engine levels (SR zone band, PB trigger/stop, plan
-# entry/stop, trendline + channel-rail diagonals) when the row scrolls into
-# view. Server-side SVG candles were rejected: ~16KB of markup per chart
-# across ~400 charts would triple the report size.
+# client-side renderer (CANDLE_JS) lazily draws candles + volume (coloured by
+# up/down like the candles) + labelled 10/20/50 MAs, plus a decluttered set of
+# levels (USER 2026-07-06): the SR zone band, plan entry/stop, and the two
+# SALIENT trendlines — no text tags on any line except the MA period. Server-
+# side SVG candles were rejected: ~16KB/chart × ~400 would triple the size.
 # ----------------------------------------------------------------------------
 def _cfin(x, nd: int = 2) -> Optional[float]:
     """Finite float rounded to nd, else None (payload hygiene)."""
@@ -1861,10 +1861,12 @@ def _cfin(x, nd: int = 2) -> Optional[float]:
 
 
 def _candle_overlays(plan: Optional[dict]) -> dict:
-    """Whitelisted plan/lesson levels for the chart renderer, short-keyed to
-    keep the per-row payload small. Diagonal pairs (value-now + $/trading-day
-    slope) come from the tl_*_now / ch_gov_* exports added to the engines —
-    ch_top_at/ch_bot_at are ensemble trade levels and are NOT drawable."""
+    """Whitelisted chart levels, short-keyed to keep the payload small. USER
+    2026-07-06 declutter: the chart draws only the meaningful few — the SR zone
+    band, the plan entry/stop, and the two SALIENT trendlines (tl_draw_* — most-
+    touched/recent/near-price, chosen by the engine's salience pass, NOT the
+    trade-nearest line). Channel rails, PB lines and the SR-stop line were
+    dropped from the chart (still shown in the collapsible text details)."""
     if not plan:
         return {}
     ov: Dict[str, Any] = {}
@@ -1878,31 +1880,19 @@ def _candle_overlays(plan: Optional[dict]) -> dict:
     put("s", plan.get("stop"))
     put("srl", plan.get("sr_prot_lo"))
     put("srh", plan.get("sr_prot_hi"))
-    put("srs", plan.get("sr_stop_suggest"))
-    if plan.get("pb2_state") in ("setup", "recovery"):
-        put("pbt", plan.get("pb2_trigger"))
-        put("pbs", plan.get("pb2_stop"))
-    put("tsn", plan.get("tl_sup_now"))
-    put("tsd", plan.get("tl_sup_slope_d"), 4)
-    put("trn", plan.get("tl_res_now"))
-    put("trd", plan.get("tl_res_slope_d"), 4)
-    put("ctn", plan.get("ch_gov_top_now"))
-    put("cbn", plan.get("ch_gov_bot_now"))
-    put("cd", plan.get("ch_gov_slope_d"), 4)
+    # salient trendlines picked for the chart; fall back to the nearest trade
+    # line only if the engine produced no salient line.
+    put("tsn", plan.get("tl_draw_sup_now", plan.get("tl_sup_now")))
+    put("tsd", plan.get("tl_draw_sup_slope_d", plan.get("tl_sup_slope_d")), 4)
+    put("trn", plan.get("tl_draw_res_now", plan.get("tl_res_now")))
+    put("trd", plan.get("tl_draw_res_slope_d", plan.get("tl_res_slope_d")), 4)
     # a diagonal without its slope (or vice versa) is undrawable — drop the orphan
     for a, b in (("tsn", "tsd"), ("trn", "trd")):
         if (a in ov) != (b in ov):
             ov.pop(a, None)
             ov.pop(b, None)
-    if not ("ctn" in ov and "cbn" in ov and "cd" in ov):
-        for k in ("ctn", "cbn", "cd"):
-            ov.pop(k, None)
     if "srl" in ov and "srh" in ov and ov["srl"] > ov["srh"]:
         ov.pop("srl"), ov.pop("srh")
-    if "tsn" in ov:
-        ov["tsk"] = str(plan.get("tl_sup_kind") or "TL")[:3]
-    if "trn" in ov:
-        ov["trk"] = str(plan.get("tl_res_kind") or "TL")[:3]
     return ov
 
 
@@ -2642,6 +2632,11 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             {"left": "average_volume_60d_calc", "operation": "egreater", "right": 500000},
             {"left": "close", "operation": "egreater", "right": "SMA200"},
             {"left": "market_cap_basic", "operation": "egreater", "right": 2000000000},
+            # ADR floor (USER 2026-07-06): drop dead / illiquid names that barely
+            # move (e.g. RAMP ~0.5% ADR). Server-side ADRP gate — TradingView
+            # accepts it (the 52wk-high scan uses the same field). Re-introduces a
+            # floor at 1.5% (the earlier 2.0% floor was removed 2026-06-30).
+            {"left": "ADRP", "operation": "egreater", "right": 1.5},
         ],
         # NOTE on the 52-week band (within 0-20% of the 52w high): TradingView's
         # /scan API rejects arithmetic on the RHS (price_52_week_high * 0.8 ->
@@ -2701,8 +2696,9 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             p6 = perf_6m or 0
             py = perf_y or 0
             # (momentum floor removed 2026-06-28 per user — no longer gates the candidate pool)
-            # (ADR >=2.0% floor removed 2026-06-30 per user — ADR no longer gates the pool;
-            # `adr` is still TradingView's native ADRP and is used for tier discrimination below.)
+            # (ADR floor: server-side ADRP >= 1.5% in payload_coil per USER 2026-07-06 —
+            # keeps out dead/illiquid names like RAMP; `adr` is TradingView's native ADRP
+            # and is still used for tier discrimination below.)
 
             # 52-week position band (couldn't go in the server filter — see payload
             # note). Keep names within 0-20% BELOW their 52-week high.
@@ -3989,15 +3985,24 @@ PAGE_CSS = """
     .dot-g { background:var(--green); } .dot-y { background:var(--yellow); } .dot-r { background:var(--red); } .dot-i { background:var(--text-3); }
 
     .toppicks { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 24px; }
-    .tp-card { flex:1 1 150px; min-width:150px; background:var(--surface); border:1px solid var(--bd-green); border-radius:8px; padding:10px 12px; }
+    .tp-card { flex:1 1 190px; min-width:180px; background:var(--surface); border:1px solid var(--line);
+               border-top:2px solid var(--line-2); border-radius:var(--r-card); padding:11px 13px; }
+    .tp-card.t-aplus { border-top-color:var(--up); }
+    .tp-card.t-a { border-top-color:var(--warn); }
+    .tp-card.t-aminus { border-top-color:var(--down); }
     .tp-top { display:flex; align-items:center; gap:6px; }
-    .tp-top a { font-weight:600; font-size:1.15em; color:var(--accent); text-decoration:none; }
-    .tp-tier { font-size:var(--fs-micro); font-weight:500; border:1px solid; border-radius:4px; padding:1px 5px; }
-    .tp-edges { margin-left:auto; font-size:var(--fs-caption); font-weight:500; color:var(--yellow); background:var(--tint-yellow); border-radius:999px; padding:1px 7px; font-family:var(--mono); }
-    .tp-px { margin-top:4px; } .tp-px .lp { font-size:var(--fs-title); }
+    .tp-top a { font-weight:700; font-size:1.2em; color:var(--text); text-decoration:none; }
+    .tp-top a:hover { color:var(--accent); }
+    .tp-tier { font-size:10px; font-weight:600; border:1px solid; border-radius:var(--r-chip); padding:1px 5px; }
+    .tp-edges { font-size:var(--fs-micro); font-weight:500; color:var(--text-2); border:1px solid var(--line-2);
+                border-radius:var(--r-chip); padding:1px 6px; font-family:var(--mono); }
+    .tp-draft { margin-left:auto; font-size:10px; color:var(--text-3); white-space:nowrap; }
+    .tp-px { margin-top:7px; display:flex; align-items:baseline; gap:8px; }
+    .tp-px .lp { font-size:1.35rem; }
+    .tp-legs { font-size:var(--fs-micro); color:var(--text-3); }
+    .tp-signals { margin-top:6px; display:flex; flex-wrap:wrap; gap:3px 5px; align-items:center; }
     .tp-meta { font-size:var(--fs-micro); color:var(--text-3); font-weight:normal; }
-    .tp-theme { margin-top:3px; font-size:var(--fs-caption); color:var(--text-3); }
-    .tp-plan { margin-top:5px; color:var(--text); font-size:var(--fs-body); font-weight:700; font-family:var(--mono); }
+    .tp-theme { margin-top:6px; font-size:var(--fs-caption); color:var(--text-3); }
 
     .hot-themes { display:flex; flex-wrap:wrap; gap:7px; margin:0 0 24px; }
     .hot-themes.scroll { flex-wrap:nowrap; overflow-x:auto; padding-bottom:7px; -webkit-overflow-scrolling:touch; }
@@ -4730,7 +4735,7 @@ CANDLE_JS = """
       VOLUP = tok('--vol-bar-up', 'rgba(84,184,127,.45)'), ACC = tok('--accent', '#8cb4d6'),
       WRN = tok('--warn', '#d3a04d'), RAIL = tok('--ma-slow', '#6b6b74'),
       MASPEC = [[10, tok('--ma-fast', '#8cb4d6')], [20, tok('--ma-mid', '#d3a04d')], [50, tok('--ma-slow', '#6b6b74')]];
-  var W = 340, H = 210, PT = 4, PB = 158, VT = 166, VB = 206, PL = 4, PR = 300;
+  var W = 340, H = 210, PT = 4, PB = 158, VT = 166, VB = 206, PL = 4, PR = 322;
   var uid = 0, tip = null;
 
   function sma(vals, p) {
@@ -4758,7 +4763,7 @@ CANDLE_JS = """
     }
     if (!isFinite(lo) || !isFinite(hi) || hi <= lo) return;
     var R = hi - lo;
-    var mas = MASPEC.map(function (sp) { return { col: sp[1], v: sma((d.p || []).concat(d.c), sp[0]).slice(-n) }; });
+    var mas = MASPEC.map(function (sp) { return { p: sp[0], col: sp[1], v: sma((d.p || []).concat(d.c), sp[0]).slice(-n) }; });
     mas.forEach(function (m) { m.v.forEach(function (v) { if (v != null) { if (v < lo) lo = v; if (v > hi) hi = v; } }); });
     // horizontal overlay levels join the y-scale only when near the bar range
     ['e', 's', 'srl', 'srh', 'srs', 'pbt', 'pbs'].forEach(function (key) {
@@ -4782,28 +4787,26 @@ CANDLE_JS = """
         [Y(ov.srh), Y(ov.srl)].forEach(function (y) {
           if (inP(y)) s.push('<line x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + PR + '" y2="' + y.toFixed(1) + '" stroke="' + ACC + '" stroke-width="0.7" stroke-dasharray="2 2" opacity="0.5"/>');
         });
-        labels.push({ y: (zt + zb) / 2, t: 'SR', c: ACC });
       }
     }
-    // ---- diagonals: channel rails, then trendlines ----
+    // ---- diagonals: channel rails, then trendlines (no text — the shapes read themselves) ----
     var f = d.w ? 5 : 1;
-    function dline(now, slope, col, dash, name) {
+    function dline(now, slope, col, dash) {
       if (now == null || slope == null) return;
       var y1 = Y(now - slope * (n - 1) * f), y2 = Y(now);
       s.push('<line x1="' + X(0).toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + X(n - 1).toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke="' + col + '" stroke-width="1.2" opacity="0.8"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + ' clip-path="url(#' + id + ')"/>');
-      if (name && inP(y2)) labels.push({ y: y2, t: name, c: col });
     }
-    if (ov.ctn != null) { dline(ov.ctn, ov.cd, RAIL, '4 3', 'CH'); dline(ov.cbn, ov.cd, RAIL, '4 3', 'CH'); }
-    dline(ov.tsn, ov.tsd, ACC, '', ov.tsk || 'TL');
-    dline(ov.trn, ov.trd, WRN, '', ov.trk || 'TL');
-    // ---- moving averages ----
+    dline(ov.tsn, ov.tsd, ACC, '');
+    dline(ov.trn, ov.trd, WRN, '');
+    // ---- moving averages (the ONLY labelled lines: 10 / 20 / 50) ----
     mas.forEach(function (m) {
-      var seg = [];
+      var seg = [], lastY = null;
       for (i = 0; i < n; i++) {
-        if (m.v[i] == null) { if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.8" opacity="0.6"/>'); seg = []; continue; }
-        seg.push(X(i).toFixed(1) + ',' + Y(m.v[i]).toFixed(1));
+        if (m.v[i] == null) { if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.7"/>'); seg = []; continue; }
+        var yy = Y(m.v[i]); seg.push(X(i).toFixed(1) + ',' + yy.toFixed(1)); lastY = yy;
       }
-      if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.8" opacity="0.6"/>');
+      if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.7"/>');
+      if (lastY != null && inP(lastY)) labels.push({ y: lastY, t: String(m.p), c: m.col });
     });
     // ---- candles ----
     for (i = 0; i < n; i++) {
@@ -4820,35 +4823,25 @@ CANDLE_JS = """
     if (vmax > 0) for (i = 0; i < n; i++) {
       var vh = d.v[i] / vmax * (VB - VT);
       if (vh < 0.5) continue;
-      var vcol = (d.o[i] != null && d.c[i] != null && d.c[i] >= d.o[i]) ? VOLUP : VOLC;
-      s.push('<rect x="' + (X(i) - bw / 2).toFixed(1) + '" y="' + (VB - vh).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + vh.toFixed(1) + '" fill="' + vcol + '"/>');
+      // volume shares the candle up/down colour so direction reads at a glance
+      var vcol = (d.c[i] > d.o[i]) ? UP : (d.c[i] < d.o[i] ? DN : DOJI);
+      s.push('<rect x="' + (X(i) - bw / 2).toFixed(1) + '" y="' + (VB - vh).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + vh.toFixed(1) + '" fill="' + vcol + '" opacity="0.5"/>');
     }
-    // ---- plan / lesson horizontal lines ----
-    function hline(v, col, dash, name, pin) {
+    // ---- plan / lesson horizontal lines (drawn only — no text tags) ----
+    function hline(v, col, dash) {
       if (v == null) return;
-      var y = Y(v);
-      if (!inP(y)) {
-        if (pin) labels.push({ y: y < PT ? PT + 5 : PB - 1, t: (y < PT ? '\\u21e1' : '\\u21e3') + name + ' ' + fmt(v), c: col });
-        return;
-      }
+      var y = Y(v); if (!inP(y)) return;
       s.push('<line x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + PR + '" y2="' + y.toFixed(1) + '" stroke="' + col + '" stroke-width="1.15" opacity="0.9"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
-      labels.push({ y: y, t: name + ' ' + fmt(v), c: col });
     }
-    hline(ov.srs, DN, '1 3', 'Sr', false);
-    hline(ov.pbt, UP, '5 3', 'PB', false);
-    hline(ov.pbs, DN, '5 3', 'P\\u2717', false);
-    hline(ov.e, UP, '', 'E', true);
-    hline(ov.s, DN, '', 'S', true);
-    // last close marker
-    var lc = d.c[n - 1], pc = d.c[n - 2];
-    if (lc != null) labels.push({ y: Y(lc), t: fmt(lc), c: (pc != null && lc < pc) ? DN : UP, b: 1 });
-    // ---- right-gutter labels, de-collided ----
+    hline(ov.e, UP, '');
+    hline(ov.s, DN, '');
+    // ---- right-gutter labels (MA periods only), de-collided ----
     labels.sort(function (a, b) { return a.y - b.y; });
     for (k = 1; k < labels.length; k++) if (labels[k].y - labels[k - 1].y < 9) labels[k].y = labels[k - 1].y + 9;
     var ovf = labels.length ? labels[labels.length - 1].y - PB : 0;
     if (ovf > 0) for (k = 0; k < labels.length; k++) labels[k].y -= ovf;
     labels.forEach(function (L) {
-      s.push('<text x="' + (PR + 3) + '" y="' + (Math.max(L.y, PT + 5) + 2.5).toFixed(1) + '" font-size="8" font-family="ui-monospace,monospace"' + (L.b ? ' font-weight="700"' : '') + ' fill="' + L.c + '">' + L.t + '</text>');
+      s.push('<text x="' + (PR + 4) + '" y="' + (Math.max(L.y, PT + 5) + 3).toFixed(1) + '" font-size="9" font-weight="600" font-family="ui-monospace,monospace" fill="' + L.c + '">' + L.t + '</text>');
     });
     s.push('</svg>');
     el.innerHTML = s.join('');
@@ -5203,7 +5196,7 @@ def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
         "<div class='fn-cap'>HOW THIS LIST WAS BUILT — from ~10,000+ US-listed stocks</div>"
         "<div class='fn-stage'><div class='fn-body'>"
         "<div class='fn-title'>Stage 1 · Universe filter <span class='fn-sub'>· TradingView, server-side</span></div>"
-        "<div class='fn-crit'>type = stock / DR · close ≥ $10 · day vol ≥ 500k · avg 30d &amp; 60d vol ≥ 500k · close ≥ SMA200 · market cap ≥ $2B</div>"
+        "<div class='fn-crit'>type = stock / DR · close ≥ $10 · ADR ≥ 1.5% · day vol ≥ 500k · avg 30d &amp; 60d vol ≥ 500k · close ≥ SMA200 · market cap ≥ $2B</div>"
         f"</div><div class='fn-count'>{s1}{cap_note}</div></div>"
         "<div class='fn-stage'><div class='fn-body'>"
         "<div class='fn-title'>Stage 2 · Candidate gate <span class='fn-sub'>· client-side</span></div>"
@@ -6770,60 +6763,50 @@ def build_top_picks(a_plus: List[dict], a: List[dict], a_minus: List[dict],
         _legs = _hc_legs(s)
         _sec = s.get("sector") or "N/A"
         if s["ticker"] in draft_pos:
-            _ds = (f'<span class="tp-tier" style="color:#54b87f;border-color:#54b87f;" '
-                   f'title="drafted to IBKR — top-3 by high-conviction then tier/edges/M.E.T.A., one per sector">✓ DRAFT #{draft_pos[s["ticker"]]}</span>')
+            _ds = (f'<span style="color:var(--up);" title="drafted to IBKR — top-3 by high-conviction '
+                   f'then tier/edges/M.E.T.A., one per sector">DRAFT #{draft_pos[s["ticker"]]}</span>')
         elif _sec in drafted_sectors:
-            _ds = ('<span class="tp-tier" style="color:#82827c;border-color:#82827c;" '
-                   'title="not drafted — one-per-sector rule: this sector is already taken by a higher-ranked pick">⤷ sector taken</span>')
+            _ds = '<span title="one-per-sector rule: this sector is already taken by a higher-ranked pick">sector taken</span>'
         else:
-            _ds = ('<span class="tp-tier" style="color:#82827c;border-color:#82827c;" '
-                   'title="shown for context — outside the top-3 drafted">— watch</span>')
-        _legcol = "#aecfe8" if _legs == 4 else ("#aecfe8" if _legs == 3 else "var(--text-3)")
-        _score = (f'<span class="tp-meta" style="color:{_legcol};" title="high-conviction legs met (of 4): '
-                  f'coiled · RS≥90 · within 10% of 52wk high · risk≤3.5%. 4/4 = ★ the validated SPY-beating edge; '
-                  f'3/4 = one leg away (watch); ≤2/4 = no measured edge.">{_legs}/4 legs</span>')
-        tcol = {"A+": "#54b87f", "A": "#d3a04d", "A-": "#e06c6a"}.get(tr, "#82827c")
-        rc = "#54b87f" if s["risk_pct"] <= 4 else ("#d3a04d" if s["risk_pct"] <= 6 else "#e06c6a")
+            _ds = '<span title="shown for context — outside the top-3 drafted">watch</span>'
+        _legcol = "var(--accent-2)" if _legs >= 3 else "var(--text-3)"
+        _score = (f'<span class="tp-legs" style="color:{_legcol};" title="high-conviction legs met (of 4): '
+                  f'coiled · RS≥90 · within 10% of 52wk high · risk≤3.5%. 4/4 = the validated SPY-beating edge; '
+                  f'3/4 = one leg away; ≤2/4 = no measured edge.">{_legs}/4 legs</span>')
+        tcol = {"A+": "var(--up)", "A": "var(--warn)", "A-": "var(--down)"}.get(tr, "var(--text-3)")
+        _tcls = {"A+": "t-aplus", "A": "t-a", "A-": "t-aminus"}.get(tr, "")
         _atp = ""
         if s.get("ants_ok") and s.get("ants_level", 0) >= 1:
             _atp_s = ("·%db" % s.get("ants_chain", 0)) if s.get("ants_chain") else ""
-            _atp = "<span class=\"tp-meta\">🐜 %s%s</span>" % (esc(s.get("ants_label", "")), _atp_s)
+            _atp = '<span class="tp-meta" title="ANTS accumulation (David Ryan)">ANTS %s%s</span>' % (esc(s.get("ants_label", "")), _atp_s)
         elif s.get("ants_ok") and s.get("ants_3m_peak", 0) >= 4:
-            _atp = ("<span class=\"tp-meta\" style=\"color:var(--text-3);\">🐜 3M %s</span>"
-                    % esc(_ANTS_LABELS.get(s.get("ants_3m_peak", 0), "")))
+            _atp = '<span class="tp-meta">ANTS 3M %s</span>' % esc(_ANTS_LABELS.get(s.get("ants_3m_peak", 0), ""))
         _rsl = ""
         if s.get("rs_ok") and s.get("rs_nh_before_price"):
-            _rsl = "<span class=\"tp-meta\" style=\"color:#aecfe8;\">RS▲ ‹ Px</span>"
+            _rsl = '<span class="tp-meta" style="color:var(--accent-2);">RS▲ ‹ Px</span>'
         elif s.get("rs_ok") and s.get("rs_new_high"):
-            _rsl = "<span class=\"tp-meta\" style=\"color:#aecfe8;\">RS▲ Leader</span>"
+            _rsl = '<span class="tp-meta" style="color:var(--accent-2);">RS▲ Leader</span>'
         _lc = s.get("lesson_confluence") or []
-        _lcb = (f'<span class="tp-tier" style="color:#d3a04d;border-color:#d3a04d;" '
-                f'title="{len(_lc)}/4 tutorial lessons meet their quality entry criteria on this '
-                f'name at once: {esc(" + ".join(str(x) for x in _lc))}">🎓 {len(_lc)}/4</span>'
-                ) if len(_lc) >= 3 else ""
+        _lcb = (f'<span class="tp-tier" style="color:var(--warn);border-color:var(--bd-warn);" '
+                f'title="{len(_lc)}/4 tutorial lessons meet their quality entry criteria at once: '
+                f'{esc(" + ".join(str(x) for x in _lc))}">{len(_lc)}/4 LESSONS</span>') if len(_lc) >= 3 else ""
+        _hc = ('<span class="tp-tier" style="color:var(--accent-2);border-color:var(--accent);" '
+               'title="coiled · RS≥90 · within 10% of 52wk high · risk≤3.5% — the validated SPY-beating overlay">HI-CONV</span>'
+               ) if s.get("_high_conviction") else ""
         cards.append(f"""
-        <div class="tp-card">
+        <div class="tp-card {_tcls}">
             <div class="tp-top"><a href="https://www.tradingview.com/chart/?symbol={esc(s['ticker'])}" target="_blank">{esc(s['ticker'])}</a>
                 <span class="tp-tier" style="color:{tcol};border-color:{tcol};">{tr}</span>
-                <span class="tp-edges">↯{s.get('_edges',0)}</span>{('<span class="tp-tier" style="color:#aecfe8;border-color:#aecfe8;" title="coiled · RS≥90 · within 10% of 52wk high · risk≤3.5% — the validated SPY-beating overlay (study 2026-06-15)">★ HI-CONV</span>') if s.get('_high_conviction') else ''}{_lcb} {_ds}</div>
-            <div class="tp-px">{_lp(s['ticker'], s['close'], style='', entry=s.get('entry'), stop=s.get('stop'))} {_score} <span class="tp-meta">M.E.T.A. {s.get('meta_score',0)}</span> {_atp} {_rsl}</div>
+                <span class="tp-edges" title="independent verified edges stacked on this entry">↯{s.get('_edges',0)}</span>{_hc}{_lcb}
+                <span class="tp-draft">{_ds}</span></div>
+            <div class="tp-px">{_lp(s['ticker'], s['close'], style='', entry=s.get('entry'), stop=s.get('stop'))} {_score}</div>
+            <div class="tp-signals"><span class="tp-meta">M.E.T.A. {s.get('meta_score',0)}</span>{_atp}{_rsl}</div>
             <div class="tp-theme">{esc(s['theme'])}</div>
-            <div class="tp-plan"><span class="entry-text">Buy ${s['entry']}</span> · <span class="stop-text">Stop ${s['stop']}</span> · <span style="color:{rc};">{s['risk_pct']}%</span>{_sr_tp_token(s)}</div>
         </div>""")
-    # today's full-house lesson names, surfaced at the very top (USER-DIRECTED
-    # 2026-07-05: these are the report's "important" picks)
-    _full = [s["ticker"] for _, s in ranked
-             if len(s.get("lesson_confluence") or []) >= 4]
-    _strip = ""
-    if _full:
-        _strip = (f"<div style='padding:6px 12px;font-size:var(--fs-caption);color:#d3a04d;'"
-                  f" title='every one of the four tutorial lessons (S&amp;R zone grade A, "
-                  f"pullback-recovery risk&lt;=6%, at-trendline/fresh break, quality channel "
-                  f"read) fires on these names at once'>🎓 4/4-lesson confluence today: "
-                  + ", ".join(esc(t) for t in _full) + "</div>")
-    return (f"<div class='section-title' style='background-color:var(--surface);color:#54b87f;border-bottom:3px solid #54b87f;'>"
+    return (f"<div class='section-title' style='background-color:var(--surface);'>"
+            f"<span class='tdot' style='background:var(--up);'></span>"
             f"TOP PICKS — TODAY'S BEST MULTIPLE-EDGE SETUPS</div>"
-            f"{_strip}<div class='toppicks'>{''.join(cards)}</div>")
+            f"<div class='toppicks'>{''.join(cards)}</div>")
 
 
 def build_hot_industries(ind: dict, pool: List[dict]) -> str:
