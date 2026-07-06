@@ -270,6 +270,27 @@ def _risk_cls(pct, lo: float = 4.0, hi: float = 6.0) -> str:
     return "risk-lo" if v <= lo else ("risk-md" if v <= hi else "risk-hi")
 
 
+def _plan_kicker(m: dict) -> str:
+    """Trade-plan cell kicker — names the LESSON the printed plan came from
+    (2026-07-06 USER: the plan follows the 4 tutorial lessons where validated)."""
+    src = m.get("plan_src")
+    if src == "PB":
+        return ("<span class='kicker' title='Plan from the pullback-recovery lesson (拉回買入法): "
+                "buy the break of the mini downtrend line, stop under the prior low.'>PB PULLBACK</span>")
+    if src == "SR":
+        return ("<span class='kicker' title='Breakout entry; stop from the S&amp;R lesson — "
+                "just outside the graded protecting zone instead of a generic offset.'>BREAKOUT · SR STOP</span>")
+    return "<span class='kicker'>BREAKOUT</span>"
+
+
+def _plan_jump(tk: str) -> str:
+    """'→ IBKR draft' chip linking the plan cell to this ticker's draft card in
+    TOP PICKS. Rendered on every coil row; a loader JS prunes chips whose target
+    card doesn't exist (only the drafted top-3 carry the id)."""
+    return (f"<a class='plan-jump' href='#tp-{esc(tk)}' "
+            f"title='jump to this ticker&#39;s IBKR draft order card'>→ IBKR draft</a>")
+
+
 # --- sortable derived columns: price-to-MA distance + forward-quarter revenue YoY ---
 def _ma_dist_data(closes) -> dict:
     """Price % extension above(+)/below(−) its trailing 10/20/50-day SMA, from a daily
@@ -2468,6 +2489,51 @@ def _edge_support(m: dict) -> List[str]:
     return out
 
 
+def _lesson_plan(m: dict) -> None:
+    """2026-07-06 USER: the PRINTED trade plan follows the tutorial lessons when
+    an entry engine produced a validated plan — the lesson geometry (PB trigger
+    over the mini-DTL with the stop under the prior low; SR stop just outside
+    the protecting zone) is more accurate than the generic breakout math
+    (high+0.10 / min(low, MA)−0.05). Mutates entry/stop IN PLACE so the chart
+    overlays, the IBKR order plan and the forward trackers all see ONE plan;
+    the originals are kept as entry_raw/stop_raw and the source is tagged in
+    plan_src for the cell. Bounded: risk must stay ≤10% (tutorial hard limit)
+    or the refinement is skipped. Never raises."""
+    try:
+        e0, s0 = m.get("entry"), m.get("stop")
+        m["entry_raw"], m["stop_raw"] = e0, s0
+        m["stop_reason_raw"] = m.get("stop_reason")
+        # L2 pullback-recovery = the entry-TIMING lesson: a live trigger replaces
+        # the whole plan (its stop is the tutorial's under-the-prior-low stop).
+        # The trigger must sit ABOVE the current close (adversarial review
+        # 2026-07-07): a 'recovery' trigger is below close by construction, and
+        # printing an already-cleared Buy stages below-market limit drafts and
+        # auto-wins next-session grading — inflating the breakout win-rate tell.
+        t, st = m.get("pb2_trigger"), m.get("pb2_stop")
+        if (m.get("pb2_state") in ("setup", "recovery") and t and st
+                and 0 < float(st) < float(t)
+                and float(t) > float(m.get("close") or 0)
+                and (float(t) - float(st)) / float(t) * 100.0 <= 10.0):
+            m["entry"] = round(float(t), 2)
+            m["stop"] = round(float(st), 2)
+            m["plan_src"] = "PB"
+            m["stop_reason"] = "PB prior-low"
+        # L1 S&R = the stop-PLACEMENT lesson: with a graded protecting zone the
+        # stop belongs just OUTSIDE the zone, not at a generic low/EMA offset.
+        elif (m.get("sr_grade") in ("A", "B") and m.get("sr_stop_suggest") and e0
+              and 0 < float(m["sr_stop_suggest"]) < float(e0)
+              and (float(e0) - float(m["sr_stop_suggest"])) / float(e0) * 100.0 <= 10.0):
+            m["stop"] = round(float(m["sr_stop_suggest"]), 2)
+            m["plan_src"] = "SR"
+            m["stop_reason"] = "outside SR zone"
+        else:
+            return
+        e, s = float(m["entry"]), float(m["stop"])
+        m["risk_pct"] = round((e - s) / e * 100.0, 1)
+    except Exception:  # noqa: BLE001 — plan refinement must never kill a scan
+        m.pop("plan_src", None)
+
+
 def _lesson_confluence(m: dict) -> List[str]:
     """Which of the four tutorial lessons' ENTRY criteria this pick meets with
     QUALITY (USER-DIRECTED 2026-07-05: surface these as important). Stricter
@@ -2590,7 +2656,7 @@ def _geo_line(m):
     """Secondary info line for an atr_5day coil card: the structural level as "support" (real
     market structure, no longer the printed stop) + the 5-day validity. Empty string for
     tight_3day / pre-switch picks so their cards render byte-identically. All-`.get()` (no KeyError)."""
-    if m.get("stop_version") != "atr_5day":
+    if m.get("stop_version") not in ("atr_5day", "lesson_v1"):
         return ""
     bits = []
     if m.get("stop_tight") is not None:
@@ -2614,6 +2680,19 @@ def _apply_stop_regime(picks, data_date):
         if not isinstance(p, dict) or p.get("stop_version"):
             continue
         direction = p.get("direction")
+        # A validated LESSON plan takes precedence over the ratified ATR geometry
+        # (2026-07-06 USER: the plan follows the 4 tutorial lessons — _lesson_plan
+        # already replaced entry/stop in scan_coil, and the chart drew THAT plan).
+        # Keep the ledger's structural fields from the pre-refinement originals and
+        # stamp an honest stop_version so the atr_5day calibration cohort stays pure.
+        if p.get("plan_src"):
+            p["stop_tight"] = p.get("stop_raw", p.get("stop"))
+            p["stop_structural_reason"] = p.get("stop_reason_raw") or p.get("stop_reason")
+            a_ls = _atr_stop(p.get("entry"), p.get("adr"), direction)
+            if a_ls is not None:
+                p["stop_atr"] = a_ls
+            p["stop_version"] = "lesson_v1"
+            continue
         # always preserve the structural stop + expose the ATR stop (stable ledger fields)
         p["stop_tight"] = p.get("stop")
         p["stop_structural_reason"] = p.get("stop_reason")
@@ -2889,6 +2968,16 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 **_tl_quality(hist_df, c["entry"], "long"),
                 **_ch_quality(hist_df, c["entry"], "long"),
             }
+            # Lesson-refined plan BEFORE the chart, so entry/stop overlays, the
+            # IBKR order plan and the trackers all carry the SAME refined plan.
+            _lesson_plan(stock_data)
+            if stock_data.get("plan_src"):
+                # the Wide-Stop badge was set from the ORIGINAL risk — re-judge it
+                # against the refined plan (adversarial review 2026-07-07)
+                _labs = [x for x in stock_data["status_labels"] if "Wide Stop" not in x]
+                if float(stock_data.get("risk_pct") or 0) > 6.0:
+                    _labs.append("⚠️ Wide Stop (Size Down!)")
+                stock_data["status_labels"] = _labs
             # Candlestick chart AFTER the engine merge so the payload can draw
             # the lesson levels (SR zone, PB trigger/stop, TL/CH diagonals).
             stock_data["spark"] = make_candle_chart(hist_df, stock_data, 60)
@@ -3563,6 +3652,7 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
             **_tl_quality(df, entry, "long"),
             **_ch_quality(df, entry, "long"),
         })
+        _lesson_plan(rows[-1])          # refined plan before chart (one plan everywhere)
         rows[-1]["lesson_confluence"] = _lesson_confluence(rows[-1])
         rows[-1]["spark"] = make_candle_chart(df, rows[-1], 60)
 
@@ -3994,7 +4084,13 @@ PAGE_CSS = """
     .reg-head { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:baseline; font-weight:700; font-size:1.05em; }
     .reg-score { font-weight:normal; font-size:var(--fs-caption); color:var(--text); font-family:var(--mono); }
     .reg-sigs { margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; }
-    .reg-sig { font-size:var(--fs-micro); font-weight:500; border:1px solid; border-radius:999px; padding:2px 8px; background:var(--bg); }
+    .reg-sig { font-size:var(--fs-micro); font-weight:500; border:1px solid; border-radius:999px; padding:2px 8px; background:var(--bg); display:inline-block; }
+    /* click-to-expand tell meaning (2026-07-06): native details, no marker */
+    .reg-sig-w > summary { list-style:none; cursor:pointer; }
+    .reg-sig-w > summary::-webkit-details-marker { display:none; }
+    .reg-sig-w[open] .reg-sig { background:var(--raised); }
+    .reg-exp { font-size:var(--fs-caption); color:var(--text-3); line-height:1.5; max-width:420px;
+               margin:4px 2px 4px 8px; padding:4px 8px; border-left:2px solid #2a2a30; }
     .reg-note { margin-top:8px; font-size:var(--fs-caption); color:var(--text-2); line-height:1.6; }
     .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:4px; vertical-align:1px; }
     .dot-g { background:var(--green); } .dot-y { background:var(--yellow); } .dot-r { background:var(--red); } .dot-i { background:var(--text-3); }
@@ -4012,6 +4108,9 @@ PAGE_CSS = """
     .tp-edges { font-size:var(--fs-micro); font-weight:500; color:var(--text-2); border:1px solid var(--line-2);
                 border-radius:var(--r-chip); padding:1px 6px; font-family:var(--mono); }
     .tp-draft { margin-left:auto; font-size:10px; color:var(--text-3); white-space:nowrap; }
+    .plan-jump { display:inline-block; margin-top:3px; font-size:var(--fs-micro); color:var(--accent-2);
+                 text-decoration:none; border:1px solid var(--accent); border-radius:3px; padding:0 5px; }
+    .plan-jump:hover { background:var(--tint-accent); }
     .tp-px { margin-top:7px; display:flex; align-items:baseline; gap:8px; }
     .tp-px .lp { font-size:1.35rem; }
     .tp-legs { font-size:var(--fs-micro); color:var(--text-3); }
@@ -4050,6 +4149,9 @@ PAGE_CSS = """
     .section-title.collapsed + .table-container { display:none; }
     /* tier criteria are printed inline in each section title (the gate from scan_coil) */
     .funnel { margin:24px 0 0; background:var(--surface); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+    /* funnel is a collapsed <details> now (2026-07-06): summary = the caption */
+    .funnel > summary.fn-cap { cursor:pointer; list-style:none; }
+    .funnel > summary.fn-cap::-webkit-details-marker { display:none; }
     .funnel .fn-cap { padding:8px 12px; font-size:var(--fs-caption); font-weight:700; color:var(--text); background:var(--raised); border-bottom:1px solid var(--line); }
     .funnel .fn-stage { display:flex; align-items:center; gap:14px; padding:10px 12px; border-bottom:1px solid var(--line); }
     .funnel .fn-stage:last-child { border-bottom:none; }
@@ -4462,7 +4564,34 @@ async function refreshPrices(btn) {
         resort();
       });
     });
+
+    // Default sort (2026-07-06 USER): Fwd YoY DESCENDING — fastest-growing names
+    // first on every table that has the column. Missing values ship data-sort=-999
+    // so they park at the bottom; a header click still replaces this freely.
+    var fyTh = headRow.querySelector("th[data-col='fyoy']");
+    if (fyTh) { keys = [{ th: fyTh, asc: false }]; resort(); }
   });
+
+  // plan → IBKR-draft jump chips: keep only those whose draft card exists
+  // (only the drafted top-3 TOP-PICKS cards carry an id).
+  Array.prototype.forEach.call(document.querySelectorAll('a.plan-jump'), function (a) {
+    var id = (a.getAttribute('href') || '').slice(1);
+    if (!id || !document.getElementById(id)) a.remove();
+  });
+
+  // sector chips whose taxonomy matches NO row anywhere would blank every table
+  // when tapped — hide them (they got prominent once the chips moved above the
+  // tab bar; adversarial review 2026-07-07).
+  (function () {
+    var secs = {};
+    Array.prototype.forEach.call(document.querySelectorAll('table tr[data-sector]'), function (r) {
+      secs[r.getAttribute('data-sector')] = 1;
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.theme-chip[data-sector]'), function (ch) {
+      var s = ch.getAttribute('data-sector');
+      if (s && !secs[s]) ch.style.display = 'none';
+    });
+  })();
 
   // Floating toggle so touch users can build multi-tier sorts without a Shift key.
   // OFF (default): a tap sorts by one column, exactly as before. ON: each header tap
@@ -4903,7 +5032,10 @@ CANDLE_JS = """
     var ovf = labels.length ? labels[labels.length - 1].y - PB : 0;
     if (ovf > 0) for (k = 0; k < labels.length; k++) labels[k].y -= ovf;
     labels.forEach(function (L) {
-      s.push('<text x="' + (PR - 3) + '" y="' + (Math.max(L.y, PT + 5) - 3).toFixed(1) + '" font-size="8" font-weight="600" font-family="ui-monospace,monospace" fill="' + L.c + '" text-anchor="end" opacity="0.9">' + L.t + '</text>');
+      // paint-order halo: a chart-bg outline under the glyphs so the MA period
+      // stays readable when the last candles run underneath it (USER 2026-07-06:
+      // "make sure I can read it")
+      s.push('<text x="' + (PR - 3) + '" y="' + (Math.max(L.y, PT + 5) - 3).toFixed(1) + '" font-size="8" font-weight="700" font-family="ui-monospace,monospace" fill="' + L.c + '" text-anchor="end" paint-order="stroke" stroke="#141416" stroke-width="2.6" stroke-linejoin="round">' + L.t + '</text>');
     });
     s.push('</svg>');
     el.innerHTML = s.join('');
@@ -5255,34 +5387,28 @@ def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
     if isinstance(s1_total, int) and isinstance(s1_fetched, int) and s1_total > s1_fetched:
         cap_note = f" <span class='fn-sub'>(top {s1_fetched:,} by ADR fetched)</span>"
     s2 = _n(fn.get("stage2_candidates"))
+    # 2026-07-06 USER: "too complicated, just simple present, and make it
+    # collapsed" — one collapsed <details>, four one-line steps, counts only.
+    dropped = _n(fn.get("drop_unsupported")) if fn.get("drop_unsupported") is not None else "–"
     return (
-        "<div class='funnel'>"
-        "<div class='fn-cap'>HOW THIS LIST WAS BUILT — from ~10,000+ US-listed stocks</div>"
-        "<div class='fn-stage'><div class='fn-body'>"
-        "<div class='fn-title'>Stage 1 · Universe filter <span class='fn-sub'>· TradingView, server-side</span></div>"
-        "<div class='fn-crit'>type = stock / DR · close ≥ $10 · ADR ≥ 1.5% · day vol ≥ 500k · avg 30d &amp; 60d vol ≥ 500k · close ≥ SMA200 · market cap ≥ $2B</div>"
+        "<details class='funnel'><summary class='fn-cap'>📋 How this list was built "
+        f"<span class='fn-sub'>10,000+ stocks → {s1} liquid leaders → {s2} near highs → "
+        f"A+ {n_aplus} · A {n_a} · A− {n_aminus}</span></summary>"
+        "<div class='fn-stage'><div class='fn-body'><div class='fn-title'>1 · Liquid leaders</div>"
+        "<div class='fn-crit'>$10+ · ADR ≥ 1.5% · 500k+ volume · above 200MA · $2B+ cap</div>"
         f"</div><div class='fn-count'>{s1}{cap_note}</div></div>"
-        "<div class='fn-stage'><div class='fn-body'>"
-        "<div class='fn-title'>Stage 2 · Candidate gate <span class='fn-sub'>· client-side</span></div>"
-        "<div class='fn-crit'>0–20% below the 52-week high · within 10% of the 9/21 EMA</div>"
+        "<div class='fn-stage'><div class='fn-body'><div class='fn-title'>2 · Near highs</div>"
+        "<div class='fn-crit'>within 20% of the 52-week high · close to the 9/21 EMA</div>"
         f"</div><div class='fn-count'>{s2}</div></div>"
-        "<div class='fn-stage'><div class='fn-body'>"
-        "<div class='fn-title'>Stage 3 · Coil tiers <span class='fn-sub'>· 1-year history · flag tightness · volume dry-up</span></div>"
-        "<div class='fn-crit'>graded into A+ / A / A− by tightness, distance to a key MA and volume contraction (criteria in each tier title)</div>"
+        "<div class='fn-stage'><div class='fn-body'><div class='fn-title'>3 · Coil tiers</div>"
+        "<div class='fn-crit'>tight flag + volume dry-up, graded A+ / A / A−</div>"
         f"</div><div class='fn-count'><span style='color:var(--green);'>A+ {n_aplus}</span> <span class='fn-dot'>·</span> "
         f"<span style='color:var(--yellow);'>A {n_a}</span> <span class='fn-dot'>·</span> "
         f"<span style='color:var(--red);'>A− {n_aminus}</span></div></div>"
-        "<div class='fn-stage'><div class='fn-body'>"
-        "<div class='fn-title'>Stage 4 · Entry-engine gate <span class='fn-sub'>· verified on each tutorial's own trades — a tier pick must be backed by ≥1 of:</span></div>"
-        "<div class='fn-crit'>🧩 <b>SR</b> — S/R zones with memory: flip detection, shakeout/overshoot traps, multi-TF confluence, "
-        "entry = low-volume retest of a flipped zone, stop outside the zone (grade A/B) · "
-        "<b>PB</b> — pullback-recovery buy (拉回買入法, 8 rules): Stage-2 name, short natural pullback, buy the break "
-        "of the mini downtrend line, stop under the prior low, risk ≤10% · "
-        "<b>TL</b> — trendlines (UTL/TSL/TRL/DTL, two-point construction, zone semantics, steepness = weakness, "
-        "micro-adjustment, diagonal targets): at the governing support line, a fresh break-up, or support ≤1.5 ATR</div>"
-        f"</div><div class='fn-count'>{_n(fn.get('drop_unsupported')) if fn.get('drop_unsupported') is not None else '–'}"
-        "<span class='fn-sub'> dropped</span></div></div>"
-        "</div>"
+        "<div class='fn-stage'><div class='fn-body'><div class='fn-title'>4 · Entry check</div>"
+        "<div class='fn-crit'>each pick must pass ≥1 tutorial entry engine (SR zones / pullback-recovery / trendlines)</div>"
+        f"</div><div class='fn-count'>{dropped}<span class='fn-sub'> dropped</span></div></div>"
+        "</details>"
     )
 
 
@@ -5355,10 +5481,11 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
             {_chart_cell(spark, m['close'])}
             <td class="c-plan" data-sort="{m['risk_pct']}">
                 <div class="entry-box">
-                    <span class="kicker">BREAKOUT</span>
+                    {_plan_kicker(m)}
                     <span class="entry-text">Buy: ${m['entry']}</span><br>
                     <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">({esc(m['stop_reason'])})</span></span><br>
                     <span class="{_risk_cls(m['risk_pct'])}">Risk: {m['risk_pct']}%</span>{geo_line}
+                    {_plan_jump(m['ticker'])}
                 </div>
                 {pb_html}
                 {_edge_details(m, [_lessons_line(m), _support_line(m), _sr_line(m),
@@ -6151,7 +6278,8 @@ def _fwd_num(cell: Optional[dict]) -> str:
 
 
 def _forward_block(md: dict) -> str:
-    """Compact 'if this state → forward 1w/4w/8w' card line for one index."""
+    """Compact 'if this state → forward 1w/2w/3w/4w' card line for one index
+    (2026-07-06 USER: near horizons — was 1w/4w/8w)."""
     br = forward_baserate(md.get("ticker", ""), md.get("dist_days", 0), md.get("above_200"))
     if not br:
         return ""
@@ -6171,8 +6299,9 @@ def _forward_block(md: dict) -> str:
             f"Built from full history since inception.\">"
             f"📊 If this state → forward <span style='color:#4a4a52;'>({br['label']}, n={n})</span></span>{small_n}<br>"
             f"&nbsp;&nbsp;1w {_fwd_num(s.get('f1w'))} · "
-            f"4w {_fwd_num(s.get('f4w'))} · "
-            f"8w {_fwd_num(s.get('f8w'))}")
+            f"2w {_fwd_num(s.get('f2w'))} · "
+            f"3w {_fwd_num(s.get('f3w'))} · "
+            f"4w {_fwd_num(s.get('f4w'))}")
     ext = forward_ext_baserate(md.get("ticker", ""), md.get("ext_10", 0.0),
                                md.get("ext_20", 0.0), md.get("ext_50", 0.0), md.get("above_200"))
     if ext:
@@ -6460,6 +6589,49 @@ def _hc_legs(s: dict) -> int:
             + int(s.get("dist_52w", 99) <= 10) + int((s.get("risk_pct") or 99) <= 3.5))
 
 
+# Plain-language meaning for each regime tell (2026-07-06 USER: click-to-expand).
+# Matched by label PREFIX (labels carry live numbers/entities); html-escaped
+# prefixes match the escaped labels. First hit wins; fallback is generic.
+_REGIME_EXPLAIN: List[Tuple[str, str]] = [
+    ("Trend", "Are IXIC and SPX both above their rising 10&gt;21-day MAs? Both up = green tape, "
+              "both down = red. Setups fight the tide when this is red — 環境優先."),
+    ("Breadth", "Percent of S&amp;P 500 stocks above their own 50-day MA. &gt;50% = broad participation; "
+                "&lt;40% = a narrow rally carried by few names — fragile."),
+    ("&gt;200MA", "Percent of S&amp;P 500 stocks above their 200-day MA — the market's long-term health. "
+                 "Below 50% means most stocks are in downtrends even if the index looks fine."),
+    ("Distribution", "O'Neil distribution days in the last ~20 sessions: the index fell &gt;0.2% on HIGHER "
+                     "volume than the prior day = institutions selling into strength. 4-5 = caution, 6+ = danger."),
+    ("Climax", "How stretched the leading index is above its 50-day MA, ranked against its ENTIRE history "
+               "(P90 = more extended than 90% of all days). P90+ often precedes a blow-off / mean reversion."),
+    ("Leaders", "Percent of the market's leading stocks that broke below their 50-day MA / stopped making new "
+                "highs. Leaders roll over BEFORE the index does — this is the early-warning line."),
+    ("Topping", "The index closed BELOW the floor of its recent ~20-session range — a range breakdown after "
+                "an advance is the classic topping footprint."),
+    ("Range", "Where the index sits inside its recent ~20-session range. Holding the upper half = healthy; "
+              "sliding toward the floor = watch for a breakdown."),
+    ("T2108", "Worden T2108: percent of NYSE stocks above their 40-day MA. &lt;40% = weak internals. "
+              "DIVERGE = the index makes highs while T2108 falls — a hard red flag."),
+    ("Breakout win: building", "The win-rate of this scanner's own recent breakout signals — "
+                               "still building a sample (needs 8+ graded trades to score)."),
+    ("Breakout win", "The win-rate of THIS scanner's own recent breakout signals. When fresh breakouts keep "
+                     "failing (&lt;35%), the tape is hostile no matter how good the charts look — hard override."),
+    ("Leader momentum", "Percent of the market's leading stocks that broke below their 50-day MA / stopped "
+                        "making new highs — unavailable this run."),
+    ("Sectors", "How many of the leading sectors are losing relative strength vs SPX. Leadership rotating "
+                "off (2+ leaders weak) is an early distribution signal."),
+    ("Sector RS", "Per-sector relative strength vs SPX — unavailable this run."),
+    ("VIX", "The options-market fear gauge. Calm (&lt;20) is informational only; &gt;20 or a +15% one-day "
+            "spike = expect wider swings and failed follow-through."),
+]
+
+
+def _regime_explain(lbl: str) -> str:
+    for prefix, txt in _REGIME_EXPLAIN:
+        if lbl.startswith(prefix):
+            return txt
+    return "One of the ten market-top early-warning tells scored into the regime verdict."
+
+
 def build_regime(market_data: List[dict], breadth: dict,
                  t2108: Optional[dict] = None, vix: Optional[dict] = None,
                  sector_rs: Optional[dict] = None, leader_stats: Optional[dict] = None,
@@ -6595,8 +6767,12 @@ def build_regime(market_data: List[dict], breadth: dict,
     dot = {"g": "<span class='dot dot-g'></span>", "y": "<span class='dot dot-y'></span>",
            "r": "<span class='dot dot-r'></span>", "i": "<span class='dot dot-i'></span>"}
     cmap = {"g": "#54b87f", "y": "#d3a04d", "r": "#e06c6a", "i": "#aecfe8"}
+    # 2026-07-06 USER: each tell is click-to-expand — a plain-language meaning
+    # opens under the chip (native <details>, no JS). Matched by label prefix
+    # because the labels carry live numbers.
     grid = "".join(
-        f"<span class='reg-sig' style='border-color:{cmap[s]};color:{cmap[s]};'>{dot[s]}{lbl}</span>"
+        f"<details class='reg-sig-w'><summary class='reg-sig' style='border-color:{cmap[s]};color:{cmap[s]};'>{dot[s]}{lbl}</summary>"
+        f"<div class='reg-exp'>{_regime_explain(lbl)}</div></details>"
         for s, lbl in sigs
     )
     html = (
@@ -6866,8 +7042,10 @@ def build_top_picks(a_plus: List[dict], a: List[dict], a_minus: List[dict],
         _hc = ('<span class="tp-tier" style="color:var(--accent-2);border-color:var(--accent);" '
                'title="coiled · RS≥90 · within 10% of 52wk high · risk≤3.5% — the validated SPY-beating overlay">HI-CONV</span>'
                ) if s.get("_high_conviction") else ""
+        # drafted cards carry an id so a plan cell's "→ IBKR draft" chip can jump here
+        _tpid = f" id=\"tp-{esc(s['ticker'])}\"" if s["ticker"] in draft_pos else ""
         cards.append(f"""
-        <div class="tp-card {_tcls}">
+        <div class="tp-card {_tcls}"{_tpid}>
             <div class="tp-top"><a href="https://www.tradingview.com/chart/?symbol={esc(s['ticker'])}" target="_blank">{esc(s['ticker'])}</a>
                 <span class="tp-tier" style="color:{tcol};border-color:{tcol};">{tr}</span>
                 <span class="tp-edges" title="independent verified edges stacked on this entry">↯{s.get('_edges',0)}</span>{_hc}{_lcb}
@@ -7033,9 +7211,9 @@ def generate_new_highs_section(nh: dict) -> str:
             {_chart_cell(m.get('spark', ''), m['close'])}
             <td class="c-plan" data-sort="{risk if risk is not None else 999}">
                 <div class="entry-box">
-                    <span class="kicker">CONTINUATION</span>
+                    {_plan_kicker(m) if m.get('plan_src') else "<span class='kicker'>CONTINUATION</span>"}
                     <span class="entry-text">Buy &gt; ${m['entry']}</span><br>
-                    <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">(21EMA / −1.5×ADR)</span></span><br>
+                    <span class="stop-text">Stop: ${m['stop']} <span class="stop-reason">({esc(m.get('stop_reason') or '21EMA / −1.5×ADR')})</span></span><br>
                     <span style="color:{rc};font-size:var(--fs-body);">Risk: {risk_txt}</span>
                 </div>
                 {_edge_details(m, [_lessons_line(m), _sr_line(m), _pb2_line(m),
@@ -7567,15 +7745,17 @@ def run_scanners_and_generate_html() -> str:
         f"<p class='header-sub'>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>",
         build_runbar(counts, market_modifier, runtime, regime, allow_breakouts),
         stale_banner,
-        regime_html,
+        # 2026-07-06 USER layout: market overview FIRST, regime second, then the
+        # hot sector/industry chips + the global search ABOVE the tab bar (they
+        # act on every tab, so they live outside the panels).
         market_html,
+        regime_html,
+        hot_themes_html,
+        hot_industries_html,
+        "<input id='search' type='search' placeholder='🔎 Search the whole report — ticker (e.g. NVDA)…' autocomplete='off'>",
         # ---- engine tabs: switch between MADRRY watchlist, Minervini, Trilogy ----
         tabs_bar,
         "<div class='tab-panel active' id='tab-madrry'>",
-        hot_themes_html,
-        hot_industries_html,
-        # action zone: filter control + picks + tables come BEFORE long context
-        "<input id='search' type='search' placeholder='🔎 Filter by ticker (e.g. NVDA)…' autocomplete='off'>",
         top_picks_html,
         tracking_html,
         build_filter_funnel(coil_funnel, len(tier_a_plus), len(tier_a), len(tier_a_minus_full)),
