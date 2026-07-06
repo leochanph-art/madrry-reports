@@ -1843,9 +1843,11 @@ def make_price_spark(closes: Iterable[float], window: int = 40) -> str:
 # CANDLESTICK CHART (2026-07-05 layout upgrade)
 #
 # The chart cell ships a compact JSON payload in a data attribute; ONE shared
-# client-side renderer (CANDLE_JS) lazily draws candles + volume (coloured by
-# up/down like the candles) + labelled 10/20/50 MAs, plus a decluttered set of
-# levels (USER 2026-07-06): the SR zone band, plan entry/stop, and the two
+# client-side renderer (CANDLE_JS) lazily draws HOLLOW candles (light grey =
+# up, light red = down — USER 2026-07-06 round 2, minimal design) + hollow
+# volume bars with a 50-day volume MA + labelled 10/20/50 MAs + a faint grid
+# with a right-side price scale and last-price marker, plus a decluttered set
+# of levels (USER 2026-07-06): the SR zone band, plan entry/stop, and the two
 # SALIENT trendlines — no text tags on any line except the MA period. Server-
 # side SVG candles were rejected: ~16KB/chart × ~400 would triple the size.
 # ----------------------------------------------------------------------------
@@ -1903,8 +1905,9 @@ def make_candle_chart(hist_df: Optional[pd.DataFrame], plan: Optional[dict] = No
     """<div class='cchart' data-c='{...}'> rendered client-side by CANDLE_JS.
 
     Payload: t0 (first bar date) + dt (calendar-day gaps), OHLC (2dp, 4dp
-    under $1), volume in thousands, up to 49 pre-window closes (so the 50-MA
-    is valid at the left edge), w=1 for weekly bars, ov = overlay levels.
+    under $1), volume in thousands, up to 49 pre-window closes AND volumes
+    (so the 50-MA and the 50-day volume MA are valid at the left edge),
+    w=1 for weekly bars, ov = overlay levels.
     Never raises; '' when history is unusable."""
     try:
         if hist_df is None or len(hist_df) < 2:
@@ -1923,7 +1926,8 @@ def make_candle_chart(hist_df: Optional[pd.DataFrame], plan: Optional[dict] = No
         if len(df) < 2:
             return ""
         win = df.tail(window)
-        pre = df["Close"].iloc[max(0, len(df) - len(win) - 49):len(df) - len(win)]
+        pre_lo, pre_hi = max(0, len(df) - len(win) - 49), len(df) - len(win)
+        pre = df["Close"].iloc[pre_lo:pre_hi]
         nd = 4 if float(win["Close"].iloc[-1]) < 1.0 else 2
         payload: Dict[str, Any] = {
             "t0": str(win.index[0].date()),
@@ -1937,6 +1941,11 @@ def make_candle_chart(hist_df: Optional[pd.DataFrame], plan: Optional[dict] = No
                   (_cfin(x, 0) for x in win["Volume"].tolist())] if "Volume" in win.columns
                  else [0] * len(win),
             "p": [_cfin(x, nd) for x in pre.tolist()],
+            # pre-window volumes (thousands) so the 50-day volume MA has a full
+            # 50-bar tail at the left edge of the 60-bar window
+            "pv": [int(round((f or 0.0) / 1000.0)) for f in
+                   (_cfin(x, 0) for x in df["Volume"].iloc[pre_lo:pre_hi].tolist())]
+                  if "Volume" in df.columns else [],
             "w": 1 if weekly else 0,
         }
         ov = _candle_overlays(plan)
@@ -3941,9 +3950,9 @@ PAGE_CSS = """
       --bd-green:var(--bd-up); --bd-red:var(--bd-down); --bd-yellow:var(--bd-warn);
       --bd-accent:var(--accent); --tint-green:var(--tint-up);
       --tint-red:var(--tint-down); --tint-yellow:var(--tint-warn);
-      /* candlestick chart — vivid green up / red down, unambiguously distinct */
-      --candle-up:#22c55e; --candle-down:#ef4444; --candle-doji:#82827c;
-      --vol-bar:#4a4a52; --vol-bar-up:rgba(34,197,94,.45);
+      /* candlestick chart — HOLLOW candles: light grey = up, light red = down
+         (USER 2026-07-06 round 2: minimal palette, no fills) */
+      --candle-up:#b6bdc4; --candle-down:#e57373; --vol-ma:#9aa4ae;
       --chart-grid:#232327; --chart-axis:#82827c;
       --ma-fast:#8cb4d6; --ma-mid:#d3a04d; --ma-slow:#6b6b74;
       --mono:ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
@@ -4732,13 +4741,13 @@ CANDLE_JS = """
   'use strict';
   var css = getComputedStyle(document.documentElement);
   function tok(n, fb) { var v = css.getPropertyValue(n); return v ? v.trim() : fb; }
-  var UP = tok('--candle-up', '#22c55e'), DN = tok('--candle-down', '#ef4444'),
-      DOJI = tok('--candle-doji', '#82827c'), VOLC = tok('--vol-bar', '#4a4a52'),
-      VOLUP = tok('--vol-bar-up', 'rgba(34,197,94,.45)'), ACC = tok('--accent', '#8cb4d6'),
-      UPE = tok('--bd-up', '#15803d'), DNE = tok('--bd-down', '#b91c1c'),
-      WRN = tok('--warn', '#d3a04d'), RAIL = tok('--ma-slow', '#6b6b74'),
+  var UP = tok('--candle-up', '#b6bdc4'), DN = tok('--candle-down', '#e57373'),
+      EN = tok('--up', '#54b87f'), ST = tok('--down', '#e06c6a'),
+      GRID = tok('--chart-grid', '#232327'), AXIS = tok('--chart-axis', '#82827c'),
+      VMA = tok('--vol-ma', '#9aa4ae'), ACC = tok('--accent', '#8cb4d6'),
+      WRN = tok('--warn', '#d3a04d'),
       MASPEC = [[10, tok('--ma-fast', '#8cb4d6')], [20, tok('--ma-mid', '#d3a04d')], [50, tok('--ma-slow', '#6b6b74')]];
-  var W = 340, H = 210, PT = 4, PB = 158, VT = 166, VB = 206, PL = 4, PR = 322;
+  var W = 340, H = 210, PT = 4, PB = 158, VT = 166, VB = 206, PL = 4, PR = 304;
   var uid = 0, tip = null;
 
   function sma(vals, p) {
@@ -4782,14 +4791,20 @@ CANDLE_JS = """
     s.push('<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">');
     s.push('<defs><clipPath id="' + id + '"><rect x="' + PL + '" y="' + PT + '" width="' + (PR - PL) + '" height="' + (PB - PT) + '"/></clipPath></defs>');
 
+    // ---- faint grid + right-gutter price scale (minimal: 4 hairlines) ----
+    var gut = [];      // gutter texts; the last-price marker wins collisions
+    for (k = 0; k <= 3; k++) {
+      var gv = lo + (hi - lo) * k / 3, gy = Y(gv);
+      s.push('<line x1="' + PL + '" y1="' + gy.toFixed(1) + '" x2="' + PR + '" y2="' + gy.toFixed(1) + '" stroke="' + GRID + '" stroke-width="0.6" opacity="0.7"/>');
+      gut.push({ y: gy, t: fmt(gv), c: AXIS, w: 400 });
+    }
+
     // ---- SR zone band ----
     if (ov.srl != null && ov.srh != null) {
       var zt = Math.max(PT, Math.min(PB, Y(ov.srh))), zb = Math.max(PT, Math.min(PB, Y(ov.srl)));
       if (zb - zt > 0.5) {
-        s.push('<rect x="' + PL + '" y="' + zt.toFixed(1) + '" width="' + (PR - PL) + '" height="' + (zb - zt).toFixed(1) + '" fill="' + ACC + '" opacity="0.10"/>');
-        [Y(ov.srh), Y(ov.srl)].forEach(function (y) {
-          if (inP(y)) s.push('<line x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + PR + '" y2="' + y.toFixed(1) + '" stroke="' + ACC + '" stroke-width="0.7" stroke-dasharray="2 2" opacity="0.5"/>');
-        });
+        // one quiet wash — no border lines (2026-07-06 round-2 minimalism)
+        s.push('<rect x="' + PL + '" y="' + zt.toFixed(1) + '" width="' + (PR - PL) + '" height="' + (zb - zt).toFixed(1) + '" fill="' + ACC + '" opacity="0.08"/>');
       }
     }
     // ---- diagonals: channel rails, then trendlines (no text — the shapes read themselves) ----
@@ -4797,7 +4812,7 @@ CANDLE_JS = """
     function dline(now, slope, col, dash) {
       if (now == null || slope == null) return;
       var y1 = Y(now - slope * (n - 1) * f), y2 = Y(now);
-      s.push('<line x1="' + X(0).toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + X(n - 1).toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke="' + col + '" stroke-width="1.2" opacity="0.8"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + ' clip-path="url(#' + id + ')"/>');
+      s.push('<line x1="' + X(0).toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + X(n - 1).toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke="' + col + '" stroke-width="1" opacity="0.65"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + ' clip-path="url(#' + id + ')"/>');
     }
     dline(ov.tsn, ov.tsd, ACC, '');
     dline(ov.trn, ov.trd, WRN, '');
@@ -4805,31 +4820,50 @@ CANDLE_JS = """
     mas.forEach(function (m) {
       var seg = [], lastY = null;
       for (i = 0; i < n; i++) {
-        if (m.v[i] == null) { if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.7"/>'); seg = []; continue; }
+        if (m.v[i] == null) { if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.6"/>'); seg = []; continue; }
         var yy = Y(m.v[i]); seg.push(X(i).toFixed(1) + ',' + yy.toFixed(1)); lastY = yy;
       }
-      if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.7"/>');
+      if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.6"/>');
       if (lastY != null && inP(lastY)) labels.push({ y: lastY, t: String(m.p), c: m.col });
     });
-    // ---- candles ----
+    // ---- candles: HOLLOW — light grey = up (close >= open), light red = down.
+    // Wicks are drawn ONLY outside the body (a single high→low line would show
+    // through the hollow interior); a near-zero body renders as a doji tick.
     for (i = 0; i < n; i++) {
       if (d.o[i] == null || d.h[i] == null || d.l[i] == null || d.c[i] == null) continue;
-      // GREEN = up (close >= open), RED = down (close < open) — binary, no gray
-      var up = d.c[i] >= d.o[i], col = up ? UP : DN, edge = up ? UPE : DNE;
-      var x = X(i);
-      s.push('<line x1="' + x.toFixed(1) + '" y1="' + Y(d.h[i]).toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + Y(d.l[i]).toFixed(1) + '" stroke="' + col + '" stroke-width="1.2"/>');
-      var by = Math.min(Y(d.o[i]), Y(d.c[i])), bh = Math.max(Math.abs(Y(d.o[i]) - Y(d.c[i])), 0.8);
-      s.push('<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + bh.toFixed(1) + '" fill="' + col + '" stroke="' + edge + '" stroke-width="0.5"/>');
+      var up = d.c[i] >= d.o[i], col = up ? UP : DN;
+      var x = X(i), yo = Y(d.o[i]), yc = Y(d.c[i]);
+      var bt = Math.min(yo, yc), bb = Math.max(yo, yc), yh = Y(d.h[i]), yl = Y(d.l[i]);
+      if (yh < bt - 0.2) s.push('<line x1="' + x.toFixed(1) + '" y1="' + yh.toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + bt.toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>');
+      if (yl > bb + 0.2) s.push('<line x1="' + x.toFixed(1) + '" y1="' + bb.toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + yl.toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>');
+      if (bb - bt < 1.0) {
+        s.push('<line x1="' + (x - bw / 2).toFixed(1) + '" y1="' + bt.toFixed(1) + '" x2="' + (x + bw / 2).toFixed(1) + '" y2="' + bt.toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>');
+      } else {
+        s.push('<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + bt.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + (bb - bt).toFixed(1) + '" fill="none" stroke="' + col + '" stroke-width="0.9"/>');
+      }
     }
-    // ---- volume pane ----
+    // ---- volume pane: hollow bars (same up/down colours) + 50-day volume MA.
+    // The MA tail comes from d.pv (49 pre-window volumes), so it is valid at the
+    // left edge; vmax includes the MA so a quiet window under a loud past stays
+    // in-pane instead of clipping the line into the price pane.
+    var vma = sma((d.pv || []).concat(d.v), 50).slice(-n);
     var vmax = 0;
     for (i = 0; i < n; i++) if (d.v[i] > vmax) vmax = d.v[i];
-    if (vmax > 0) for (i = 0; i < n; i++) {
-      var vh = d.v[i] / vmax * (VB - VT);
-      if (vh < 0.5) continue;
-      // volume shares the candle up/down colour so direction reads at a glance
-      var vcol = (d.c[i] >= d.o[i]) ? UP : DN;
-      s.push('<rect x="' + (X(i) - bw / 2).toFixed(1) + '" y="' + (VB - vh).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + vh.toFixed(1) + '" fill="' + vcol + '" opacity="0.5"/>');
+    vma.forEach(function (mv) { if (mv != null && mv > vmax) vmax = mv; });
+    if (vmax > 0) {
+      for (i = 0; i < n; i++) {
+        if (d.o[i] == null || d.c[i] == null) continue;   // no OHLC, no bar
+        var vh = d.v[i] / vmax * (VB - VT);
+        if (vh < 0.8) continue;
+        var vcol = (d.c[i] >= d.o[i]) ? UP : DN;
+        s.push('<rect x="' + (X(i) - bw / 2).toFixed(1) + '" y="' + (VB - vh).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + vh.toFixed(1) + '" fill="none" stroke="' + vcol + '" stroke-width="0.7" opacity="0.75"/>');
+      }
+      var vseg = [];
+      for (i = 0; i < n; i++) {
+        if (vma[i] == null) continue;
+        vseg.push(X(i).toFixed(1) + ',' + (VB - vma[i] / vmax * (VB - VT)).toFixed(1));
+      }
+      if (vseg.length > 1) s.push('<polyline points="' + vseg.join(' ') + '" fill="none" stroke="' + VMA + '" stroke-width="0.9" opacity="0.85"/>');
     }
     // ---- plan / lesson horizontal lines (drawn only — no text tags) ----
     function hline(v, col, dash) {
@@ -4837,15 +4871,35 @@ CANDLE_JS = """
       var y = Y(v); if (!inP(y)) return;
       s.push('<line x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + PR + '" y2="' + y.toFixed(1) + '" stroke="' + col + '" stroke-width="1.15" opacity="0.9"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
     }
-    hline(ov.e, UP, '');
-    hline(ov.s, DN, '');
-    // ---- right-gutter labels (MA periods only), de-collided ----
+    hline(ov.e, EN, '5 4');
+    hline(ov.s, ST, '5 4');
+    // ---- last price: dotted hairline + the only bright number in the gutter ----
+    var lp = d.c[n - 1];
+    if (lp != null) {
+      var lpy = Y(lp);
+      if (inP(lpy)) {
+        s.push('<line x1="' + PL + '" y1="' + lpy.toFixed(1) + '" x2="' + PR + '" y2="' + lpy.toFixed(1) + '" stroke="' + AXIS + '" stroke-width="0.6" stroke-dasharray="1 3" opacity="0.8"/>');
+        gut.push({ y: lpy, t: fmt(lp), c: tok('--text', '#e6e6ea'), w: 600, last: 1 });
+      }
+    }
+    // ---- right-gutter price texts: the last-price marker wins collisions.
+    // Clamp FIRST, then measure the gap: the top tick's render position is
+    // shifted down by the clamp, so comparing raw y would pass ticks that
+    // still overprint a last-price sitting just under the window high — the
+    // modal breakout shape (found by adversarial review 2026-07-06).
+    var lpe = null;
+    gut.forEach(function (g) { g.ry = Math.min(Math.max(g.y, PT + 4), PB); if (g.last) lpe = g; });
+    gut.filter(function (g) { return g.last || !lpe || Math.abs(g.ry - lpe.ry) > 8; })
+      .forEach(function (g) {
+        s.push('<text x="' + (PR + 3) + '" y="' + (g.ry + 2.5).toFixed(1) + '" font-size="8" font-weight="' + g.w + '" font-family="ui-monospace,monospace" fill="' + g.c + '">' + g.t + '</text>');
+      });
+    // ---- MA period labels at the line's end, INSIDE the plot, de-collided ----
     labels.sort(function (a, b) { return a.y - b.y; });
     for (k = 1; k < labels.length; k++) if (labels[k].y - labels[k - 1].y < 9) labels[k].y = labels[k - 1].y + 9;
     var ovf = labels.length ? labels[labels.length - 1].y - PB : 0;
     if (ovf > 0) for (k = 0; k < labels.length; k++) labels[k].y -= ovf;
     labels.forEach(function (L) {
-      s.push('<text x="' + (PR + 4) + '" y="' + (Math.max(L.y, PT + 5) + 3).toFixed(1) + '" font-size="9" font-weight="600" font-family="ui-monospace,monospace" fill="' + L.c + '">' + L.t + '</text>');
+      s.push('<text x="' + (PR - 3) + '" y="' + (Math.max(L.y, PT + 5) - 3).toFixed(1) + '" font-size="8" font-weight="600" font-family="ui-monospace,monospace" fill="' + L.c + '" text-anchor="end" opacity="0.9">' + L.t + '</text>');
     });
     s.push('</svg>');
     el.innerHTML = s.join('');
@@ -4856,10 +4910,12 @@ CANDLE_JS = """
       var r = svg.getBoundingClientRect();
       var xi = Math.max(0, Math.min(n - 1, Math.floor(((ev.clientX - r.left) / r.width * W - PL) / step)));
       if (d.c[xi] == null) return;
-      var chg = (xi > 0 && d.c[xi - 1]) ? ((d.c[xi] / d.c[xi - 1] - 1) * 100).toFixed(1) : null;
+      // keep chg NUMERIC for the sign test — comparing the toFixed() string
+      // coerces "-0.0" >= 0 to true and prints "+-0.0%" in green
+      var chg = (xi > 0 && d.c[xi - 1]) ? ((d.c[xi] / d.c[xi - 1] - 1) * 100) : null;
       var vv = d.v[xi] >= 1000 ? (d.v[xi] / 1000).toFixed(1) + 'M' : d.v[xi] + 'K';
       tip.innerHTML = '<b>' + dates[xi] + (d.w ? ' (wk)' : '') + '</b>  O ' + fmt(d.o[xi]) + '  H ' + fmt(d.h[xi]) + '  L ' + fmt(d.l[xi]) + '  C ' + fmt(d.c[xi])
-        + (chg != null ? ' <span style="color:' + (chg >= 0 ? UP : DN) + '">' + (chg >= 0 ? '+' : '') + chg + '%</span>' : '') + '  V ' + vv;
+        + (chg != null ? ' <span style="color:' + (chg >= 0 ? EN : ST) + '">' + (chg >= 0 ? '+' : '') + chg.toFixed(1) + '%</span>' : '') + '  V ' + vv;
       tip.style.display = 'block';
       var tw = tip.offsetWidth || 200;
       tip.style.left = Math.min(ev.clientX + 14, window.innerWidth - tw - 8) + 'px';
