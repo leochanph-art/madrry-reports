@@ -370,14 +370,41 @@ def analyze_lines(df: pd.DataFrame, entry: Any, direction: str = "long",
                 eff = q["touches"] + q["snapbacks"] + 2   # 2 construction anchors always count
                 return eff * 2.0 - dist - (2.0 if q.get("steep") else 0.0)
 
-            _cand = [q for q in ld + lw
-                     if ((not q["broken"]) or (q["bars_since_break"] is not None
-                                               and q["bars_since_break"] <= SNAPBACK_BARS))
-                     and abs(_valnow(q) - px) <= 4.0 * atr]     # only lines near the action
-            _cand_d = [q for q in _cand if q["timeframe"] == "D"]
-            _pool = _cand_d or _cand                            # a daily chart reads daily lines
-            _sup2 = max((q for q in _pool if q["kind"] in sup_kinds), key=_sal, default=None)
-            _res2 = max((q for q in _pool if q["kind"] in res_kinds), key=_sal, default=None)
+            def _drawable(q):
+                # a line the chart can draw: alive (or broken <=3 bars ago) and
+                # sitting within 4 ATR of price (near the visible action)
+                alive = (not q["broken"]) or (q["bars_since_break"] is not None
+                                              and q["bars_since_break"] <= SNAPBACK_BARS)
+                return bool(alive and abs(_valnow(q) - px) <= 4.0 * atr)
+
+            def _pick(pool, kinds):
+                c = [q for q in pool if q["kind"] in kinds and _drawable(q)]
+                return max(c, key=_sal, default=None)
+
+            # USER 2026-07-06: anchor the DRAWN trendlines on the LAST 60 bars
+            # first; if no salient line of a side can be constructed there, widen
+            # the pivot lookback 60 bars at a time (120, 180, ...) until one
+            # appears. The chart still DISPLAYS 60 bars — only the anchoring
+            # pivots may come from further left, and the line is extrapolated
+            # back into the window via value-today + slope. Daily lines are
+            # primary; the weekly higher-TF pool is the final backstop when even
+            # full daily history yields no drawable line of a side.
+            _sup2 = _res2 = None
+            _n = len(fr)
+            for _win in (60, 120, 180, 240, 300):
+                _ldw = lines(fr.tail(_win), timeframe="D")
+                if _sup2 is None:
+                    _sup2 = _pick(_ldw, sup_kinds)
+                if _res2 is None:
+                    _res2 = _pick(_ldw, res_kinds)
+                if (_sup2 is not None and _res2 is not None) or _win >= _n:
+                    break
+            if _sup2 is None or _res2 is None:            # weekly higher-TF backstop
+                _lww = lines(fr, timeframe="W")
+                if _sup2 is None:
+                    _sup2 = _pick(_lww, sup_kinds)
+                if _res2 is None:
+                    _res2 = _pick(_lww, res_kinds)
             if _sup2 is not None:
                 out["tl_draw_sup_now"] = float(_valnow(_sup2))
                 out["tl_draw_sup_slope_d"] = float(_sup2["slope_abs"]) / _tf_d.get(_sup2["timeframe"], 1.0)

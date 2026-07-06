@@ -1878,8 +1878,10 @@ def _candle_overlays(plan: Optional[dict]) -> dict:
 
     put("e", plan.get("entry"))
     put("s", plan.get("stop"))
-    put("srl", plan.get("sr_prot_lo"))
-    put("srh", plan.get("sr_prot_hi"))
+    # draw the last-60-bar-anchored zone when the engine produced one, else the
+    # trade/gate protecting zone (USER 2026-07-06 progressive-lookback drawing)
+    put("srl", plan.get("sr_draw_lo", plan.get("sr_prot_lo")))
+    put("srh", plan.get("sr_draw_hi", plan.get("sr_prot_hi")))
     # salient trendlines picked for the chart; fall back to the nearest trade
     # line only if the engine produced no salient line.
     put("tsn", plan.get("tl_draw_sup_now", plan.get("tl_sup_now")))
@@ -3939,9 +3941,9 @@ PAGE_CSS = """
       --bd-green:var(--bd-up); --bd-red:var(--bd-down); --bd-yellow:var(--bd-warn);
       --bd-accent:var(--accent); --tint-green:var(--tint-up);
       --tint-red:var(--tint-down); --tint-yellow:var(--tint-warn);
-      /* candlestick chart */
-      --candle-up:#54b87f; --candle-down:#e06c6a; --candle-doji:#82827c;
-      --vol-bar:#4a4a52; --vol-bar-up:rgba(84,184,127,.45);
+      /* candlestick chart — vivid green up / red down, unambiguously distinct */
+      --candle-up:#22c55e; --candle-down:#ef4444; --candle-doji:#82827c;
+      --vol-bar:#4a4a52; --vol-bar-up:rgba(34,197,94,.45);
       --chart-grid:#232327; --chart-axis:#82827c;
       --ma-fast:#8cb4d6; --ma-mid:#d3a04d; --ma-slow:#6b6b74;
       --mono:ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
@@ -4730,9 +4732,10 @@ CANDLE_JS = """
   'use strict';
   var css = getComputedStyle(document.documentElement);
   function tok(n, fb) { var v = css.getPropertyValue(n); return v ? v.trim() : fb; }
-  var UP = tok('--candle-up', '#54b87f'), DN = tok('--candle-down', '#e06c6a'),
+  var UP = tok('--candle-up', '#22c55e'), DN = tok('--candle-down', '#ef4444'),
       DOJI = tok('--candle-doji', '#82827c'), VOLC = tok('--vol-bar', '#4a4a52'),
-      VOLUP = tok('--vol-bar-up', 'rgba(84,184,127,.45)'), ACC = tok('--accent', '#8cb4d6'),
+      VOLUP = tok('--vol-bar-up', 'rgba(34,197,94,.45)'), ACC = tok('--accent', '#8cb4d6'),
+      UPE = tok('--bd-up', '#15803d'), DNE = tok('--bd-down', '#b91c1c'),
       WRN = tok('--warn', '#d3a04d'), RAIL = tok('--ma-slow', '#6b6b74'),
       MASPEC = [[10, tok('--ma-fast', '#8cb4d6')], [20, tok('--ma-mid', '#d3a04d')], [50, tok('--ma-slow', '#6b6b74')]];
   var W = 340, H = 210, PT = 4, PB = 158, VT = 166, VB = 206, PL = 4, PR = 322;
@@ -4811,11 +4814,12 @@ CANDLE_JS = """
     // ---- candles ----
     for (i = 0; i < n; i++) {
       if (d.o[i] == null || d.h[i] == null || d.l[i] == null || d.c[i] == null) continue;
-      var col = d.c[i] > d.o[i] ? UP : (d.c[i] < d.o[i] ? DN : DOJI);
+      // GREEN = up (close >= open), RED = down (close < open) — binary, no gray
+      var up = d.c[i] >= d.o[i], col = up ? UP : DN, edge = up ? UPE : DNE;
       var x = X(i);
-      s.push('<line x1="' + x.toFixed(1) + '" y1="' + Y(d.h[i]).toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + Y(d.l[i]).toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>');
+      s.push('<line x1="' + x.toFixed(1) + '" y1="' + Y(d.h[i]).toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + Y(d.l[i]).toFixed(1) + '" stroke="' + col + '" stroke-width="1.2"/>');
       var by = Math.min(Y(d.o[i]), Y(d.c[i])), bh = Math.max(Math.abs(Y(d.o[i]) - Y(d.c[i])), 0.8);
-      s.push('<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + bh.toFixed(1) + '" fill="' + col + '"/>');
+      s.push('<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + bh.toFixed(1) + '" fill="' + col + '" stroke="' + edge + '" stroke-width="0.5"/>');
     }
     // ---- volume pane ----
     var vmax = 0;
@@ -4824,7 +4828,7 @@ CANDLE_JS = """
       var vh = d.v[i] / vmax * (VB - VT);
       if (vh < 0.5) continue;
       // volume shares the candle up/down colour so direction reads at a glance
-      var vcol = (d.c[i] > d.o[i]) ? UP : (d.c[i] < d.o[i] ? DN : DOJI);
+      var vcol = (d.c[i] >= d.o[i]) ? UP : DN;
       s.push('<rect x="' + (X(i) - bw / 2).toFixed(1) + '" y="' + (VB - vh).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + vh.toFixed(1) + '" fill="' + vcol + '" opacity="0.5"/>');
     }
     // ---- plan / lesson horizontal lines (drawn only — no text tags) ----
