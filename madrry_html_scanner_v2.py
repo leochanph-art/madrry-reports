@@ -493,19 +493,19 @@ NH_RELENTLESS_WEEKS = 9       # ⭐⭐ Relentless Leader
 # ---- ANTS (David Ryan accumulation: up-days + volume + price + RS) — display + Top-Picks boost ----
 # Per-stock institutional-accumulation read over a short window, graded 0-5 +
 # a trailing consecutive-bar "chain". Classic David Ryan defaults. Decision-
-# support only; does NOT affect the IBKR draft plan. ANTS rs_line (close/SPY vs
+# support only; does NOT affect the IBKR draft plan. ANTS rs_line (close/^GSPC vs
 # its own MA) is DISTINCT from the Fred6725 RS percentile (resolve_rs).
 ANTS_LOOKBACK = 15            # window for up-count / vol-gain / price-gain
 ANTS_MIN_UP = 12             # >= this many up-days in the window => momentum_ok
 ANTS_PRICE_PCT = 0.20        # close up >= 20% over the window
 ANTS_VOL_PCT = 0.20          # avg volume up >= 20% vs the prior window
 ANTS_USE_TREND = True        # require SMA10 > SMA20 for the price leg
-ANTS_USE_RS = True           # enable the ELITE upgrade (rs_line rising vs SPY)
+ANTS_USE_RS = True           # enable the ELITE upgrade (rs_line rising vs ^GSPC)
 ANTS_COUNT_FULL_ONLY = False # chain counts any level>0 (True = FULL+ only)
 ANTS_RS_FAST = 20            # is_rs_rising: rs_line > SMA(rs_line, 20)
 ANTS_RS_SLOW = 50            # isStronger (info): rs_line > SMA(rs_line, 50)
 ANTS_CHAIN_WINDOW = 60       # bars scanned for the trailing chain run
-ANTS_BENCHMARK = "SPY"
+ANTS_BENCHMARK = "^GSPC"     # RS line vs the S&P 500 INDEX (2026-07-06 USER: was SPY)
 ANTS_RS_HIGH_FRAC = 0.97     # RS line within 3% of its 1y high => relative-strength LEADER (standout)
 ANTS_PX_LAG_FRAC = 0.95      # ...with price below 95% of its 1y high => stealth (RS leads price)
 _ANTS_LABELS = {0: "NONE", 1: "MOM", 2: "MOM+VOL", 3: "MOM+PR", 4: "FULL", 5: "ELITE"}
@@ -986,7 +986,7 @@ def _fetch_one_index(ticker: str) -> Optional[dict]:
     # asof/TV-patch logic all read only the tail, so the longer range is inert to them.
     from urllib.parse import quote
     # Index symbols carry a caret (^IXIC) — percent-encode the path segment so the
-    # Yahoo v8 request is well-formed (plain tickers like QQQ pass through unchanged).
+    # Yahoo v8 request is well-formed (plain tickers like IWM pass through unchanged).
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(ticker, safe='')}?interval=1d&range=14mo"
     data = _request_json(url, headers={"User-Agent": "Mozilla/5.0"}, label=f"market:{ticker}", retries=3)
     result = data["chart"]["result"][0]
@@ -1121,9 +1121,12 @@ def fetch_sp_breadth(diag: Optional[Diagnostics] = None) -> dict:
 
 def fetch_market_health(diag: Optional[Diagnostics] = None) -> Tuple[List[dict], dict]:
     """Index health (parallel Yahoo) + S&P-500 breadth (Barchart)."""
-    # ^IXIC (Nasdaq Composite) leads — it now drives the GREEN/YELLOW/RED regime and
-    # the market-modifier. QQQ (Nasdaq-100 ETF) is kept as an informational card.
-    tickers = ["^IXIC", "QQQ", "SPY", "IWM"]
+    # ^IXIC (Nasdaq Composite) leads — it drives the GREEN/YELLOW/RED regime and
+    # the market-modifier. The S&P 500 and Nasdaq-100 cards use the INDICES
+    # ^GSPC/^NDX (2026-07-06 USER: was the SPY/QQQ ETFs) for deeper history; IWM
+    # stays an ETF so it remains the TradingView stale-bar freshness anchor (the
+    # TV scan API can't patch caret indices — see the data_date note in run()).
+    tickers = ["^IXIC", "^NDX", "^GSPC", "IWM"]
     market_data: List[dict] = []
 
     # The 4 Yahoo probes are independent -> fetch concurrently.
@@ -1218,10 +1221,11 @@ def fetch_t2108(diag: Optional[Diagnostics] = None) -> dict:
 
 
 def fetch_sector_rs(diag: Optional[Diagnostics] = None) -> Optional[dict]:
-    """Per-sector RS vs SPY (1-month relative perf) + short-term momentum (price
-    vs its own 50-DMA). Flags how many leadership sectors are rolling over."""
+    """Per-sector RS vs the S&P 500 index ^GSPC (1-month relative perf) + short-
+    term momentum (price vs its own 50-DMA). Flags how many leadership sectors
+    are rolling over. (2026-07-06 USER: benchmark was the SPY ETF.)"""
     try:
-        raw = yf.download(tickers=SECTOR_ETFS + ["SPY"], period="3mo", interval="1d",
+        raw = yf.download(tickers=SECTOR_ETFS + ["^GSPC"], period="3mo", interval="1d",
                           group_by="ticker", auto_adjust=False, threads=True, progress=False)
         if raw is None or len(raw) == 0:
             return None
@@ -1231,10 +1235,10 @@ def fetch_sector_rs(diag: Optional[Diagnostics] = None) -> Optional[dict]:
             df = (raw[t] if multi else raw).dropna()
             return df["Close"] if len(df) >= 50 else None
 
-        spy = closes("SPY")
-        if spy is None:
+        bench = closes("^GSPC")
+        if bench is None:
             return None
-        spy_1m = spy.iloc[-1] / spy.iloc[-21] - 1.0
+        spy_1m = bench.iloc[-1] / bench.iloc[-21] - 1.0
         sectors = []
         for t in SECTOR_ETFS:
             c = closes(t)
@@ -3283,7 +3287,7 @@ def compute_ants(stock_df, spy_close, *, lookback=ANTS_LOOKBACK, min_up=ANTS_MIN
                  rs_fast=ANTS_RS_FAST, rs_slow=ANTS_RS_SLOW,
                  chain_window=ANTS_CHAIN_WINDOW):
     """David Ryan's ANTS accumulation read, point-in-time from daily OHLCV (+ a
-    benchmark close series, SPY). Returns a FIXED-shape dict (callers never
+    benchmark close series, ^GSPC). Returns a FIXED-shape dict (callers never
     KeyError): level 0-5 (NONE/MOM/MOM+VOL/MOM+PR/FULL/ELITE), chain (trailing
     consecutive bars the ANTS condition held), label, up_count, vol_gain,
     price_gain, rs_rising, stronger, ok. NaN-safe — a missing leg can only
@@ -3326,7 +3330,7 @@ def compute_ants(stock_df, spy_close, *, lookback=ANTS_LOOKBACK, min_up=ANTS_MIN
                         index=close.index)
 
     # relative strength: rs_line = close / benchmark. Drives the ELITE upgrade AND
-    # the report's RS-Line read (trend vs SPY + RS-new-high incl. "before price").
+    # the report's RS-Line read (trend vs SPX + RS-new-high incl. "before price").
     # Only when a benchmark series is available + alignable.
     rs_rising_s = pd.Series(False, index=close.index)
     stronger_s = pd.Series(False, index=close.index)
@@ -3401,7 +3405,7 @@ def attach_ants(stocks: List[dict], diag: Optional[Diagnostics] = None,
                 hist: Optional[Dict[str, pd.DataFrame]] = None, spy_close=None) -> None:
     """Post-scan pass: tag each coil A-list stock with its ANTS read
     (ants_level / ants_chain / ants_label / ants_ok / ants_rs_rising). Mirrors
-    attach_persistence — one 2y-history batch (+ SPY) over the displayed tier
+    attach_persistence — one 2y-history batch (+ ^GSPC) over the displayed tier
     members. Decision-support only; never touches the IBKR draft plan."""
     if not stocks:
         return
@@ -3422,7 +3426,7 @@ def attach_ants(stocks: List[dict], diag: Optional[Diagnostics] = None,
         s["ants_3m_days"] = a["ants_3m_days"]
         s["rs_new_high"] = a["rs_new_high"]
         s["rs_nh_before_price"] = a["rs_nh_before_price"]
-        s["rs_ok"] = bool(a["rs_spark_vals"])   # RS line was computable (SPY aligned)
+        s["rs_ok"] = bool(a["rs_spark_vals"])   # RS line was computable (benchmark aligned)
 
 
 def _classify_new_high(fp: dict, ext50: Optional[float], p3m: float) -> Tuple[str, str]:
@@ -5477,7 +5481,7 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
                                             weekly=weekly_spark)
         except Exception:  # noqa: BLE001
             pass
-    # 52wk-high persistence + ANTS + RS-line leadership (self-fetch 2y + SPY).
+    # 52wk-high persistence + ANTS + RS-line leadership (self-fetch 2y + ^GSPC).
     try:
         attach_persistence(rows)
     except Exception:  # noqa: BLE001
@@ -5540,7 +5544,7 @@ def _ext_leader_badges(m: dict) -> str:
                         "RS▲ ‹ Px</div>")
         elif m.get("rs_new_high"):
             rs_badge = ("<div class='fp-badge' style='border-color:#aecfe8;color:#aecfe8;' "
-                        "title='RS line (close/SPY) at or near its 1-year high — relative-strength leader vs the market'>RS▲ Leader</div>")
+                        "title='RS line (close/SPX) at or near its 1-year high — relative-strength leader vs the market'>RS▲ Leader</div>")
     nh_html = ""
     if m.get("at_high"):
         nh_html += "<div class='fp-badge' style='border-color:#54b87f;color:#54b87f;'>52W HIGH</div>"
@@ -6052,7 +6056,7 @@ def ext_percentile(ticker: str, ma_col: str, ext_value: float) -> Optional[float
     return None
 
 
-# ---- forward base rates: "if this state, what has SPY/QQQ/IWM done next?" ----
+# ---- forward base rates: "if this state, what has ^GSPC/^NDX/IWM done next?" ----
 # Built offline by build_forward_baserates.py from full inception history with the
 # SAME metric definitions as the live cards. OOS validation (predictive_power.py)
 # showed regime(200MA) × distribution-days is the most predictive combination, so
@@ -6156,7 +6160,7 @@ def _forward_block(md: dict) -> str:
     # Small-n caution (display only; the min_n=30 lookup gate is unchanged). Rare
     # states cluster in a handful of episodes — e.g. ^IXIC bear·9+ dist (n=41) is
     # dominated by the 1987/2001/2020 capitulation lows and reads strongly bullish
-    # while QQQ's same cell (2008/2022 mid-bear grind) reads bearish — so a thin
+    # while ^NDX's same cell (2008/2022 mid-bear grind) reads bearish — so a thin
     # cell is composition-sensitive, not a stable base rate (audit 2026-07-02).
     small_n = " <span style='color:var(--yellow,#d3a04d);' title=\"Thin sample — this state is rare, so the stats lean on a few historical episodes; treat as context, not a stable base rate.\">⚠️ small n</span>" if n < 100 else ""
     rows = (f"<div style='margin-top:6px;border-top:1px solid #1f1f23;padding-top:5px;"
@@ -6247,11 +6251,15 @@ def _bd_chip(d: Optional[float]) -> str:
     return f" <span class='{col}' style='font-size:var(--fs-table);'>{arr} {d:+.1f}pp</span>"
 
 
+_INDEX_LABELS = {"^IXIC": "IXIC", "^NDX": "NDX", "^GSPC": "SPX"}
+
+
 def _index_display(tk: str) -> str:
     """Card/label name for an index. The internal key stays the Yahoo symbol
-    (^IXIC) for data lookups + the live-refresh fetch; the caret is dropped only
-    for display so the header reads cleanly as 'IXIC' alongside SPY/QQQ/IWM."""
-    return "IXIC" if tk == "^IXIC" else tk
+    (^IXIC/^NDX/^GSPC) for data lookups + the live-refresh fetch; the caret is
+    dropped only for display so the header reads cleanly as 'IXIC/NDX/SPX'
+    alongside IWM (2026-07-06 USER: ^NDX=Nasdaq-100, ^GSPC=S&P-500/SPX)."""
+    return _INDEX_LABELS.get(tk, tk)
 
 
 def build_market_section(market_data: List[dict], breadth: dict,
@@ -6459,7 +6467,7 @@ def build_regime(market_data: List[dict], breadth: dict,
     """Market-top early-warning grid: 10 scored tells (+ VIX info) rolled into a
     GREEN/YELLOW/RED verdict with hard 🔴 overrides. Returns (html, regime, allow_breakouts)."""
     md = {m["ticker"]: m for m in market_data}
-    ixic, spy = md.get("^IXIC"), md.get("SPY")
+    ixic, spx = md.get("^IXIC"), md.get("^GSPC")   # S&P 500 index (was SPY ETF)
     br50 = breadth.get("above50", 50.0)
     br200 = breadth.get("above200", 50.0)
     dist_max = max((m.get("dist_days", 0) for m in market_data), default=0)
@@ -6468,12 +6476,12 @@ def build_regime(market_data: List[dict], breadth: dict,
     sigs = []   # (state, label)  state ∈ g/y/r/i ; i = info (not scored)
 
     # 1) Trend
-    if ixic and spy and ixic["trend"] == "GREEN" and spy["trend"] == "GREEN":
-        sigs.append(("g", "Trend ✓ (IXIC/SPY 10&gt;21)"))
-    elif ixic and spy and ixic["trend"] == "RED" and spy["trend"] == "RED":
-        sigs.append(("r", "Trend ✗ (IXIC &amp; SPY 10&lt;21)"))
+    if ixic and spx and ixic["trend"] == "GREEN" and spx["trend"] == "GREEN":
+        sigs.append(("g", "Trend ✓ (IXIC/SPX 10&gt;21)"))
+    elif ixic and spx and ixic["trend"] == "RED" and spx["trend"] == "RED":
+        sigs.append(("r", "Trend ✗ (IXIC &amp; SPX 10&lt;21)"))
     else:
-        sigs.append(("y", "Trend mixed (IXIC/SPY)"))
+        sigs.append(("y", "Trend mixed (IXIC/SPX)"))
     # 2/3) S&P breadth > 50/200DMA — but a FAILED breadth fetch returns the 50.0
     #      sentinel, which would score as two phantom YELLOW tells (audit H3).
     #      Guard on the ok flag like every other failable input does.
@@ -6486,9 +6494,9 @@ def build_regime(market_data: List[dict], breadth: dict,
     # 4) Distribution days
     sigs.append((("g" if dist_max < 4 else "y" if dist_max < 6 else "r"), f"Distribution {dist_max}d"))
     # 5) Climax extension — calibrated to history via the percentile table
-    #    (same P## as the IXIC/SPY cards; take the more-stretched of the two).
+    #    (same P## as the IXIC/SPX cards; take the more-stretched of the two).
     climax = []
-    for tk in ("^IXIC", "SPY"):
+    for tk in ("^IXIC", "^GSPC"):
         m = md.get(tk)
         if m is not None:
             p = ext_percentile(tk, "SMA50", m.get("ext_50", 0.0))
@@ -6509,9 +6517,9 @@ def build_regime(market_data: List[dict], breadth: dict,
         sigs.append((st, f"Leaders &lt;50DMA {b50:.0f}% · noNH {leader_stats['no_new_high']:.0f}%"))
     else:
         sigs.append(("i", "Leader momentum n/a"))
-    # 7) Topping-range breakdown (IXIC/SPY)
-    idx_below = [m for m in (ixic, spy) if m and m.get("close_below_range")]
-    idx_pos = [m.get("range_pos", 1.0) for m in (ixic, spy) if m]
+    # 7) Topping-range breakdown (IXIC/SPX)
+    idx_below = [m for m in (ixic, spx) if m and m.get("close_below_range")]
+    idx_pos = [m.get("range_pos", 1.0) for m in (ixic, spx) if m]
     if idx_below:
         sigs.append(("r", f"Topping: {'/'.join(_index_display(m['ticker']) for m in idx_below)} broke range"))
     elif idx_pos and min(idx_pos) < 0.2:
@@ -7359,16 +7367,16 @@ def run_scanners_and_generate_html() -> str:
             sector_rs = f_sect.result()
 
     ixic_trend = next((m["trend"] for m in market_data if m["ticker"] == "^IXIC"), "GREEN")
-    spy_trend = next((m["trend"] for m in market_data if m["ticker"] == "SPY"), "GREEN")
+    spx_trend = next((m["trend"] for m in market_data if m["ticker"] == "^GSPC"), "GREEN")
     above_50_pct = breadth.get("above50", 50.0)
-    if ixic_trend == "GREEN" and spy_trend == "GREEN":
+    if ixic_trend == "GREEN" and spx_trend == "GREEN":
         market_modifier = 1.2
-    elif ixic_trend == "RED" and spy_trend == "RED":
+    elif ixic_trend == "RED" and spx_trend == "RED":
         market_modifier = 0.4 if above_50_pct < 40.0 else 0.7
     else:
         market_modifier = 1.0
-    log.info("IXIC=%s SPY=%s Above50=%.1f%% MarketMod=%s",
-             ixic_trend, spy_trend, above_50_pct, market_modifier)
+    log.info("IXIC=%s SPX=%s Above50=%.1f%% MarketMod=%s",
+             ixic_trend, spx_trend, above_50_pct, market_modifier)
 
     # 10 calendar days > the 5 TRADING-day U&R window, so weekend-spanning day-4/5
     # setups aren't purged before scan_ur can see them (audit H4).
@@ -7378,10 +7386,12 @@ def run_scanners_and_generate_html() -> str:
     # across the index cards. Computed BEFORE the scans so they can reject stale
     # history feeds (Yahoo's bulk endpoint can lag the chart endpoint by a session
     # during EOD consolidation). Why max and not just ^IXIC (the primary index):
-    # TradingView's scan API has no ^IXIC, so the stale-bar TV-append inside
-    # _fetch_one_index can only patch the ETF cards (QQQ/SPY/IWM) — under Yahoo's
-    # EOD lag those carry the real current session while ^IXIC would sit a day
-    # behind, and keying on ^IXIC alone would mark the whole report provisional.
+    # TradingView's scan API has no caret indices, so the stale-bar TV-append
+    # inside _fetch_one_index can only patch the ETF card (IWM) — under Yahoo's
+    # EOD lag IWM carries the real current session while the ^IXIC/^NDX/^GSPC
+    # indices would sit a day behind, and keying on ^IXIC alone would mark the
+    # whole report provisional. (2026-07-06: S&P/Nasdaq-100 cards are now indices
+    # too, so IWM is the sole ETF freshness anchor — still sufficient.)
     _asofs = [m["asof"] for m in market_data if m.get("asof")]  # ISO strings → max() is latest
     data_date = max(_asofs) if _asofs else None
     if not next((m for m in market_data if m.get("ticker") == "^IXIC" and m.get("asof")), None):
