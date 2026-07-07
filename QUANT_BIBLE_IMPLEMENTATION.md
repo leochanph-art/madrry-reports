@@ -232,7 +232,77 @@ table; if spread > ~10% of the stop distance, badge `💸 SPREAD TAX`.
 
 ---
 
-## 9. What we deliberately do NOT port
+## 9. Lower timeframes (hourly / minute): what changes
+
+Moving the report to intraday timeframes makes **more of the Bible
+implementable, faster** — but the Bible itself explains why that is not the
+same thing as making more money. The resolution:
+
+### 9.1 What improves — sample velocity (§3.1–3.2)
+
+Every statistical feature in this plan is gated on `n`. Timeframe is the
+throttle on `n`:
+
+| Timeframe | Resolved outcomes/month (25-name list) | n≥30/bucket reached | n≥150 for refit |
+|---|---|---|---|
+| Daily swing | ~80 | months | ~1 year |
+| Hourly | ~150–250 | weeks | months |
+| 5-min ORB | ~300–500 | days–weeks | ~2 weeks |
+
+Consequences:
+- Win-rate CIs shrink by √n: ±30% at n=11 → ±5% at n=400.
+- Bayes conditioning (Phase 1) can use fine buckets — time-of-day × tape
+  state × setup — without running dry.
+- The M.E.T.A. regression refit (Phase 3) becomes a monthly job, not yearly.
+- Time-of-day is a cyclical variable: encode it exactly as the Bible's
+  CitiBike case (§5.3) prescribes — bucketed one-hot (open 30min / morning /
+  midday / power hour) — and include it as a regression control. The
+  report's current qualitative rule ("don't rush the first 15–30 minutes")
+  becomes a measured `P(win | bucket)`.
+- Poisson/exponential machinery (§2.3) becomes literally applicable to
+  intraday trade/volume arrival modeling, not just metaphor.
+
+### 9.2 What degrades — the Bible's own counterarguments
+
+1. **Cost per R explodes (§6.1).** Spread + slippage are ~fixed per trade;
+   the target shrinks with the timeframe. Daily breakout: 10–25% target vs
+   ~2¢ spread. 5-min scalp: 0.3–0.5% target — the same spread is now
+   10–30% of the entire edge. All EV displays MUST be net of spread +
+   slippage at intraday timeframes; gross EV is actively misleading there.
+2. **Counterparty quality (§6).** On minute timescales the counterparty is
+   a professional market maker running Section 6 with colocation. On
+   daily/weekly timescales they mostly aren't competing for the same edge.
+3. **Multiple-testing risk (§4.3 caveat).** Thousands of samples across
+   dozens of buckets will produce spurious |z| ≥ 2 hits by chance. At
+   intraday scale, tighten the significance threshold (|z| ≥ 3) and hold
+   out an out-of-sample window before promoting any rule into the report.
+4. **Execution discipline.** 20× more decisions/day; fatigue errors
+   compound faster than statistical edge accrues.
+
+### 9.3 Recommended architecture: daily signal, intraday measurement
+
+Keep the daily timeframe as the **signal layer** (where the report's
+playbook edge lives) and use hourly/minute data as the **execution +
+measurement layer**. The report already states execution rules
+qualitatively — validate each with intraday-sized samples:
+
+| Existing rule (stated, unmeasured) | Intraday experiment |
+|---|---|
+| "Wait for 5m/30m close above trigger, don't blind buy-stop" | Compare win rate + slippage: blind stop vs confirmed close, same signals |
+| "Breakout bar volume > 5-bar average, else trap" | P(follow-through \| vol ratio bucket) |
+| "No longs below VWAP" | P(win \| above/below VWAP at entry) |
+| "Better: wait for retest of trigger that holds" | Breakout-chase vs retest entry, EV of each |
+| "First 15–30 min: most losses are ORL-break reversals" | P(win \| time-of-day bucket) |
+
+This captures the statistical benefit of minute data (huge `n` on execution
+tactics) without adopting the scalper's cost structure on positions. Each
+validated rule feeds back into the Intraday Execution Plan section with a
+measured number instead of an assertion — which is the highest-EV use of
+lower-timeframe data this document can offer.
+
+---
+
+## 10. What we deliberately do NOT port
 
 - §1 (career/companies/classes) and §7 (interview question bank) — out of scope.
 - §5 case studies — methodology already absorbed via §4 (preprocessing,
@@ -243,7 +313,7 @@ table; if spread > ~10% of the stop distance, badge `💸 SPREAD TAX`.
 
 ---
 
-## 10. Rollout order & dependencies
+## 11. Rollout order & dependencies
 
 ```
 Phase 0  Outcome log (jsonl)                ── prerequisite, ship first
