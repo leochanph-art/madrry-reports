@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>MADRRY Live Monitor</title>
+<style>
+/* ---- design tokens: copied from madrry_report.html ("calm editorial dark")
+so the monitor + report feel like one product. Keep in sync with the report. ---- */
+:root {
+--bg:#111113; --surface:#18181b; --raised:#1f1f23; --hover:#232327;
+--line:#26262b; --line-2:#36363c;
+--text:#ececea; --text-2:#b4b4ae; --text-3:#82827c;
+--accent:#8cb4d6; --accent-2:#aecfe8; --tint-accent:rgba(140,180,214,.08);
+--tint-accent-2:rgba(140,180,214,.16);
+--up:#54b87f;   --tint-up:rgba(84,184,127,.08);    --bd-up:#2f6b4b;
+--down:#e06c6a; --tint-down:rgba(224,108,106,.08); --bd-down:#8a4341;
+--warn:#d3a04d; --tint-warn:rgba(211,160,77,.08);  --bd-warn:#7d6231;
+--mono:ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
+--fs-micro:0.6875rem; --fs-caption:0.75rem; --fs-table:0.8125rem;
+--fs-body:0.875rem; --fs-title:1rem; --fs-h1:1.125rem;
+--r-chip:3px; --r-card:6px;
+}
+* { box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+background:var(--bg); color:var(--text); margin:8px auto; max-width:760px; padding:0 8px 40px;
+line-height:1.5; font-variant-numeric:tabular-nums; -webkit-text-size-adjust:100%; }
+.mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.hidden { display:none !important; }
+button { font:inherit; cursor:pointer; }
+
+/* ---- header ---- */
+.hrow { display:flex; align-items:center; gap:8px; margin:4px 0 6px; }
+h1 { flex:1; color:var(--text-2); font-size:var(--fs-h1); font-weight:600;
+text-transform:uppercase; letter-spacing:.14em; margin:0; }
+.hbtn { background:var(--surface); color:var(--text-2); border:1px solid var(--line);
+border-radius:999px; padding:8px 14px; font-size:var(--fs-caption); font-weight:600; white-space:nowrap; }
+.hbtn:hover { border-color:var(--accent); color:var(--text); }
+#armBtn.on { color:var(--up); border-color:var(--bd-up); background:var(--tint-up); }
+.clockrow { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+#etClock { font-size:1.3rem; font-weight:700; color:var(--text); }
+#sessChip { font-size:var(--fs-caption); font-weight:600; border:1px solid; border-radius:999px; padding:2px 10px; }
+#sessChip.open { color:var(--up); border-color:var(--bd-up); background:var(--tint-up); }
+#sessChip.closed { color:var(--text-3); border-color:var(--line-2); background:var(--surface); }
+#sessChip.pre { color:var(--warn); border-color:var(--bd-warn); background:var(--tint-warn); }
+
+.statusbar { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+.chip { background:var(--surface); border:1px solid var(--line); border-radius:999px;
+padding:4px 10px; font-size:var(--fs-micro); color:var(--text-2); white-space:nowrap; }
+.chip b { color:var(--accent); font-family:var(--mono); font-weight:600; }
+.chip.mode-full b { color:var(--up); }
+.chip.mode-fb b { color:var(--warn); }
+.chip.err { color:var(--down); border-color:var(--bd-down); background:var(--tint-down); }
+.chip.stale { color:var(--down); border-color:var(--bd-down); background:var(--tint-down); font-weight:700; }
+
+.banner { border-radius:8px; padding:9px 13px; font-size:var(--fs-table); margin-bottom:10px; line-height:1.45; }
+.banner.red { background:var(--tint-down); border:1px solid var(--bd-down); color:var(--down); }
+.banner.warn { background:var(--tint-warn); border:1px solid var(--bd-warn); color:var(--warn); }
+.banner.info { background:var(--tint-accent); border:1px solid var(--accent); color:var(--accent-2); }
+
+/* ---- alert feed ---- */
+details.feedbox { background:var(--surface); border:1px solid var(--line); border-radius:8px;
+margin-bottom:12px; overflow:hidden; }
+details.feedbox > summary { cursor:pointer; list-style:none; padding:10px 13px; font-size:var(--fs-caption);
+font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text-2); background:var(--raised); }
+details.feedbox > summary::-webkit-details-marker { display:none; }
+details.feedbox > summary::after { content:' ▸'; opacity:.6; }
+details.feedbox[open] > summary::after { content:' ▾'; }
+#feedBadge { display:inline-block; min-width:20px; text-align:center; font-family:var(--mono);
+background:var(--raised); border:1px solid var(--line-2); border-radius:999px; padding:0 6px;
+margin-left:6px; color:var(--text-3); }
+#feedBadge.hot { color:var(--warn); border-color:var(--bd-warn); background:var(--tint-warn); }
+.feeditem { display:flex; gap:9px; padding:8px 13px; border-top:1px solid var(--line);
+font-size:var(--fs-table); align-items:baseline; }
+.feeditem .ft { color:var(--text-3); font-family:var(--mono); font-size:var(--fs-micro); flex:none; }
+.feeditem .fm { color:var(--text); word-break:break-word; }
+.feeditem.a-TRIGGER .fm, .feeditem.a-LINE .fm { color:var(--up); font-weight:600; }
+.feeditem.a-STOP .fm { color:var(--down); font-weight:600; }
+.feeditem.a-MOVE .fm, .feeditem.a-VOLUME .fm { color:var(--warn); }
+.feedempty { padding:10px 13px; color:var(--text-3); font-size:var(--fs-caption); }
+
+/* ---- scope segmented control ---- */
+.scope { display:flex; gap:0; margin-bottom:10px; border:1px solid var(--line); border-radius:999px;
+overflow:hidden; background:var(--surface); }
+.scope button { flex:1; background:transparent; border:none; color:var(--text-3); padding:9px 4px;
+font-size:var(--fs-caption); font-weight:600; }
+.scope button.active { background:var(--tint-accent); color:var(--accent-2); }
+.scope button + button { border-left:1px solid var(--line); }
+
+/* ---- watchlist rowcards (mirrors the report's rowcard aesthetics) ---- */
+#list { display:flex; flex-direction:column; gap:7px; }
+.rowcard { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card);
+padding:9px 11px; cursor:pointer; }
+.rowcard.hit { border-color:var(--bd-up); background:var(--tint-up); }
+.rowcard.stopped { border-color:var(--bd-down); background:var(--tint-down); }
+@keyframes rowflash { 0%,100% { box-shadow:none; } 40% { box-shadow:0 0 0 3px var(--tint-accent-2), inset 0 0 0 1px var(--accent); } }
+.rowcard.flash { animation:rowflash 1s ease-in-out 2; }
+.r1 { display:flex; align-items:center; gap:7px; }
+.star { flex:none; background:none; border:none; font-size:1.05rem; line-height:1; padding:4px 4px 4px 0;
+color:var(--line-2); }
+.star.on { color:var(--warn); }
+.tk { font-weight:700; font-size:1.05rem; color:var(--text); letter-spacing:.02em; }
+.rowcard.hit .tk { color:var(--up); }
+.rowcard.stopped .tk { color:var(--down); }
+.chips { display:flex; gap:4px; flex-wrap:wrap; align-items:center; min-width:0; }
+.mchip { font-size:10px; font-weight:600; letter-spacing:.05em; line-height:1.5;
+border:1px solid var(--line-2); border-radius:var(--r-chip); padding:0 5px; color:var(--text-2); white-space:nowrap; }
+.mchip.t-ap { color:var(--up); border-color:var(--bd-up); }
+.mchip.t-a { color:var(--warn); border-color:var(--bd-warn); }
+.mchip.top { color:var(--accent-2); border-color:var(--accent); background:var(--tint-accent); }
+.mchip.lw { color:var(--warn); border-color:var(--bd-warn); }
+.mchip.lb { color:var(--up); border-color:var(--bd-up); }
+.px { margin-left:auto; text-align:right; flex:none; }
+.px .last { font-family:var(--mono); font-weight:700; font-size:1.05rem; color:var(--text); }
+.rowcard.hit .px .last { color:var(--up); }
+.rowcard.stopped .px .last { color:var(--down); }
+.px .day { font-family:var(--mono); font-size:var(--fs-caption); display:block; }
+.day.up { color:var(--up); } .day.dn { color:var(--down); } .day.fl { color:var(--text-3); }
+.r2 { display:flex; gap:14px; margin-top:4px; font-size:var(--fs-micro); color:var(--text-3);
+font-family:var(--mono); flex-wrap:wrap; }
+.r2 b { color:var(--text-2); font-weight:600; }
+.r2 .near b { color:var(--warn); }
+.r2 .over b { color:var(--up); }
+/* expanded detail */
+.det { margin-top:8px; padding-top:8px; border-top:1px solid var(--line);
+display:grid; grid-template-columns:repeat(auto-fill,minmax(105px,1fr)); gap:6px 12px;
+font-size:var(--fs-caption); }
+.det .k { display:block; color:var(--text-3); font-size:10px; text-transform:uppercase; letter-spacing:.06em; }
+.det .v { font-family:var(--mono); color:var(--text); }
+.det .theme { grid-column:1/-1; color:var(--text-2); font-family:inherit; }
+.detlinks { grid-column:1/-1; display:flex; gap:14px; margin-top:2px; }
+.detlinks a { color:var(--accent-2); text-decoration:none; font-size:var(--fs-caption);
+border:1px solid var(--accent); border-radius:var(--r-chip); padding:2px 8px; }
+.detlinks a:hover { background:var(--tint-accent); }
+#listEmpty { color:var(--text-3); font-size:var(--fs-caption); padding:18px 4px; text-align:center; }
+
+/* ---- settings drawer ---- */
+#drawerWrap { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:50; }
+#drawer { position:fixed; left:0; right:0; bottom:0; z-index:51; background:var(--raised);
+border-top:1px solid var(--line-2); border-radius:14px 14px 0 0; padding:16px 16px 26px;
+max-width:760px; margin:0 auto; max-height:80vh; overflow:auto; }
+#drawer h2 { margin:0 0 12px; font-size:var(--fs-title); color:var(--text-2); text-transform:uppercase; letter-spacing:.1em; }
+.set { margin-bottom:14px; }
+.set label { display:block; font-size:var(--fs-caption); color:var(--text-3); margin-bottom:4px; }
+.set input[type=text], .set select { width:100%; background:var(--surface); color:var(--text);
+border:1px solid var(--line-2); border-radius:6px; padding:9px 11px; font-size:16px; font-family:var(--mono); }
+.set input:focus, .set select:focus { outline:none; border-color:var(--accent); }
+.set .note { font-size:var(--fs-micro); color:var(--text-3); margin-top:4px; line-height:1.45; }
+.setrow { display:flex; gap:8px; align-items:center; }
+.setrow input[type=text] { flex:1; }
+.sbtn { background:var(--tint-accent); color:var(--accent-2); border:1px solid var(--accent);
+border-radius:6px; padding:9px 14px; font-size:var(--fs-caption); font-weight:600; white-space:nowrap; }
+.sbtn.plain { background:var(--surface); color:var(--text-2); border-color:var(--line-2); }
+.tgl { display:flex; align-items:center; gap:9px; font-size:var(--fs-body); color:var(--text); cursor:pointer; }
+.tgl input { width:18px; height:18px; accent-color:var(--accent); }
+
+/* ---- footer ---- */
+footer { margin-top:26px; color:var(--text-3); font-size:var(--fs-caption); line-height:1.6; }
+footer details { background:var(--surface); border:1px solid var(--line); border-radius:8px;
+padding:9px 13px; margin-top:8px; }
+footer summary { cursor:pointer; color:var(--accent-2); font-weight:600; list-style:none; }
+footer summary::-webkit-details-marker { display:none; }
+footer summary::after { content:' ▸'; opacity:.6; }
+footer details[open] summary::after { content:' ▾'; }
+footer ol { margin:8px 0 2px; padding-left:20px; }
+footer li { margin-bottom:4px; }
+footer code { color:var(--text-2); background:var(--raised); padding:1px 5px; border-radius:4px; font-family:var(--mono); }
+
+@media (pointer:coarse) { .hbtn { min-height:42px; } .scope button { padding:11px 4px; } .star { padding:8px 8px 8px 0; } }
+@media (min-width:700px) { body { padding:0 16px 40px; } }
+@media (prefers-reduced-motion:reduce) { * { animation-duration:.01ms !important; transition-duration:.01ms !important; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <h1>MADRRY Live Monitor</h1>
+    <button id="armBtn" class="hbtn" title="Enable sound + notifications (needs one tap)">&#128276; Arm alerts</button>
+    <button id="gearBtn" class="hbtn" title="Settings">&#9881;</button>
+  </div>
+  <div class="clockrow">
+    <span id="etClock" class="mono">--:--:--</span>
+    <span id="sessChip" class="closed">loading&hellip;</span>
+  </div>
+  <div class="statusbar">
+    <span class="chip" id="chipMode">mode <b>&mdash;</b></span>
+    <span class="chip" id="chipUpd">upd <b>&mdash;</b></span>
+    <span class="chip" id="chipQuotes">quotes <b>0/0</b></span>
+    <span class="chip" id="chipAsof">data <b>&mdash;</b></span>
+    <span class="chip err hidden" id="chipErr"></span>
+  </div>
+  <div id="staleBanner" class="banner red hidden"></div>
+  <div id="fbNote" class="banner warn hidden"></div>
+  <div id="dataErr" class="banner red hidden"></div>
+</header>
+
+<details class="feedbox" id="feedBox" open>
+  <summary>Alerts<span id="feedBadge">0</span></summary>
+  <div id="feed"><div class="feedempty">No alerts yet today.</div></div>
+</details>
+
+<div class="scope" id="scopeCtl">
+  <button data-scope="watch" class="active">Watch</button>
+  <button data-scope="all">All</button>
+  <button data-scope="star">&#9733; Starred</button>
+</div>
+
+<div id="list"></div>
+<div id="listEmpty" class="hidden">Nothing in this scope.</div>
+
+<footer>
+  Quotes: Yahoo Finance via a keyless Cloudflare Worker proxy (FULL mode) or the
+  allorigins.win public relay (FALLBACK, price-only). Unofficial, possibly delayed
+  data &mdash; confirm fills with your broker. This page shows setups only: no positions,
+  no P&amp;L. Alerts, stars and settings live in this browser (localStorage).
+  <details>
+    <summary>Set up the quote proxy (free, ~5 min)</summary>
+    <ol>
+      <li>Sign in at <code>dash.cloudflare.com</code> (free plan is fine) &rarr; Workers &amp; Pages &rarr; Create application &rarr; Create Worker.</li>
+      <li>Name it (e.g. <code>madrry-quotes</code>) and Deploy the default stub.</li>
+      <li>Click Edit code, replace everything with the contents of <code>cloudflare_quote_worker.js</code> from the workspace repo, then Deploy.</li>
+      <li>Copy the worker URL, e.g. <code>https://madrry-quotes.&lt;you&gt;.workers.dev</code>.</li>
+      <li>Paste that URL into this page&rsquo;s &#9881; Settings &rarr; Quote proxy URL &rarr; Save. The page switches to FULL mode (batched quotes + volume alerts).</li>
+      <li>Optional: also write the URL into <code>live_price_proxy.txt</code> in the workspace root, so the daily export bakes it into <code>monitor_data.json</code> as the default for every device.</li>
+    </ol>
+  </details>
+  <div style="margin-top:8px"><a href="madrry_report.html" style="color:var(--accent-2)">&larr; back to the daily report</a></div>
+</footer>
+
+<div id="drawerWrap" class="hidden">
+  <div id="drawer">
+    <h2>Settings</h2>
+    <div class="set">
+      <label for="proxyIn">Quote proxy URL (Cloudflare Worker)</label>
+      <div class="setrow">
+        <input type="text" id="proxyIn" placeholder="https://madrry-quotes.you.workers.dev" autocomplete="off" spellcheck="false">
+        <button class="sbtn" id="proxySave">Save</button>
+      </div>
+      <div class="note">Stored only in this browser. Leave empty to use the URL shipped in
+      monitor_data.json (if any), else the page runs in FALLBACK mode. Deploy steps are in the page footer.</div>
+    </div>
+    <div class="set">
+      <label for="intSel">Poll interval</label>
+      <select id="intSel">
+        <option value="15">15 s</option>
+        <option value="30">30 s (FULL default)</option>
+        <option value="60">1 min</option>
+        <option value="120">2 min (FALLBACK default)</option>
+        <option value="180">3 min</option>
+        <option value="300">5 min</option>
+      </select>
+      <div class="note">FALLBACK mode enforces a 120 s minimum to be polite to the public relay.</div>
+    </div>
+    <div class="set">
+      <label class="tgl"><input type="checkbox" id="pollAnyway"> Poll outside regular hours (pre/post-market)</label>
+    </div>
+    <div class="set setrow">
+      <button class="sbtn plain" id="testSound">Test sound</button>
+      <button class="sbtn plain" id="clearAlerts">Clear today&rsquo;s alerts</button>
+      <button class="sbtn" id="drawerClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+'use strict';
+
+/* =================== tiny utils =================== */
+function $(s) { return document.querySelector(s); }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function num(v) { return (typeof v === 'number' && isFinite(v)) ? v : null; }
+function fmt(v, d) { var n = num(v); return n == null ? '—' : n.toFixed(d == null ? 2 : d); }
+function sign(v) { return v > 0 ? '+' : ''; }
+function lsGet(k, fb) {
+  try { var v = localStorage.getItem(k); return v == null ? fb : JSON.parse(v); }
+  catch (e) { return fb; }
+}
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* quota/private mode: degrade */ } }
+function uniq(arr) {
+  var seen = {}, out = [];
+  arr.forEach(function (x) { if (!seen[x]) { seen[x] = 1; out.push(x); } });
+  return out;
+}
+function chunk(arr, n) {
+  var out = []; for (var i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out;
+}
+function tSig(ms) { // AbortSignal with fallback for older Safari
+  try { if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) return AbortSignal.timeout(ms); } catch (e) {}
+  try {
+    var c = new AbortController();
+    setTimeout(function () { try { c.abort(); } catch (e) {} }, ms);
+    return c.signal;
+  } catch (e) { return undefined; }
+}
+function fetchJSON(url, ms) {
+  return fetch(url, { cache: 'no-store', signal: tSig(ms || 10000) }).then(function (r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  });
+}
+function pool(items, n, fn) { // bounded-concurrency map; failures become null
+  var i = 0;
+  function next() {
+    if (i >= items.length) return Promise.resolve();
+    var idx = i++;
+    return Promise.resolve().then(function () { return fn(items[idx]); })
+      .catch(function () { return null; })
+      .then(next);
+  }
+  var ws = [];
+  for (var k = 0; k < Math.min(n, items.length); k++) ws.push(next());
+  return Promise.all(ws);
+}
+
+/* =================== ET session clock =================== */
+var ET_FMT = null, TPE_FMT = null;
+try {
+  ET_FMT = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false,
+    weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  TPE_FMT = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Taipei', hour12: false,
+    hour: '2-digit', minute: '2-digit' });
+} catch (e) { /* no tz support: page still renders, gating falls open */ }
+var DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+function etParts() {
+  if (!ET_FMT) { var d = new Date(); return { date: d.toISOString().slice(0, 10), dow: d.getUTCDay(),
+    mins: d.getUTCHours() * 60 + d.getUTCMinutes(), hh: d.getUTCHours(), mm: d.getUTCMinutes(), ss: d.getUTCSeconds() }; }
+  var p = {};
+  ET_FMT.formatToParts(new Date()).forEach(function (x) { p[x.type] = x.value; });
+  var hh = (parseInt(p.hour, 10) || 0) % 24;
+  var mm = parseInt(p.minute, 10) || 0;
+  return { date: p.year + '-' + p.month + '-' + p.day, dow: DOW[p.weekday] != null ? DOW[p.weekday] : 0,
+    mins: hh * 60 + mm, hh: hh, mm: mm, ss: parseInt(p.second, 10) || 0 };
+}
+var OPEN_M = 9 * 60 + 30, CLOSE_M = 16 * 60; // 09:30–16:00 ET
+function inRTH(p) { p = p || etParts(); return p.dow >= 1 && p.dow <= 5 && p.mins >= OPEN_M && p.mins < CLOSE_M; }
+function elapsedRTH(p) { p = p || etParts(); return inRTH(p) ? p.mins - OPEN_M : (p.dow >= 1 && p.dow <= 5 && p.mins >= CLOSE_M ? 390 : 0); }
+function fmtDur(m) { var h = Math.floor(m / 60), mm = m % 60; return h > 0 ? h + 'h ' + mm + 'm' : mm + 'm'; }
+function nextOpenTxt(p) {
+  p = p || etParts();
+  if (p.dow >= 1 && p.dow <= 5 && p.mins < OPEN_M) return fmtDur(OPEN_M - p.mins);
+  var d = 1; while (true) { var nd = (p.dow + d) % 7; if (nd >= 1 && nd <= 5) break; d++; if (d > 7) break; }
+  return fmtDur(d * 1440 - p.mins + OPEN_M);
+}
+function lastUSWeekday() { // most recent US weekday, as YYYY-MM-DD in ET
+  var p = etParts();
+  var dt = new Date(Date.UTC(+p.date.slice(0, 4), +p.date.slice(5, 7) - 1, +p.date.slice(8, 10)));
+  var back = p.dow === 0 ? 2 : (p.dow === 6 ? 1 : 0);
+  dt.setUTCDate(dt.getUTCDate() - back);
+  return dt.toISOString().slice(0, 10);
+}
+function etClockStr(p) { p = p || etParts();
+  function z(n) { return (n < 10 ? '0' : '') + n; }
+  return z(p.hh) + ':' + z(p.mm) + ':' + z(p.ss); }
+function tpeStr() { try { return TPE_FMT ? TPE_FMT.format(new Date()) : ''; } catch (e) { return ''; } }
+
+/* U-shaped cumulative intraday volume curve (documented approximation):
+   ~12% of the day's volume in the first 30 min, slow midday, ramp into the
+   close (70%→100% over the last hour). Input: elapsed RTH minutes. */
+function paceFrac(e) {
+  if (!(e > 0)) return 0.01;
+  if (e >= 390) return 1;
+  if (e <= 30) return Math.max(0.01, 0.12 * (e / 30));
+  if (e <= 210) return 0.12 + (e - 30) * (0.31 / 180);
+  if (e <= 330) return 0.43 + (e - 210) * (0.27 / 120);
+  return 0.70 + (e - 330) * (0.30 / 60);
+}
+
+/* =================== state =================== */
+var TITLE = 'MADRRY Live Monitor';
+var S = {
+  data: null, tickers: [], byT: {},
+  quotes: {}, prevTick: {}, avgVol: {}, baseLoaded: false, baseLoading: false,
+  proxy: '', mode: 'FALLBACK',
+  armed: false, audio: null, notifOK: false,
+  stars: {}, scope: 'watch', userInt: null, pollAnyway: false,
+  day: null, fired: {}, feed: [],
+  expanded: {}, flash: {},
+  okCount: 0, polledCount: 0, lastPollTs: null, lastErr: '',
+  polling: false, pollTimer: null, dataStale: false
+};
+
+function loadPersisted() {
+  var st = lsGet('madrry_stars', []);
+  if (Object.prototype.toString.call(st) === '[object Array]')
+    st.forEach(function (t) { if (typeof t === 'string') S.stars[t] = 1; });
+  var sc = lsGet('madrry_scope', 'watch');
+  if (sc === 'all' || sc === 'star' || sc === 'watch') S.scope = sc;
+  var iv = num(lsGet('madrry_interval', null));
+  if (iv != null && iv >= 15 && iv <= 300) S.userInt = iv;
+  S.pollAnyway = !!lsGet('madrry_poll_anyway', false);
+  loadDayState();
+}
+function saveStars() { lsSet('madrry_stars', Object.keys(S.stars)); }
+
+/* per-day alert dedupe + feed persistence (ET day) */
+function loadDayState() {
+  var today = etParts().date;
+  S.day = today;
+  var f = lsGet('madrry_fired', null);
+  S.fired = (f && f.date === today && f.keys && typeof f.keys === 'object') ? f.keys : {};
+  var fd = lsGet('madrry_feed', null);
+  S.feed = (fd && fd.date === today && Object.prototype.toString.call(fd.items) === '[object Array]') ? fd.items : [];
+}
+function saveFired() { lsSet('madrry_fired', { date: S.day, keys: S.fired }); }
+function saveFeed() { lsSet('madrry_feed', { date: S.day, items: S.feed.slice(0, 200) }); }
+function rolloverIfNewDay() {
+  var today = etParts().date;
+  if (today !== S.day) {
+    S.day = today; S.fired = {}; S.feed = []; S.prevTick = {};
+    saveFired(); saveFeed(); renderFeed(); renderStale();
+  }
+}
+function firedKey(t, type) { return t + '|' + type; }
+function alreadyFired(t, type) { return !!S.fired[firedKey(t, type)]; }
+function markFired(t, type) { S.fired[firedKey(t, type)] = 1; saveFired(); }
+function triggeredToday(t) { return alreadyFired(t, 'TRIGGER'); }
+
+/* =================== sounds / notify =================== */
+var SOUNDS = { // [freq Hz, dur s] sequences — distinct patterns per spec
+  TRIGGER: [[880, 0.12], [1100, 0.12], [1320, 0.2]],  // 3 rising beeps
+  LINE:    [[880, 0.12], [1100, 0.12], [1320, 0.2]],
+  NEAR:    [[660, 0.12]],
+  MOVE:    [[330, 0.16], [262, 0.22]],                 // 2 low
+  VOLUME:  [[330, 0.16], [262, 0.22]],
+  STOP:    [[196, 0.65]]                               // long low
+};
+function beeps(seq) {
+  if (!S.armed || !S.audio || !seq) return;
+  try {
+    var ctx = S.audio, t = ctx.currentTime + 0.03;
+    seq.forEach(function (s) {
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = s[0];
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + s[1]);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(t); o.stop(t + s[1] + 0.03);
+      t += s[1] + 0.08;
+    });
+  } catch (e) {}
+}
+function vibrate() { try { if (navigator.vibrate) navigator.vibrate([80, 50, 80]); } catch (e) {} }
+function notify(title, body, tag) {
+  if (!S.notifOK) return;
+  try { new Notification(title, { body: body, tag: tag }); } catch (e) {}
+}
+function armAlerts() {
+  try {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (AC && !S.audio) S.audio = new AC();
+    if (S.audio && S.audio.resume) S.audio.resume();
+  } catch (e) {}
+  S.armed = true;
+  beeps([[660, 0.1]]); // audible confirmation = unlock check
+  try {
+    if (typeof Notification !== 'undefined') {
+      if (Notification.permission === 'granted') S.notifOK = true;
+      else if (Notification.permission !== 'denied')
+        Notification.requestPermission().then(function (p) { S.notifOK = (p === 'granted'); });
+    }
+  } catch (e) {}
+  var b = $('#armBtn'); b.textContent = '🔔 Armed'; b.classList.add('on');
+}
+
+/* =================== data load =================== */
+function normTicker(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  var t = (typeof raw.t === 'string') ? raw.t.trim().toUpperCase() : '';
+  if (!t) return null;
+  return {
+    t: t,
+    sec: typeof raw.sec === 'string' ? raw.sec : '',
+    tier: typeof raw.tier === 'string' ? raw.tier : '',
+    top: !!raw.top,
+    close: num(raw.close), adr: num(raw.adr),
+    entry: num(raw.entry), stop: num(raw.stop), risk: num(raw.risk),
+    line: num(raw.line),
+    line_state: typeof raw.line_state === 'string' ? raw.line_state : null,
+    p2p: num(raw.p2p), rs: num(raw.rs),
+    theme: typeof raw.theme === 'string' ? raw.theme : '',
+    status: typeof raw.status === 'string' ? raw.status : null,
+    watch: !!raw.watch
+  };
+}
+function loadData() {
+  fetchJSON('monitor_data.json', 15000).then(function (j) {
+    if (!j || Object.prototype.toString.call(j.tickers) !== '[object Array]' || !j.tickers.length)
+      throw new Error('monitor_data.json has no tickers');
+    var seen = {}, out = [];
+    j.tickers.forEach(function (raw) {
+      var d = normTicker(raw);
+      if (d && !seen[d.t]) { seen[d.t] = 1; out.push(d); S.byT[d.t] = d; }
+    });
+    S.data = j; S.tickers = out;
+    // proxy resolution: localStorage → monitor_data.proxy → ""
+    var lp = lsGet('madrry_proxy', '');
+    lp = (typeof lp === 'string') ? lp.trim() : '';
+    var dp = (typeof j.proxy === 'string') ? j.proxy.trim() : '';
+    S.proxy = lp || dp || '';
+    S.mode = S.proxy ? 'FULL' : 'FALLBACK';
+    $('#dataErr').classList.add('hidden');
+    renderStale(); renderScope(); renderStatus(); renderList(); renderFeed();
+    schedulePoll(0); // immediate first poll if session allows
+  }).catch(function (e) {
+    var el = $('#dataErr');
+    el.textContent = 'Could not load monitor_data.json (' + (e && e.message ? e.message : 'fetch failed') +
+      '). It is exported by the morning pipeline — retrying in 60 s.';
+    el.classList.remove('hidden');
+    setTimeout(loadData, 60000);
+  });
+}
+function renderStale() {
+  var el = $('#staleBanner');
+  if (!S.data) { el.classList.add('hidden'); return; }
+  var asof = typeof S.data.asof === 'string' ? S.data.asof : '';
+  S.dataStale = !!asof && asof < lastUSWeekday();
+  if (S.dataStale) {
+    el.innerHTML = '<b>DATA STALE</b> — setups are from <span class="mono">' + esc(asof) +
+      '</span> but the most recent US weekday is <span class="mono">' + lastUSWeekday() +
+      '</span>. Entries/stops may be outdated; the morning pipeline may not have run.';
+    el.classList.remove('hidden');
+  } else el.classList.add('hidden');
+  var chip = $('#chipAsof');
+  chip.innerHTML = 'data <b>' + esc(asof || '?') + '</b>';
+  chip.classList.toggle('stale', S.dataStale);
+}
+
+/* =================== quote polling =================== */
+function proxyBase() { return S.proxy.replace(/\/+$/, ''); }
+function effInterval() {
+  var def = S.mode === 'FULL' ? 30 : 120;
+  var iv = S.userInt != null ? S.userInt : def;
+  if (S.mode === 'FALLBACK') iv = Math.max(iv, 120); // be polite to the public relay
+  return Math.min(300, Math.max(15, iv));
+}
+function canPoll() { return !!S.data && (inRTH() || S.pollAnyway); }
+function pollSet() {
+  if (S.mode === 'FULL') return uniq(S.tickers.map(function (d) { return d.t; }));
+  // FALLBACK: cap to 40 — starred names first (they carry STOP alerts), then the
+  // highest-priority watched names (watch flag, p2p asc)
+  var starred = S.tickers.filter(function (d) { return S.stars[d.t]; });
+  var w = S.tickers.filter(function (d) { return d.watch && !S.stars[d.t]; });
+  w.sort(function (a, b) {
+    var pa = a.p2p == null ? 1e9 : Math.abs(a.p2p), pb = b.p2p == null ? 1e9 : Math.abs(b.p2p);
+    return pa - pb;
+  });
+  return uniq(starred.concat(w).map(function (d) { return d.t; })).slice(0, 40);
+}
+function loadBase() { // avgVol50 for RVOL — retried each poll until (nearly) every symbol lands
+  if (S.baseLoaded || S.baseLoading || S.mode !== 'FULL') return Promise.resolve();
+  var cached = lsGet('madrry_base', null);
+  if (cached && cached.date === S.day && cached.vols && typeof cached.vols === 'object' &&
+      Object.keys(cached.vols).length) {
+    S.avgVol = cached.vols; S.baseLoaded = true; return Promise.resolve();
+  }
+  S.baseLoading = true;
+  var missing = uniq(S.tickers.map(function (d) { return d.t; }))
+    .filter(function (t) { return num(S.avgVol[t]) == null; });
+  if (!missing.length) { S.baseLoaded = true; S.baseLoading = false; return Promise.resolve(); }
+  return pool(chunk(missing, 40), 2, function (ch) {
+    return fetchJSON(proxyBase() + '/?symbols=' + encodeURIComponent(ch.join(',')) + '&mode=base', 20000)
+      .then(function (j) {
+        if (j && j.result && j.result.forEach) j.result.forEach(function (r) {
+          if (r && r.symbol && num(r.avgVol50) != null) S.avgVol[String(r.symbol).toUpperCase()] = r.avgVol50;
+        });
+      });
+  }).then(function () {
+    S.baseLoading = false;
+    // A handful of symbols may legitimately have no volume history; accept and
+    // day-cache once the stragglers are few. A failed chunk (>=40 missing) keeps
+    // baseLoaded false so the next poll retries just the missing names.
+    var still = missing.filter(function (t) { return num(S.avgVol[t]) == null; });
+    if (still.length <= Math.max(3, Math.ceil(missing.length * 0.05))) {
+      S.baseLoaded = true;
+      lsSet('madrry_base', { date: S.day, vols: S.avgVol });
+    }
+  }).catch(function () { S.baseLoading = false; /* retried on a later poll */ });
+}
+function pollFull(syms) {
+  var got = 0;
+  return pool(chunk(syms, 40), 2, function (ch) {
+    return fetchJSON(proxyBase() + '/?symbols=' + encodeURIComponent(ch.join(',')) + '&mode=full', 15000)
+      .then(function (j) {
+        if (j && j.result && j.result.forEach) j.result.forEach(function (r) {
+          if (!r || !r.symbol) return;
+          var t = String(r.symbol).toUpperCase();
+          var q = { price: num(r.price), prevClose: num(r.prevClose), dayHigh: num(r.dayHigh),
+            dayLow: num(r.dayLow), vol: num(r.vol), state: r.state || null, t: num(r.t) };
+          if (q.price != null) { S.quotes[t] = q; got++; }
+        });
+      });
+  }).then(function () { return got; });
+}
+function pollFallback(syms) {
+  var got = 0;
+  return pool(syms, 8, function (t) {
+    var y = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(t) + '?interval=1d&range=1d';
+    var u = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(y);
+    return fetchJSON(u, 8000).then(function (j) {
+      var p = null;
+      try { p = num(j.chart.result[0].meta.regularMarketPrice); } catch (e) {}
+      if (p != null) { S.quotes[t] = { price: p, prevClose: null, vol: null, state: null, t: null }; got++; }
+    });
+  }).then(function () { return got; });
+}
+function doPoll() {
+  if (!S.data) return Promise.resolve();
+  if (S.polling) { S.pollQueued = true; return Promise.resolve(); } // e.g. proxy saved mid-poll
+  S.polling = true;
+  var syms = pollSet();
+  S.polledCount = syms.length;
+  if (S.mode === 'FULL') loadBase(); // fire-and-forget; volume alerts start when it lands
+  var run = S.mode === 'FULL' ? pollFull(syms) : pollFallback(syms);
+  return run.then(function (got) {
+    S.okCount = got || 0;
+    S.lastPollTs = Date.now();
+    S.lastErr = got ? '' : 'no quotes returned';
+    evaluateAlerts(syms);
+  }).catch(function (e) {
+    S.lastErr = (e && e.message) ? e.message : 'quote fetch failed';
+  }).then(function () {
+    S.polling = false;
+    renderStatus(); renderList();
+    if (S.pollQueued) { S.pollQueued = false; return doPoll(); } // run the queued immediate poll now
+  });
+}
+function schedulePoll(delayMs) {
+  if (S.pollTimer) clearTimeout(S.pollTimer);
+  S.pollTimer = setTimeout(function tick() {
+    var p = canPoll() ? doPoll() : Promise.resolve();
+    p.then(function () { schedulePoll(effInterval() * 1000); });
+  }, delayMs == null ? effInterval() * 1000 : delayMs);
+}
+
+/* =================== alert engine =================== */
+function fireAlert(type, t, msg) {
+  if (alreadyFired(t, type)) return;
+  markFired(t, type);
+  var item = { ts: etClockStr(), type: type, t: t, msg: msg };
+  S.feed.unshift(item);
+  if (S.feed.length > 200) S.feed.length = 200;
+  saveFeed();
+  S.flash[t] = Date.now() + 2500;      // row flash
+  beeps(SOUNDS[type]);                 // WebAudio (only if armed)
+  vibrate();
+  notify('MADRRY ' + type + ' — ' + t, msg, S.day + '|' + t + '|' + type);
+  renderFeed();
+}
+function evaluateAlerts(syms) {
+  rolloverIfNewDay();
+  var p = etParts(), elapsed = inRTH(p) ? (p.mins - OPEN_M) : 0;
+  // Alerts (and prevTick bookkeeping) are RTH-only: "poll anyway" quotes are for
+  // viewing, and pre/post-market prices would refire GAP OVER after the midnight
+  // dedupe rollover. Keeping prevTick null overnight also makes the first RTH
+  // poll correctly fire the GAP variant.
+  if (!inRTH(p)) return;
+  syms.forEach(function (t) {
+    var d = S.byT[t], q = S.quotes[t];
+    if (!d || !q) return;
+    var price = num(q.price);
+    if (price == null || price <= 0) return;
+    var prev = num(S.prevTick[t]);
+
+    // 1. TRIGGER — cross of entry; first sighting already >= entry → GAP variant
+    if (d.entry != null && !alreadyFired(t, 'TRIGGER')) {
+      if (prev != null && prev < d.entry && price >= d.entry)
+        fireAlert('TRIGGER', t, '🎯 TRIGGER ' + t + ' ' + fmt(price) + ' ≥ entry ' + fmt(d.entry));
+      else if (prev == null && price >= d.entry)
+        fireAlert('TRIGGER', t, '🎯 GAP OVER TRIGGER ' + t + ' ' + fmt(price) + ' ≥ entry ' + fmt(d.entry));
+    }
+    // 2. LINE BREAK — same cross logic vs resistance line while it's a live watch
+    if (d.line != null && d.line_state === 'watch' && !alreadyFired(t, 'LINE')) {
+      if (prev != null && prev < d.line && price >= d.line)
+        fireAlert('LINE', t, '📈 LINE BREAK ' + t + ' ' + fmt(price) + ' ≥ line ' + fmt(d.line));
+      else if (prev == null && price >= d.line)
+        fireAlert('LINE', t, '📈 LINE BREAK (gap) ' + t + ' ' + fmt(price) + ' ≥ line ' + fmt(d.line));
+    }
+    // 3. NEAR — within 0.5% below entry (once/day)
+    if (d.entry != null && price < d.entry && (d.entry - price) / d.entry <= 0.005)
+      fireAlert('NEAR', t, '⚡ NEAR ' + t + ' ' + fmt(price) + ' → entry ' + fmt(d.entry) +
+        ' (' + fmt((price / d.entry - 1) * 100, 2) + '%)');
+    // 4. MOVE — |day%| >= max(3, 1.5×ADR)
+    var pc = (S.mode === 'FULL' && num(q.prevClose) != null) ? q.prevClose : d.close;
+    if (num(pc) != null && pc > 0) {
+      var chg = (price / pc - 1) * 100;
+      var thr = Math.max(3, d.adr != null ? 1.5 * d.adr : 0);
+      if (isFinite(chg) && Math.abs(chg) >= thr)
+        fireAlert('MOVE', t, '🚨 MOVE ' + (chg >= 0 ? '▲' : '▼') + ' ' + t + ' ' +
+          sign(chg) + fmt(chg, 1) + '% (thr ' + fmt(thr, 1) + '%)');
+    }
+    // 5. VOLUME — FULL only, pace-adjusted RVOL >= 2.5, after 15 min of RTH
+    if (S.mode === 'FULL' && elapsed >= 15) {
+      var av = num(S.avgVol[t]), vol = num(q.vol);
+      if (av != null && av > 0 && vol != null && vol > 0) {
+        var rv = (vol / av) / paceFrac(elapsed);
+        if (isFinite(rv) && rv >= 2.5)
+          fireAlert('VOLUME', t, '🔊 VOLUME ' + t + ' RVOL ' + fmt(rv, 1) +
+            '× pace-adj (' + fmt(vol / av, 1) + '× raw)');
+      }
+    }
+    // 6. STOP — starred names, or anything that triggered earlier today
+    if (d.stop != null && price <= d.stop && (S.stars[t] || triggeredToday(t)))
+      fireAlert('STOP', t, '🛑 STOP ' + t + ' ' + fmt(price) + ' ≤ stop ' + fmt(d.stop));
+
+    S.prevTick[t] = price;
+  });
+  updateTitle();
+}
+function updateTitle() {
+  try { document.title = S.feed.length ? '(' + S.feed.length + ') ' + TITLE : TITLE; } catch (e) {}
+}
+
+/* =================== rendering =================== */
+function renderStatus() {
+  var m = $('#chipMode');
+  m.innerHTML = 'mode <b>' + S.mode + '</b>';
+  m.className = 'chip ' + (S.mode === 'FULL' ? 'mode-full' : 'mode-fb');
+  var u = $('#chipUpd');
+  if (S.lastPollTs) u.innerHTML = 'upd <b>' + etClockStr() + ' ET</b> · ' + esc(tpeStr()) + ' TPE';
+  else u.innerHTML = 'upd <b>—</b>';
+  $('#chipQuotes').innerHTML = 'quotes <b>' + S.okCount + '/' + S.polledCount + '</b>';
+  var e = $('#chipErr');
+  if (S.lastErr) { e.textContent = '⚠ ' + S.lastErr + ' — retrying'; e.classList.remove('hidden'); }
+  else e.classList.add('hidden');
+  var fb = $('#fbNote');
+  if (S.data && S.mode === 'FALLBACK') {
+    fb.textContent = 'FALLBACK mode: price-only quotes for the top ' + Math.min(40, pollSet().length) +
+      ' watch names via a public relay (min 120 s). Volume alerts are off. Add a Cloudflare Worker URL in ⚙ Settings for full coverage.';
+    fb.classList.remove('hidden');
+  } else fb.classList.add('hidden');
+}
+function renderClock() {
+  var p = etParts();
+  $('#etClock').textContent = etClockStr(p) + ' ET';
+  var s = $('#sessChip');
+  if (inRTH(p)) { s.textContent = 'MARKET OPEN · RTH'; s.className = 'open'; }
+  else if (S.pollAnyway) { s.textContent = 'CLOSED · polling anyway · opens in ' + nextOpenTxt(p); s.className = 'pre'; }
+  else { s.textContent = 'CLOSED · opens in ' + nextOpenTxt(p); s.className = 'closed'; }
+}
+function renderFeed() {
+  var box = $('#feed'), badge = $('#feedBadge');
+  badge.textContent = String(S.feed.length);
+  badge.classList.toggle('hot', S.feed.length > 0);
+  if (!S.feed.length) { box.innerHTML = '<div class="feedempty">No alerts yet today.</div>'; updateTitle(); return; }
+  var h = '';
+  S.feed.forEach(function (it) {
+    h += '<div class="feeditem a-' + esc(it.type) + '"><span class="ft">' + esc(it.ts) +
+      '</span><span class="fm">' + esc(it.msg) + '</span></div>';
+  });
+  box.innerHTML = h;
+  updateTitle();
+}
+function renderScope() {
+  var wc = 0, sc = 0;
+  S.tickers.forEach(function (d) { if (d.watch) wc++; if (S.stars[d.t]) sc++; });
+  var btns = document.querySelectorAll('#scopeCtl button');
+  for (var i = 0; i < btns.length; i++) {
+    var b = btns[i], k = b.getAttribute('data-scope');
+    b.classList.toggle('active', k === S.scope);
+    if (k === 'watch') b.textContent = 'Watch (' + wc + ')';
+    else if (k === 'all') b.textContent = 'All (' + S.tickers.length + ')';
+    else b.textContent = '★ (' + sc + ')';
+  }
+}
+function rowMetrics(d) {
+  var q = S.quotes[d.t] || {};
+  var price = num(q.price);
+  var base = price != null ? price : d.close;
+  var pc = (S.mode === 'FULL' && num(q.prevClose) != null) ? q.prevClose : d.close;
+  var day = (price != null && num(pc) != null && pc > 0) ? (price / pc - 1) * 100 : null;
+  var dist = (d.entry != null && num(base) != null && d.entry > 0) ? (base / d.entry - 1) * 100 : null;
+  var rvol = null;
+  if (S.mode === 'FULL') {
+    var av = num(S.avgVol[d.t]), vol = num(q.vol), e = elapsedRTH();
+    // same 15-min guard as the alert engine — earlier the pace divisor inflates wildly
+    if (av != null && av > 0 && vol != null && e >= 15) rvol = (vol / av) / paceFrac(e);
+  }
+  return { price: price, day: day, dist: dist, rvol: rvol,
+    hit: price != null && d.entry != null && price >= d.entry,
+    stopped: price != null && d.stop != null && price <= d.stop };
+}
+function scopeRows() {
+  return S.tickers.filter(function (d) {
+    if (S.scope === 'all') return true;
+    if (S.scope === 'star') return !!S.stars[d.t];
+    return d.watch;
+  });
+}
+function renderList() {
+  var rows = scopeRows();
+  var now = Date.now();
+  rows.sort(function (a, b) { // triggered pinned first, then |dist-to-entry| asc
+    var ta = triggeredToday(a.t) ? 0 : 1, tb = triggeredToday(b.t) ? 0 : 1;
+    if (ta !== tb) return ta - tb;
+    var da = rowMetrics(a).dist, db = rowMetrics(b).dist;
+    da = da == null ? null : Math.abs(da); db = db == null ? null : Math.abs(db);
+    if (da == null && db == null) return a.t < b.t ? -1 : 1;
+    if (da == null) return 1;
+    if (db == null) return -1;
+    return da - db;
+  });
+  var h = '';
+  rows.forEach(function (d) {
+    var m = rowMetrics(d);
+    var cls = 'rowcard' + (m.hit ? ' hit' : '') + (m.stopped ? ' stopped' : '') +
+      ((S.flash[d.t] && S.flash[d.t] > now) ? ' flash' : '');
+    var tierCls = d.tier === 'A+' ? ' t-ap' : (d.tier && d.tier.charAt(0) === 'A' ? ' t-a' : '');
+    var chips = '';
+    if (d.tier) chips += '<span class="mchip' + tierCls + '">' + esc(d.tier) + '</span>';
+    if (d.top) chips += '<span class="mchip top">TOP</span>';
+    if (d.line != null && d.line_state)
+      chips += '<span class="mchip ' + (d.line_state === 'break' ? 'lb' : 'lw') + '">LINE</span>';
+    if (d.sec) chips += '<span class="mchip">' + esc(d.sec) + '</span>';
+    var dayCls = m.day == null ? 'fl' : (m.day > 0.05 ? 'up' : (m.day < -0.05 ? 'dn' : 'fl'));
+    var dayTxt = m.day == null ? '—' : sign(m.day) + fmt(m.day, 1) + '%';
+    var distCls = m.dist == null ? '' : (m.dist >= 0 ? 'over' : (m.dist >= -1 ? 'near' : ''));
+    var distTxt = m.dist == null ? '—' : sign(m.dist) + fmt(m.dist, 1) + '%';
+    var r2 = '<span class="' + distCls + '">entry <b>' + distTxt + '</b></span>';
+    if (S.mode === 'FULL') r2 += '<span>rvol <b>' + (m.rvol == null ? '—' : fmt(m.rvol, 1) + '×') + '</b></span>';
+    if (triggeredToday(d.t)) r2 += '<span class="over"><b>TRIGGERED</b></span>';
+
+    var det = '';
+    if (S.expanded[d.t]) {
+      det = '<div class="det">' +
+        dv('Entry', d.entry) + dv('Stop', d.stop) +
+        dv('Risk %', d.risk, 1) + dv('ADR %', d.adr, 1) +
+        dv('Line', d.line) + dv('RS', d.rs, 0) +
+        dv('Prev close', d.close) + dv('%→pivot', d.p2p, 1) +
+        (d.status ? '<div><span class="k">Status</span><span class="v">' + esc(d.status) + '</span></div>' : '') +
+        (d.line_state ? '<div><span class="k">Line state</span><span class="v">' + esc(d.line_state) + '</span></div>' : '') +
+        (d.theme ? '<div class="theme"><span class="k">Theme</span>' + esc(d.theme) + '</div>' : '') +
+        '<div class="detlinks">' +
+        '<a href="https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(d.t) + '" target="_blank" rel="noopener">chart ↗</a>' +
+        '<a href="madrry_report.html#' + encodeURIComponent(d.t) + '" target="_blank" rel="noopener">report ↗</a>' +
+        '</div></div>';
+    }
+    h += '<div class="' + cls + '" data-t="' + esc(d.t) + '">' +
+      '<div class="r1">' +
+      '<button class="star' + (S.stars[d.t] ? ' on' : '') + '" data-t="' + esc(d.t) + '" title="Star: enables STOP alerts">' +
+      (S.stars[d.t] ? '★' : '☆') + '</button>' +
+      '<span class="tk">' + esc(d.t) + '</span>' +
+      '<span class="chips">' + chips + '</span>' +
+      '<span class="px"><span class="last">' + (m.price == null ? '—' : fmt(m.price)) +
+      '</span><span class="day ' + dayCls + '">' + dayTxt + '</span></span>' +
+      '</div>' +
+      '<div class="r2">' + r2 + '</div>' + det + '</div>';
+  });
+  $('#list').innerHTML = h;
+  $('#listEmpty').classList.toggle('hidden', rows.length > 0);
+}
+function dv(k, v, dec) {
+  return '<div><span class="k">' + esc(k) + '</span><span class="v">' +
+    (v == null ? '—' : fmt(v, dec == null ? 2 : dec)) + '</span></div>';
+}
+
+/* =================== interactions =================== */
+function bindUI() {
+  $('#armBtn').addEventListener('click', armAlerts);
+  $('#gearBtn').addEventListener('click', function () {
+    $('#proxyIn').value = (function () { var v = lsGet('madrry_proxy', ''); return typeof v === 'string' ? v : ''; })();
+    $('#intSel').value = String(S.userInt != null ? S.userInt : (S.mode === 'FULL' ? 30 : 120));
+    $('#pollAnyway').checked = S.pollAnyway;
+    $('#drawerWrap').classList.remove('hidden');
+  });
+  $('#drawerWrap').addEventListener('click', function (ev) { if (ev.target === this) this.classList.add('hidden'); });
+  $('#drawerClose').addEventListener('click', function () { $('#drawerWrap').classList.add('hidden'); });
+  $('#proxySave').addEventListener('click', function () {
+    var v = $('#proxyIn').value.trim();
+    lsSet('madrry_proxy', v);
+    var dp = (S.data && typeof S.data.proxy === 'string') ? S.data.proxy.trim() : '';
+    S.proxy = v || dp || '';
+    var newMode = S.proxy ? 'FULL' : 'FALLBACK';
+    if (newMode !== S.mode) { S.mode = newMode; S.baseLoaded = false; }
+    renderStatus(); schedulePoll(0);
+  });
+  $('#intSel').addEventListener('change', function () {
+    var v = parseInt(this.value, 10);
+    if (isFinite(v) && v >= 15 && v <= 300) { S.userInt = v; lsSet('madrry_interval', v); schedulePoll(effInterval() * 1000); }
+  });
+  $('#pollAnyway').addEventListener('change', function () {
+    S.pollAnyway = this.checked; lsSet('madrry_poll_anyway', S.pollAnyway);
+    renderClock(); if (S.pollAnyway) schedulePoll(0);
+  });
+  $('#testSound').addEventListener('click', function () { if (!S.armed) armAlerts(); beeps(SOUNDS.TRIGGER); });
+  $('#clearAlerts').addEventListener('click', function () {
+    S.feed = []; saveFeed(); renderFeed();
+  });
+  $('#scopeCtl').addEventListener('click', function (ev) {
+    var b = ev.target.closest ? ev.target.closest('button') : null;
+    if (!b) return;
+    S.scope = b.getAttribute('data-scope') || 'watch';
+    lsSet('madrry_scope', S.scope);
+    renderScope(); renderList();
+  });
+  $('#list').addEventListener('click', function (ev) {
+    var star = ev.target.closest ? ev.target.closest('.star') : null;
+    if (star) {
+      var t = star.getAttribute('data-t');
+      if (S.stars[t]) delete S.stars[t]; else S.stars[t] = 1;
+      saveStars(); renderScope(); renderList();
+      ev.stopPropagation(); return;
+    }
+    if (ev.target.closest && ev.target.closest('a')) return; // let links work
+    var card = ev.target.closest ? ev.target.closest('.rowcard') : null;
+    if (card) {
+      var tk = card.getAttribute('data-t');
+      if (S.expanded[tk]) delete S.expanded[tk]; else S.expanded[tk] = 1;
+      renderList();
+    }
+  });
+}
+
+/* =================== boot =================== */
+function boot() {
+  loadPersisted();
+  bindUI();
+  renderClock(); renderFeed(); updateTitle();
+  setInterval(function () { renderClock(); rolloverIfNewDay(); }, 1000);
+  loadData();
+  schedulePoll(effInterval() * 1000); // replaced by an immediate poll once data loads
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+else boot();
+
+})();
+</script>
+</body>
+</html>
