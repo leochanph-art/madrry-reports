@@ -1000,6 +1000,34 @@ def fetch_histories_batch(tickers: List[str], period: str = "1y", min_rows: int 
     return out
 
 
+def fetch_histories_batch_intraday(tickers: List[str], period: str = "60d",
+                                   interval: str = "1h", min_rows: int = 80) -> Dict[str, pd.DataFrame]:
+    """Batch intraday history (SHADOW multi-timeframe lessons). Separate from
+    fetch_histories_batch on purpose: _patch_stale_histories appends a DAILY
+    bar and would corrupt an hourly frame."""
+    if not tickers:
+        return {}
+    try:
+        raw = yf.download(tickers=tickers, period=period, interval=interval,
+                          group_by="ticker", auto_adjust=False, threads=True, progress=False)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Intraday batch download failed: %s", exc)
+        return {}
+    if raw is None or len(raw) == 0:
+        return {}
+    out: Dict[str, pd.DataFrame] = {}
+    multi = isinstance(raw.columns, pd.MultiIndex)
+    for t in tickers:
+        try:
+            df = raw[t] if multi else raw
+            df = df.dropna()
+            if len(df) >= min_rows:
+                out[t] = df
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def _fetch_one_index(ticker: str) -> Optional[dict]:
     """Fetch + compute one market-health card (used in a thread pool)."""
     # 14mo (not 3mo) so we carry ≥200 bars for the SMA200 bull/bear regime that
@@ -1081,6 +1109,58 @@ def _fetch_one_index(ticker: str) -> Optional[dict]:
         if pct_drop > 0.2 and curr_v > prev_v:
             dist_days += 1
 
+    # ---- Big Picture extras (ADDITIVE keys — nothing above changes) ----
+    # Session volume vs prior session + vs 50-day average. TV-patched bars can
+    # carry vol=0 -> report None rather than a bogus comparison (same audit rule
+    # as the dist-day loop above).
+    vol_today = valid[-1][1]
+    vol_prev = valid[-2][1] if len(valid) >= 2 else 0
+    vol_vs_prev = ((vol_today / vol_prev - 1) * 100) if (vol_today > 0 and vol_prev > 0) else None
+    _v50 = [v for _, v in valid[-50:] if v > 0]
+    vol_vs_avg50 = ((vol_today / (sum(_v50) / len(_v50)) - 1) * 100) if (vol_today > 0 and len(_v50) >= 20) else None
+
+    # IBD-spec distribution count: trailing 25 sessions, close down >=0.2% on
+    # volume above the prior session; a day EXPIRES once the index closes >=5%
+    # above that day's close (O'Neil's rally-erasure rule). Kept separate from
+    # `dist_days` above, which the regime tells already consume (additive-only).
+    window25 = valid[-26:]
+    closes25 = [c2 for c2, _ in window25]
+    dist_days_ibd = 0
+    for i in range(1, len(window25)):
+        pc, pv = window25[i - 1]
+        cc, cv = window25[i]
+        if not pc or cv <= 0 or pv <= 0:
+            continue
+        if (pc - cc) / pc * 100 >= 0.2 and cv > pv:
+            later = closes25[i + 1:]
+            if later and max(later) >= cc * 1.05:
+                continue                      # expired: rallied 5% past the dist close
+            dist_days_ibd += 1
+
+    # Rally-attempt day count + follow-through-day flag (O'Neil). Bottom = lowest
+    # close of the last 60 bars; day 1 = first higher close after it; an FTD is a
+    # day-4+ gain >=1.2% on volume above the prior session. Informational only —
+    # the Big Picture prints it when the regime is RED.
+    tail60 = valid[-60:]
+    lows60 = [c2 for c2, _ in tail60]
+    low_i = min(range(len(lows60)), key=lambda j: lows60[j])
+    rally_day = 0
+    ftd_today = False
+    start = None
+    for j in range(low_i + 1, len(tail60)):
+        if lows60[j] > lows60[low_i]:
+            start = j
+            break
+    if start is not None:
+        # day 1 = the bar at `start` (first higher close after the low); today is
+        # index len-1, so today's day number = (len-1) - start + 1 = len - start.
+        rally_day = len(tail60) - start
+        lc, lv = tail60[-1]
+        pc2, pv2 = tail60[-2]
+        if (rally_day >= 4 and pc2 and lv > 0 and pv2 > 0
+                and (lc - pc2) / pc2 * 100 >= 1.2 and lv > pv2):
+            ftd_today = True
+
     return {
         "ticker": ticker,
         "close": c,
@@ -1100,44 +1180,116 @@ def _fetch_one_index(ticker: str) -> Optional[dict]:
         "range_low": rng_lo,
         "close_below_range": close_below_range,
         "range_pos": range_pos,
+        "vol_vs_prev": vol_vs_prev,
+        "vol_vs_avg50": vol_vs_avg50,
+        "dist_days_ibd": dist_days_ibd,
+        "rally_day": rally_day,
+        "ftd_today": ftd_today,
     }
 
 
-def fetch_sp_breadth(diag: Optional[Diagnostics] = None) -> dict:
+def _bc_num(v):
+    """Parse a Barchart numeric that may be 'unch' (its literal for a ZERO
+    day-over-day change), 'N/A', '', '+1.60', '-0.60', etc. 'unch' -> 0.0;
+    anything non-numeric -> None. This is the fix for the 2026-07 outage where
+    'unch' on ONE symbol's priceChange threw and killed the whole breadth block."""
+    if v is None:
+        return None
+    s = str(v).strip().replace("+", "").replace(",", "")
+    if s.lower() in ("unch", "unchanged"):
+        return 0.0
+    if s.lower() in ("", "n/a", "na", "null", "-", "--"):
+        return None
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _breadth_from_history() -> Optional[dict]:
+    """Last persisted breadth (breadth_history.json) as a STALE fallback — far
+    better than 'Unavailable'. Change columns are unknown for a carried reading."""
+    try:
+        hist = json.load(open(BREADTH_HISTORY_PATH))
+        if not hist:
+            return None
+        k = max(hist)
+        e = hist[k]
+        b50 = float(e.get("br50", 50.0))
+        return {"ok": True, "stale": True, "asof": k,
+                "above20": float(e.get("br20", b50)),
+                "above50": b50, "above200": float(e.get("br200", 50.0)),
+                "chg20": None, "chg50": None, "chg200": None}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def fetch_sp_breadth(diag: Optional[Diagnostics] = None, attempts: int = 4) -> dict:
     """S&P 500 breadth straight from Barchart (TradingView's EOD source for these
     indices): % of members above the 20/50/200-day MA = $S5TW / $S5FI / $S5TH,
-    with the day-over-day percentage-point change. Returns {'ok': False} on failure."""
+    with the day-over-day percentage-point change.
+
+    Retries the full cookie+XSRF+API handshake up to `attempts` times with linear
+    backoff (transient 401s / cold-cache misses are common), parses 'unch' safely,
+    and on total failure carries the last stored reading (stale) rather than
+    showing 'Unavailable'. Only returns {'ok': False} if history is empty too."""
     import http.cookiejar
+    import time as _time
     import urllib.parse as _up
-    try:
-        cj = http.cookiejar.CookieJar()
-        op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-        op.addheaders = [("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"),
-                         ("Accept", "text/html")]
-        op.open("https://www.barchart.com/stocks/quotes/$S5FI/overview", timeout=15).read()
-        xsrf = next((_up.unquote(c.value) for c in cj if c.name == "XSRF-TOKEN"), "")
-        url = ("https://www.barchart.com/proxies/core-api/v1/quotes/get?"
-               "symbols=$S5TW,$S5FI,$S5TH&fields=symbol,lastPrice,priceChange,tradeTime")
-        req = urllib.request.Request(url, headers={
-            "x-xsrf-token": xsrf, "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0", "Referer": "https://www.barchart.com/"})
-        data = json.loads(op.open(req, timeout=15).read())
-        m = {r["symbol"]: r for r in data.get("data", [])}
+    need = ("$S5TW", "$S5FI", "$S5TH")
+    last_exc = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            cj = http.cookiejar.CookieJar()
+            op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+            op.addheaders = [("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"),
+                             ("Accept", "text/html")]
+            op.open("https://www.barchart.com/stocks/quotes/$S5FI/overview", timeout=15).read()
+            xsrf = next((_up.unquote(c.value) for c in cj if c.name == "XSRF-TOKEN"), "")
+            if not xsrf:
+                raise RuntimeError("no XSRF token (cold cache)")
+            url = ("https://www.barchart.com/proxies/core-api/v1/quotes/get?"
+                   "symbols=$S5TW,$S5FI,$S5TH&fields=symbol,lastPrice,priceChange,tradeTime")
+            req = urllib.request.Request(url, headers={
+                "x-xsrf-token": xsrf, "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0", "Referer": "https://www.barchart.com/"})
+            data = json.loads(op.open(req, timeout=15).read())
+            m = {r["symbol"]: r for r in data.get("data", [])}
+            missing = [s for s in need if s not in m]
+            if missing:
+                raise RuntimeError(f"missing symbols {missing}")
 
-        def vc(sym):
-            r = m[sym]
-            return float(r["lastPrice"]), float(str(r["priceChange"]).replace("+", ""))
+            def lvl(sym):
+                v = _bc_num(m[sym].get("lastPrice"))
+                if v is None:
+                    raise RuntimeError(f"bad lastPrice for {sym}: {m[sym].get('lastPrice')!r}")
+                return v
 
-        a20, c20 = vc("$S5TW")
-        a50, c50 = vc("$S5FI")
-        a200, c200 = vc("$S5TH")
-        return {"ok": True, "above20": a20, "above50": a50, "above200": a200,
-                "chg20": c20, "chg50": c50, "chg200": c200,
-                "asof": m.get("$S5FI", {}).get("tradeTime", "")}
-    except Exception as exc:  # noqa: BLE001
+            a20, a50, a200 = lvl("$S5TW"), lvl("$S5FI"), lvl("$S5TH")
+            # priceChange 'unch' -> 0.0; genuinely absent -> None (chip just hides)
+            c20 = _bc_num(m["$S5TW"].get("priceChange"))
+            c50 = _bc_num(m["$S5FI"].get("priceChange"))
+            c200 = _bc_num(m["$S5TH"].get("priceChange"))
+            if diag and attempt > 1:
+                diag.warn(f"S&P breadth: recovered on attempt {attempt}")
+            return {"ok": True, "above20": a20, "above50": a50, "above200": a200,
+                    "chg20": c20, "chg50": c50, "chg200": c200,
+                    "asof": m.get("$S5FI", {}).get("tradeTime", "")}
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < max(1, attempts):
+                _time.sleep(1.5 * attempt)   # linear backoff: 1.5s, 3s, 4.5s
+    # every attempt failed -> carry the last stored reading (stale) if we have one
+    stale = _breadth_from_history()
+    if stale is not None:
         if diag:
-            diag.warn(f"S&P breadth (Barchart) fetch failed: {exc}")
-        return {"ok": False, "above50": 50.0, "above200": 50.0}
+            diag.warn(f"S&P breadth (Barchart) failed after {attempts} attempts "
+                      f"({last_exc}); showing stale reading from {stale['asof']}")
+        return stale
+    if diag:
+        diag.warn(f"S&P breadth (Barchart) fetch failed after {attempts} attempts "
+                  f"and no history: {last_exc}")
+    return {"ok": False, "above50": 50.0, "above200": 50.0}
 
 
 def fetch_market_health(diag: Optional[Diagnostics] = None) -> Tuple[List[dict], dict]:
@@ -2569,6 +2721,24 @@ def _lesson_confluence(m: dict) -> List[str]:
     return out
 
 
+def _lessons_on_frame(hist_df, entry, include_pb: bool = True):
+    """Lesson-confluence tokens on an ARBITRARY bar frame (weekly / 1h).
+    SHADOW ONLY: never gates tiers, never touches entry/stop/IBKR plan.
+    None when the frame is unusable (caller omits the timeframe chip)."""
+    if hist_df is None or len(hist_df) < 60 or entry is None:
+        return None
+    try:
+        feats: dict = {}
+        feats.update(_sr_quality(hist_df, entry, "long"))
+        if include_pb:
+            feats.update(_pb2_quality(hist_df))
+        feats.update(_tl_quality(hist_df, entry, "long"))
+        feats.update(_ch_quality(hist_df, entry, "long"))
+        return _lesson_confluence(feats)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _lessons_line(m: dict) -> str:
     """Gold 🎓 badge when >=3 of the four lessons agree on the entry - the
     instructor's multiple-edge trading area, surfaced per the user's
@@ -2593,6 +2763,169 @@ def _lessons_line(m: dict) -> str:
                 f"<span style='color:#d3a04d;'>{label}</span></div>")
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _line_break_watch(hist_df, close):
+    """USER-TAUGHT resistance-line rule (2026-07-08, backtested same day):
+    line across two swing highs (strict max of +-3 bars, confirmed 3 later),
+    span 40-240 td, slope <= +0.15%/day of P1, no intermediate high above
+    line*1.01; BREAK = first close > line*1.005 (high > line*1.06 first
+    invalidates). Returns additive display keys: lbw_state 'break' (closed
+    above within the last 3 bars) or 'watch' (ceiling within 10% overhead),
+    lbw_line_at, lbw_span. SHADOW/display-only. Never raises."""
+    try:
+        if hist_df is None or len(hist_df) < 60 or not close:
+            return {}
+        H = hist_df["High"].values.astype(float)
+        C = hist_df["Close"].values.astype(float)
+        n = len(H)
+        piv = [i for i in range(3, n - 3)
+               if H[i] == H[i - 3:i + 4].max() and H[i - 3:i + 4].argmax() == 3]
+        best_watch, best_break = None, None
+        for a in range(len(piv)):
+            i1 = piv[a]
+            for b2 in range(a + 1, len(piv)):
+                i2 = piv[b2]
+                span = i2 - i1
+                if span < 40:
+                    continue
+                if span > 240:
+                    break
+                slope = (H[i2] - H[i1]) / span
+                if slope > 0.0015 * H[i1]:
+                    continue
+                mid = H[i1 + 1:i2]
+                line_mid = H[i1] + slope * np.arange(1, span)
+                if np.any(mid > line_mid * 1.01):
+                    continue
+                state, brk_bar = "active", None
+                for bb in range(i2 + 3, n):
+                    lv = H[i1] + slope * (bb - i1)
+                    if lv <= 0:
+                        state = "dead"
+                        break
+                    if C[bb] > lv * 1.005:
+                        state, brk_bar = "broken", bb
+                        break
+                    if H[bb] > lv * 1.06:
+                        state = "dead"
+                        break
+                lv_now = H[i1] + slope * (n - 1 - i1)
+                if state == "broken" and brk_bar >= n - 3:
+                    if best_break is None or span > best_break[1]:
+                        best_break = (lv_now, span)
+                elif state == "active" and lv_now > 0 and \
+                        (lv_now * 0.90) <= close <= (lv_now * 1.005):
+                    if best_watch is None or span > best_watch[1]:
+                        best_watch = (lv_now, span)
+        if best_break:
+            return {"lbw_state": "break", "lbw_line_at": round(float(best_break[0]), 2),
+                    "lbw_span": int(best_break[1])}
+        if best_watch:
+            return {"lbw_state": "watch", "lbw_line_at": round(float(best_watch[0]), 2),
+                    "lbw_span": int(best_watch[1])}
+        return {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _lbw_line(m: dict) -> str:
+    """Display row for the line-break watch. '' when no line is relevant."""
+    try:
+        st = m.get("lbw_state")
+        if st not in ("break", "watch"):
+            return ""
+        lv, span = m.get("lbw_line_at"), m.get("lbw_span")
+        tip = ("Resistance line across two swing highs (span %s td, flat-to-gently-rising, "
+               "no pierce in between). Backtest 2026-07-08 (53,788 episodes): adding the "
+               "line-break as a re-entry trigger cut missed +50%% runs from 6.5%% to 2.9%% "
+               "of episodes. Informational only - no tier, plan or draft impact." % span)
+        if st == "break":
+            body = ("<span style='color:#d3a04d;font-weight:600;'>BREAK</span> · "
+                    "closed above the $%s ceiling (span %sd)" % (lv, span))
+        else:
+            body = ("<span style='color:var(--text-2);'>watch · ceiling $%s overhead "
+                    "(span %sd)</span>" % (lv, span))
+        return ("<div class='edge-line' title='" + esc(tip) + "'>"
+                "<span class='lbl'>LINE</span> " + body + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _mtf_line(m: dict) -> str:
+    """Compact multi-timeframe lesson row: 'TF D 4/4 · W 2/4 · H 3/4'. The
+    denominator is ALWAYS 4 (PB auto-fails on weekly: needs >=120 weekly
+    bars, more than the 2y fetch holds). Shadow read — filters nothing,
+    drafts nothing. '' when no higher-timeframe read exists."""
+    try:
+        if m.get("mtf_w") is None and m.get("mtf_h") is None:
+            return ""
+        d = m.get("lesson_confluence") or []
+        bits = ["<span style='color:var(--text-2);'>D %d/4</span>" % len(d)]
+        tips = ["D: " + (" + ".join(str(x) for x in d) if d else "-")]
+        for key, tag in (("mtf_w", "W"), ("mtf_h", "H")):
+            v = m.get(key)
+            if v is None:
+                continue
+            # weekly >=3/4 promoted to a gold chip: the 2026-07-07 board backtest's
+            # pre-registered SURFACE rule passed era-consistently (daily-miss/weekly-hit
+            # cohort beat the daily>=3 baseline both eras; W 4/4 strongest bucket).
+            # Display-only — still filters nothing, drafts nothing.
+            if key == "mtf_w" and len(v) >= 3:
+                bits.append("<span class='lbl lbl-hot'>W %d/4</span>" % len(v))
+            else:
+                bits.append("<span style='color:var(--text-2);'>%s %d/4</span>" % (tag, len(v)))
+            tips.append(tag + ": " + (" + ".join(str(x) for x in v) if v else "-")
+                        + (" (PB n/a on weekly)" if key == "mtf_w" else ""))
+        tip = ("Lesson read per timeframe: Daily / Weekly (2y resample) / 1-Hour (60d). "
+               "Weekly >=3/4 highlighted per the 2026-07-07 backtest (era-consistent). "
+               "Informational only - no tier, plan or draft impact. " + " | ".join(tips))
+        return ("<div class='edge-line' title='" + esc(tip) + "'>"
+                "<span class='lbl'>TF</span> " + " · ".join(bits) + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _enrich_mtf_lessons(rows: List[dict], diag: "Diagnostics") -> None:
+    """SHADOW weekly + 1h lesson read for DISPLAYED names only (<=80 tickers:
+    A+ then A then Lesson Radar then A-). Two batch downloads; adds ONLY
+    additive keys mtf_w / mtf_h (lists of str, json-safe). Never raises."""
+    try:
+        seen, subset = set(), []
+        for m in rows:
+            tk = m.get("ticker")
+            if tk and tk not in seen:
+                seen.add(tk)
+                subset.append(m)
+            if len(subset) >= 80:
+                break
+        if not subset:
+            return
+        tks = [m["ticker"] for m in subset]
+        d2 = fetch_histories_batch(tks, period="2y", min_rows=400)   # weekly needs >=60 wk bars
+        h1 = fetch_histories_batch_intraday(tks, period="60d", interval="1h", min_rows=80)
+        for m in subset:
+            tk, entry = m["ticker"], m.get("entry")
+            df2 = d2.get(tk)
+            if df2 is not None:
+                try:
+                    wk = pd.DataFrame({
+                        "Open": df2["Open"].resample("W-FRI").first(),
+                        "High": df2["High"].resample("W-FRI").max(),
+                        "Low": df2["Low"].resample("W-FRI").min(),
+                        "Close": df2["Close"].resample("W-FRI").last(),
+                        "Volume": df2["Volume"].resample("W-FRI").sum(),
+                    }).dropna(subset=["Open", "High", "Low", "Close"])
+                    toks = _lessons_on_frame(wk, entry, include_pb=False)  # PB MIN_BARS=120 wk > 2y
+                    if toks is not None:
+                        m["mtf_w"] = toks
+                except Exception:  # noqa: BLE001
+                    pass
+            toks_h = _lessons_on_frame(h1.get(tk), entry, include_pb=True)
+            if toks_h is not None:
+                m["mtf_h"] = toks_h
+    except Exception as exc:  # noqa: BLE001
+        diag.warn(f"MTF lesson enrichment skipped: {exc}")
 
 
 def _tl_quality(hist_df, entry, direction):
@@ -2715,8 +3048,121 @@ def _apply_stop_regime(picks, data_date):
 # ----------------------------------------------------------------------------
 # SCANNERS
 # ----------------------------------------------------------------------------
-def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
-    """Two-pass coil scan: cheap server filter, then batched yfinance enrichment."""
+# Stage-2 RS gate floor (USER 2026-07-15): a name qualifies only if the STOCK's
+# RS percentile is 80+ OR its 144-industry-group RS percentile is 80+. NOTE:
+# the 2026-06 backtest ruled stock-only RS80+ a NO-GO hard filter (~25% monster
+# loss) — the industry-group OR-branch is the user's explicit revision; watch
+# the tier hit-rate and monster-miss rate as live data accumulates.
+RS_GATE_MIN = 80
+# A carried-forward stock RS older than this many calendar days can't pass the
+# GATE (display keeps rendering it with its asof). Without a cap, a dead source
+# would keep gating the whole universe on arbitrarily old percentiles forever
+# (adversarial review 2026-07-15).
+RS_GATE_MAX_STALE_DAYS = 7
+
+
+def _rs_carry_fresh(asof: Optional[str]) -> bool:
+    """resolve_rs stamps carried-forward values with their asof date; fresh
+    (today's) values come back with asof=None. The gate accepts a carry only
+    within RS_GATE_MAX_STALE_DAYS; an unparseable stamp counts as stale."""
+    if not asof:
+        return True
+    try:
+        return (date.today() - date.fromisoformat(str(asof))).days <= RS_GATE_MAX_STALE_DAYS
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _date_indexed(s: pd.Series) -> pd.Series:
+    """Re-key a daily series on tz-naive normalized dates. yfinance's BATCH feed
+    returns tz-naive indexes while single-ticker history is tz-aware
+    (America/New_York) — reindexing one onto the other yields all-NaN, which
+    would make the RS-line gate silently stand down for every name (caught by
+    the 2026-07-15 probe: drop_rsline=0 across 421 candidates)."""
+    idx = s.index
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_localize(None)
+    out = pd.Series(s.to_numpy(), index=idx.normalize())
+    return out[~out.index.duplicated(keep="last")]
+
+
+def _zigzag_swing_highs(vals: np.ndarray, tol: float) -> Tuple[List[int], Optional[float]]:
+    """Swing highs via a zigzag filter: a high only counts once the series has
+    retraced >= `tol` (relative) below it. Micro-pivots inside a tight coil
+    never confirm — the naive N-bar local-max pivot whipsawed exactly there
+    (adversarial review 2026-07-15: ~85% false rejection of coiled leaders).
+    One pivot per leg, so exact-tie flat tops can't double-count either.
+    Returns (confirmed swing-high indices, current rising-leg max or None)."""
+    highs: List[int] = []
+    trend = 1                      # treat the window start as a rising leg
+    ext, ext_i = float(vals[0]), 0
+    for i in range(1, len(vals)):
+        v = float(vals[i])
+        if trend == 1:
+            if v > ext:
+                ext, ext_i = v, i
+            elif v <= ext * (1.0 - tol):
+                highs.append(ext_i)
+                trend, ext, ext_i = -1, v, i
+        else:
+            if v < ext:
+                ext, ext_i = v, i
+            elif v >= ext * (1.0 + tol):
+                trend, ext, ext_i = 1, v, i
+    return highs, (ext if trend == 1 else None)
+
+
+def _rs_line_swings_up(hist_df, bench_close, lookback: int = 126,
+                       tol: float = 0.03) -> Tuple[bool, bool]:
+    """Stage-2 RS-line slope gate (USER 2026-07-15): the RS line (close/^GSPC)
+    must be sloping UP swing-over-swing — each recent CONFIRMED swing high
+    (zigzag, >= `tol` retracement) above the previous one, judged on the last
+    (up to) 3 swings within `lookback` sessions. A current rising leg that has
+    already cleared the last confirmed swing counts as the newest swing.
+    Guards (adversarial review 2026-07-15):
+      · collapse guard — ascending old swings can't mask a fresh RS collapse:
+        the line must still hold within 15% of its latest swing high;
+      · <2 swings (no retracement = straight-line RS) passes if the line is
+        above its 21-day mean OR within 5% of its window high, so a leader in
+        a quiet coil is never coin-flipped out by day noise.
+    Returns (ok, evaluated) — evaluated=False means the gate STOOD DOWN
+    (missing/short/unalignable data) and ok is forced True, so a feed outage
+    can never empty the report; the caller counts stand-downs and warns loudly
+    if nothing was actually evaluated."""
+    if hist_df is None or bench_close is None or len(hist_df) < 40:
+        return True, False
+    try:
+        close = _date_indexed(hist_df["Close"].astype(float))
+        bench = _date_indexed(bench_close.astype(float)).replace(0, np.nan)
+        rs = (close / bench.reindex(close.index).ffill()).dropna()
+        if len(rs) < 40:
+            return True, False
+        vals = rs.iloc[-lookback:].to_numpy()
+        highs, cur_leg_hi = _zigzag_swing_highs(vals, tol)
+        hi_vals = [float(vals[i]) for i in highs]
+        if cur_leg_hi is not None and (not hi_vals or cur_leg_hi > hi_vals[-1]):
+            hi_vals.append(cur_leg_hi)
+        last = hi_vals[-3:]
+        if len(last) >= 2:
+            ascending = all(b > a for a, b in zip(last, last[1:]))
+            return bool(ascending and vals[-1] >= last[-1] * 0.85), True
+        # <2 confirmed swings: either a straight-line RS or a downtrend whose
+        # rallies never reach tol. Pass only when the line is pinned near its
+        # window high, or is above its 21-day mean AND net-up over the window
+        # (the bare 21d-mean test alone let a grinding downtrend sneak through
+        # on a terminal up-wiggle — caught by synthetic check #2).
+        return bool(vals[-1] >= 0.95 * vals.max()
+                    or (vals[-1] > vals[-21:].mean() and vals[-1] > vals[0])), True
+    except Exception:  # noqa: BLE001
+        return True, False
+
+
+def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
+              industry_by_ticker: Optional[Dict[str, dict]] = None):
+    """Two-pass coil scan: cheap server filter, then batched yfinance enrichment.
+    Stage-2 gates (2026-07-15): near the 52w high + stock/industry RS 80+ +
+    RS line rising swing-over-swing (the 9/21-EMA proximity UNIVERSE gate was
+    removed; the ≤1%/≤2% EMA-hug conditions remain inside the A+/A/A- tiers)."""
     payload_coil = {
         "filter": [
             {"left": "type", "operation": "in_range", "right": ["stock", "dr"]},
@@ -2755,13 +3201,35 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
     tier_a_minus: List[dict] = []
     tier_a_minus_full: List[dict] = []   # uncapped A- pool (for win-rate tracking)
     coil_candidates: List[dict] = []
+    lesson_radar: List[dict] = []   # >=3/4 lessons but NO tier — display-only radar
 
     # --- funnel instrumentation: exact survivor count after each filter stage ---
     n_universe = None          # TradingView totalCount matching the Stage-1 filter
     n_stage1 = 0               # rows actually fetched (range-capped at 5000)
     drop_missing = drop_proximity = drop_52w = drop_dead = 0
+    # drop_proximity stays declared (always 0 since the 2026-07-15 gate removal)
+    # so the funnel dict keeps its shape — additive-only rule.
+    drop_rs = 0                # failed the stock/industry RS 80+ gate
+    drop_rsline = 0            # RS line not rising swing-over-swing
     drop_unsupported = 0       # met a tier but no verified entry engine backs it
     n_aplus_raw = n_a_raw = n_aminus_raw = n_aminus_total = 0
+
+    industry_by_ticker = industry_by_ticker or {}
+    stock_rs_alive = bool(rs_map or _RS_HISTORY)
+    rs_gate_active = bool(stock_rs_alive or industry_by_ticker)
+    if not rs_gate_active:
+        diag.warn("Stage-2 RS 80+ gate STOOD DOWN — stock RS map, RS history "
+                  "and industry RS are ALL empty (source outage); universe not gated on RS")
+    elif not industry_by_ticker:
+        # Partial outages must be LOUD (adversarial review 2026-07-15): losing
+        # the industry branch silently reshapes the gate into stock-only RS80+,
+        # the exact configuration the 2026-06 backtest ruled NO-GO.
+        diag.warn("Stage-2 RS gate DEGRADED to stock-only RS80+ — industry RS "
+                  "map is empty (feed/parse failure); this is the "
+                  "backtest-rejected NO-GO shape, investigate the industry feed")
+    elif not stock_rs_alive:
+        diag.warn("Stage-2 RS gate DEGRADED to industry-group-only — stock RS "
+                  "map AND history are empty (source outage)")
 
     try:
         time.sleep(2)
@@ -2800,6 +3268,26 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             if pct_below_high is None or not (0.0 <= pct_below_high <= 20.0):
                 drop_52w += 1
                 continue
+
+            # Stage-2 RS gate (USER 2026-07-15): only RS leaders qualify —
+            # stock RS percentile 80+ OR the name's industry-group RS 80+.
+            # resolve_rs carries forward the last known value for names that
+            # flicker out of the source (ADRs / spinoffs), so a one-day source
+            # gap doesn't drop a leader.
+            if rs_gate_active:
+                _rs_v, _rs_asof = resolve_rs(ticker, rs_map)
+                if not isinstance(_rs_v, int):
+                    # class shares: TradingView prints BRK.B, the RS sources
+                    # may key the dash form — try it before giving up
+                    _rs_v, _rs_asof = resolve_rs((ticker or "").replace(".", "-"), rs_map)
+                _ind_rec = industry_by_ticker.get((ticker or "").upper().replace(".", "-"))
+                _ind_pct = _ind_rec.get("pct") if _ind_rec else None
+                _stock_ok = (isinstance(_rs_v, int) and _rs_v >= RS_GATE_MIN
+                             and _rs_carry_fresh(_rs_asof))
+                _ind_ok = isinstance(_ind_pct, int) and _ind_pct >= RS_GATE_MIN
+                if not (_stock_ok or _ind_ok):
+                    drop_rs += 1
+                    continue
 
             ma_cluster_pct = abs(ema9 - ema21) / ema21 * 100
 
@@ -2854,13 +3342,11 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             # 70% of previous day" branch needs daily history, which the cheap
             # TradingView feed doesn't carry. So Gate 2 no longer pre-filters on
             # volume — that way a day-over-day dry-up is never dropped early.
-            # Universe gate = near a key MA (ADR floor and the 52w-high distance are
-            # handled above). Tightness (is_tight_1d / 3-day flag) is intentionally NOT
-            # here — it discriminates the A+/A/A- tiers below, rather than hiding names
-            # that had one wide session.
-            if not (min_dist <= 0.10):
-                drop_proximity += 1
-                continue
+            # (9/21-EMA proximity UNIVERSE gate (min_dist <= 0.10) REMOVED
+            # 2026-07-15 per USER: "remove stage 2 'close to the 9/21 EMA'" —
+            # near-highs + the RS gates now define Stage 2. min_dist still
+            # grades the A+/A/A- tiers below (user kept those conditions) and
+            # feeds display + entry-plan context.)
 
             status_labels = []
             if is_squat:
@@ -2892,12 +3378,34 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
 
     if coil_candidates:
         hist_map = fetch_histories_batch([c["ticker"] for c in coil_candidates], period="1y")
+        # Benchmark for the RS-line slope gate. Fetched SEPARATELY on purpose:
+        # the batch path TV-patches stale daily bars and TradingView's scan API
+        # has no caret indices, so ^GSPC must not go through it.
+        bench_close = None
+        try:
+            _bench_df = fetch_stock_history(ANTS_BENCHMARK, period="1y")
+            bench_close = _bench_df["Close"] if _bench_df is not None else None
+        except Exception:  # noqa: BLE001
+            bench_close = None
+        if bench_close is None:
+            diag.warn(f"Stage-2 RS-line swing gate STOOD DOWN — {ANTS_BENCHMARK} "
+                      "history unavailable; universe not gated on RS-line slope")
+        rsline_checked = 0     # names the RS-line gate actually EVALUATED
         for c in coil_candidates:
             hist_df = hist_map.get(c["ticker"])
             # Auto dead-stock screen: drop M&A-pinned / halted / pending-delist names
             # (recent daily range flat-lined). Catches deal pins the ADR floor can't.
             if is_dead_pinned(hist_df):
                 drop_dead += 1
+                continue
+            # Stage-2 RS-line slope gate (USER 2026-07-15): RS line must be
+            # making higher swing highs vs ^GSPC. Runs BEFORE the heavy
+            # enrichment so rejected names never pay for charts/engines.
+            _rsl_ok, _rsl_eval = _rs_line_swings_up(hist_df, bench_close)
+            if _rsl_eval:
+                rsline_checked += 1
+            if not _rsl_ok:
+                drop_rsline += 1
                 continue
             # ADR is already TradingView's native ADRP (real 20-day ADR%) from the scan row —
             # no history recompute needed. History below is for the sparkline, the 3-day tight
@@ -2967,6 +3475,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 **_pb2_quality(hist_df),
                 **_tl_quality(hist_df, c["entry"], "long"),
                 **_ch_quality(hist_df, c["entry"], "long"),
+                **_line_break_watch(hist_df, c["close"]),
             }
             # Lesson-refined plan BEFORE the chart, so entry/stop overlays, the
             # IBKR order plan and the trackers all carry the SAME refined plan.
@@ -3005,10 +3514,17 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
             vol_a      = _vol_window_dryup(hist_df, 2, 55.0)
             vol_aminus = _vol_window_dryup(hist_df, 1, 100.0)
 
+            # Tier gates (2026-07-15 USER, second ruling): the ≤1%/≤2%-from-EMA
+            # (min_dist) conditions STAY in the tiers — only the Stage-2
+            # universe proximity gate (min_dist ≤ 10%) was removed. Tiers =
+            # tightness duration + EMA hug + volume dry-up, on the RS-gated pool.
             is_a_plus = (is_tight_flag_3d and min_dist <= 0.01 and vol_aplus)
             is_a = (is_tight_2d and min_dist <= 0.01 and vol_a and not is_a_plus)
             is_a_minus = (is_tight_1d and min_dist <= 0.02 and vol_aminus
                           and not is_a_plus and not is_a)
+            # tier met on structure alone, BEFORE the support gate zeroes the
+            # flags — recorded so the Lesson Radar can say what was missed
+            _pre_gate_tier = "A+" if is_a_plus else ("A" if is_a else ("A-" if is_a_minus else None))
 
             # Stage-3 support gate (USER-RATIFIED 2026-07-04): structural tier
             # criteria alone no longer suffice — the pick must ALSO be backed by
@@ -3027,6 +3543,21 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
                 tier_a.append(stock_data)
             elif is_a_minus:
                 tier_a_minus.append(stock_data)
+            elif len(stock_data["lesson_confluence"]) >= 3:
+                # Lesson Radar: full lesson stacking but no tier — display-only
+                stock_data["radar_missed_tier"] = _pre_gate_tier or "none"
+                stock_data["radar_reason"] = ("support gate"
+                                              if (_pre_gate_tier and not stock_data["edge_support"])
+                                              else "tightness / vol dry-up")
+                lesson_radar.append(stock_data)
+
+        # Silent-stand-down detector: the benchmark was fetched but the gate
+        # never actually evaluated anyone → alignment/data failure (this is how
+        # the 2026-07-15 tz-index bug was caught). Warn loudly; never drop.
+        if bench_close is not None and rsline_checked == 0:
+            diag.warn(f"Stage-2 RS-line swing gate evaluated 0 of "
+                      f"{len(coil_candidates)} candidates — alignment/data "
+                      "failure; gate effectively stood down")
 
         # Raw qualifying counts BEFORE any cap (for the diag panel / sizing).
         n_aplus_raw, n_a_raw, n_aminus_raw = len(tier_a_plus), len(tier_a), len(tier_a_minus)
@@ -3053,6 +3584,9 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         tier_a_minus = tier_a_minus_full          # uncapped — show all A-
         log.info("Coil qualifying (pre-cap): A+=%d A=%d A-=%d (+%d demoted from A = %d into A-, A- UNCAPPED)",
                  n_aplus_raw, n_a_raw, n_aminus_raw, len(tier_a_overflow), n_aminus_total)
+        lesson_radar.sort(key=lambda x: (-len(x.get("lesson_confluence") or []),
+                                         -(x.get("meta_score") or 0.0)))
+        lesson_radar = lesson_radar[:30]
 
     funnel = {
         "universe_total": n_universe,        # TradingView count matching the Stage-1 filter
@@ -3060,14 +3594,21 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics):
         "drop_missing": drop_missing,
         "drop_52w": drop_52w,
         "drop_dead": drop_dead,
-        "drop_proximity": drop_proximity,
+        "drop_proximity": drop_proximity,    # always 0 since 2026-07-15 (gate removed; key kept additive-only)
+        "drop_rs": drop_rs,                  # failed stock/industry RS 80+ (2026-07-15)
+        "drop_rsline": drop_rsline,          # RS line not rising swing-over-swing (2026-07-15)
         "stage2_candidates": len(coil_candidates),
+        # Stage-2 survivors AFTER the enrichment-side drops (dead pins + RS-line
+        # gate) — what the funnel card displays. stage2_candidates keeps its old
+        # meaning (parse-loop survivors) for downstream compatibility.
+        "stage2_final": max(0, len(coil_candidates) - drop_dead - drop_rsline),
         "drop_unsupported": drop_unsupported,
+        "lesson_radar": len(lesson_radar),
         "stage3_aplus": n_aplus_raw,
         "stage3_a": n_a_raw,
         "stage3_aminus": n_aminus_total,
     }
-    return tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full, funnel
+    return tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full, lesson_radar, funnel
 
 
 def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
@@ -4257,7 +4798,7 @@ PAGE_CSS = """
     .spark { margin-top:4px; }
     /* candlestick chart cell: JSON payload rendered lazily by CANDLE_JS */
     .cchart { margin-top:4px; width:100%; max-width:340px; }
-    .cchart:empty { aspect-ratio:340/210; background:var(--raised); border-radius:var(--r-card); opacity:.45; }
+    .cchart:empty { aspect-ratio:340/220; background:var(--raised); border-radius:var(--r-card); opacity:.45; }
     .cchart svg { display:block; width:100%; height:auto; }
     .cc-tip { position:fixed; z-index:99; pointer-events:none; display:none; white-space:nowrap;
               background:var(--raised); border:1px solid var(--line-2); border-radius:var(--r-card);
@@ -4373,6 +4914,34 @@ PAGE_CSS = """
                border-radius:var(--r-card); padding:9px 10px; font-size:15px; }
     .sortdir { background:var(--raised); color:var(--text-2); border:1px solid var(--line);
                border-radius:var(--r-card); padding:9px 13px; font-size:15px; cursor:pointer; }
+    /* ---- IBD-style page-1 sections (2026-07-08) ---- */
+    .bigpic-wrap { display:grid; grid-template-columns:1.6fr 1fr; gap:15px; }
+    .bigpic-text { font-size:var(--fs-body); color:var(--text-2); line-height:1.65; }
+    .bigpic-text p { margin:0 0 10px; }
+    .bigpic-text b { color:var(--text); }
+    .pulse-box h3 { margin:0 0 8px; }
+    .pulse-state { display:inline-block; font-weight:700; font-size:var(--fs-body); letter-spacing:.04em;
+                   border:1px solid; border-radius:6px; padding:3px 10px; margin-bottom:8px; }
+    .pulse-line { font-size:var(--fs-table); color:var(--text-2); margin:7px 0; line-height:1.9; }
+    .pulse-chip { display:inline-block; background:var(--raised); border:1px solid var(--line);
+                  border-radius:5px; padding:1px 7px; margin:2px 3px 2px 0; white-space:nowrap; }
+    .pulse-chip a { color:var(--accent); text-decoration:none; font-weight:600; }
+    .t10-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:12px;
+                background:var(--surface); border:1px solid var(--line); border-top:none;
+                border-radius:0 0 8px 8px; padding:14px; margin-bottom:24px; }
+    .t10-card { background:var(--raised); border:1px solid var(--line); border-radius:8px; padding:11px 13px; }
+    .t10-head { display:flex; gap:9px; align-items:baseline; }
+    .t10-num { flex:0 0 auto; font-weight:700; color:var(--accent); font-size:var(--fs-title); }
+    .t10-title { font-size:var(--fs-body); font-weight:600; line-height:1.35; }
+    .t10-title a { color:var(--text); text-decoration:none; }
+    .t10-title a:hover { color:var(--accent); }
+    .t10-orig { font-size:var(--fs-caption); color:var(--text-3); margin-top:3px; line-height:1.3; }
+    .t10-meta { font-size:var(--fs-caption); color:var(--text-3); margin:4px 0 6px; }
+    .t10-brief { font-size:var(--fs-table); color:var(--text-2); line-height:1.55; }
+    @media (max-width:768px) {
+      .bigpic-wrap { grid-template-columns:1fr; }
+      .t10-grid { grid-template-columns:1fr; }
+    }
 """
 
 PAGE_JS = """
@@ -4455,6 +5024,13 @@ async function refreshPrices(btn) {
   var activeTheme = null;
   function applyFilters() {
     var q = box ? box.value.trim().toUpperCase() : '';
+    // a searched ticker may live only inside a collapsed <details> table
+    // (e.g. the 3/4 Lesson Radar) — open those so hits are visible
+    if (q) {
+      document.querySelectorAll('details.funnel').forEach(function (d) {
+        if (d.querySelector('table.rowcards')) d.open = true;
+      });
+    }
     document.querySelectorAll('table tr').forEach(function (tr) {
       if (tr.querySelector('th')) return;
       if (tr.closest('.fund-tbl')) return;   // never hide nested fundamentals mini-table rows
@@ -4880,7 +5456,7 @@ CANDLE_JS = """
       VMA = tok('--vol-ma', '#9aa4ae'), ACC = tok('--accent', '#8cb4d6'),
       WRN = tok('--warn', '#d3a04d'),
       MASPEC = [[10, tok('--ma-fast', '#8cb4d6')], [20, tok('--ma-mid', '#d3a04d')], [50, tok('--ma-slow', '#6b6b74')]];
-  var W = 340, H = 210, PT = 4, PB = 158, VT = 166, VB = 206, PL = 4, PR = 304;
+  var W = 340, H = 220, PT = 14, PB = 168, VT = 176, VB = 216, PL = 4, PR = 304;
   var uid = 0, tip = null;
 
   function sma(vals, p) {
@@ -4920,7 +5496,7 @@ CANDLE_JS = """
     function X(i2) { return PL + (i2 + 0.5) * step; }
     function Y(v) { return PT + (1 - (v - lo) / (hi - lo)) * (PB - PT); }
     function inP(y) { return y >= PT && y <= PB; }
-    var id = 'cc' + (++uid), s = [], labels = [];
+    var id = 'cc' + (++uid), s = [];
     s.push('<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">');
     s.push('<defs><clipPath id="' + id + '"><rect x="' + PL + '" y="' + PT + '" width="' + (PR - PL) + '" height="' + (PB - PT) + '"/></clipPath></defs>');
 
@@ -4949,15 +5525,14 @@ CANDLE_JS = """
     }
     dline(ov.tsn, ov.tsd, ACC, '');
     dline(ov.trn, ov.trd, WRN, '');
-    // ---- moving averages (the ONLY labelled lines: 10 / 20 / 50) ----
+    // ---- moving averages: 10 / 20 / 50 — named by the fixed top legend ----
     mas.forEach(function (m) {
-      var seg = [], lastY = null;
+      var seg = [];
       for (i = 0; i < n; i++) {
         if (m.v[i] == null) { if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.6"/>'); seg = []; continue; }
-        var yy = Y(m.v[i]); seg.push(X(i).toFixed(1) + ',' + yy.toFixed(1)); lastY = yy;
+        seg.push(X(i).toFixed(1) + ',' + Y(m.v[i]).toFixed(1));
       }
       if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.6"/>');
-      if (lastY != null && inP(lastY)) labels.push({ y: lastY, t: String(m.p), c: m.col });
     });
     // ---- candles: HOLLOW — light grey = up (close >= open), light red = down.
     // Wicks are drawn ONLY outside the body (a single high→low line would show
@@ -5026,16 +5601,13 @@ CANDLE_JS = """
       .forEach(function (g) {
         s.push('<text x="' + (PR + 3) + '" y="' + (g.ry + 2.5).toFixed(1) + '" font-size="8" font-weight="' + g.w + '" font-family="ui-monospace,monospace" fill="' + g.c + '">' + g.t + '</text>');
       });
-    // ---- MA period labels at the line's end, INSIDE the plot, de-collided ----
-    labels.sort(function (a, b) { return a.y - b.y; });
-    for (k = 1; k < labels.length; k++) if (labels[k].y - labels[k - 1].y < 9) labels[k].y = labels[k - 1].y + 9;
-    var ovf = labels.length ? labels[labels.length - 1].y - PB : 0;
-    if (ovf > 0) for (k = 0; k < labels.length; k++) labels[k].y -= ovf;
-    labels.forEach(function (L) {
-      // paint-order halo: a chart-bg outline under the glyphs so the MA period
-      // stays readable when the last candles run underneath it (USER 2026-07-06:
-      // "make sure I can read it")
-      s.push('<text x="' + (PR - 3) + '" y="' + (Math.max(L.y, PT + 5) - 3).toFixed(1) + '" font-size="8" font-weight="700" font-family="ui-monospace,monospace" fill="' + L.c + '" text-anchor="end" paint-order="stroke" stroke="#141416" stroke-width="2.6" stroke-linejoin="round">' + L.t + '</text>');
+    // ---- MA legend: reserved top band y in [0, PT) — cannot overlap candles
+    // by construction (USER 2026-07-07: end-of-line labels sat on the bars) ----
+    var lx = PL + 2;
+    MASPEC.forEach(function (sp) {
+      var lt = 'MA' + sp[0];
+      s.push('<text x="' + lx + '" y="10.5" font-size="8" font-weight="700" font-family="ui-monospace,monospace" fill="' + sp[1] + '">' + lt + '</text>');
+      lx += lt.length * 4.9 + 9;
     });
     s.push('</svg>');
     el.innerHTML = s.join('');
@@ -5386,19 +5958,21 @@ def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
     cap_note = ""
     if isinstance(s1_total, int) and isinstance(s1_fetched, int) and s1_total > s1_fetched:
         cap_note = f" <span class='fn-sub'>(top {s1_fetched:,} by ADR fetched)</span>"
-    s2 = _n(fn.get("stage2_candidates"))
+    s2 = _n(fn.get("stage2_final") if fn.get("stage2_final") is not None
+            else fn.get("stage2_candidates"))
     # 2026-07-06 USER: "too complicated, just simple present, and make it
     # collapsed" — one collapsed <details>, four one-line steps, counts only.
     dropped = _n(fn.get("drop_unsupported")) if fn.get("drop_unsupported") is not None else "–"
     return (
         "<details class='funnel'><summary class='fn-cap'>📋 How this list was built "
-        f"<span class='fn-sub'>10,000+ stocks → {s1} liquid leaders → {s2} near highs → "
+        f"<span class='fn-sub'>10,000+ stocks → {s1} liquid leaders → {s2} RS leaders near highs → "
         f"A+ {n_aplus} · A {n_a} · A− {n_aminus}</span></summary>"
         "<div class='fn-stage'><div class='fn-body'><div class='fn-title'>1 · Liquid leaders</div>"
         "<div class='fn-crit'>$10+ · ADR ≥ 1.5% · 500k+ volume · above 200MA · $2B+ cap</div>"
         f"</div><div class='fn-count'>{s1}{cap_note}</div></div>"
-        "<div class='fn-stage'><div class='fn-body'><div class='fn-title'>2 · Near highs</div>"
-        "<div class='fn-crit'>within 20% of the 52-week high · close to the 9/21 EMA</div>"
+        "<div class='fn-stage'><div class='fn-body'><div class='fn-title'>2 · RS leaders near highs</div>"
+        "<div class='fn-crit'>within 20% of the 52-week high · stock or industry-group RS 80+ · "
+        "RS line rising swing-over-swing</div>"
         f"</div><div class='fn-count'>{s2}</div></div>"
         "<div class='fn-stage'><div class='fn-body'><div class='fn-title'>3 · Coil tiers</div>"
         "<div class='fn-crit'>tight flag + volume dry-up, graded A+ / A / A−</div>"
@@ -5410,6 +5984,34 @@ def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
         f"</div><div class='fn-count'>{dropped}<span class='fn-sub'> dropped</span></div></div>"
         "</details>"
     )
+
+
+def build_lesson_radar(radar: List[dict]) -> str:
+    """Stage-2 survivors with >=3/4 lesson confluence that made NO coil tier —
+    what the tightness/vol filters reject despite textbook lesson stacking.
+    DISPLAY-ONLY: never tiered, never tracked, never drafted (IBKR plan and
+    latest_setups untouched). 4/4 renders open, 3/4 collapsed."""
+    if not radar:
+        return ""
+    for m in radar:
+        missed = m.get("radar_missed_tier", "none")
+        why = str(m.get("radar_reason", "")) or "tightness / vol dry-up"
+        tag = ("🛰 Radar: no tier (" + why + ")" if missed in (None, "none")
+               else "🛰 Radar: no tier (missed " + str(missed) + " — " + why + ")")
+        if tag not in m.get("status_labels", []):
+            m.setdefault("status_labels", []).append(tag)
+    four = [m for m in radar if len(m.get("lesson_confluence") or []) >= 4]
+    three = [m for m in radar if len(m.get("lesson_confluence") or []) == 3]
+    out = generate_coil_table(four, "Lesson Radar — 4/4 lessons, no tier", "bg-a",
+                              subtitle="all four tutorial lessons agree, but the Stage-3 "
+                                       "tightness/vol dry-up filters rejected it · informational only")
+    if three:
+        out += ("<details class='funnel'><summary class='fn-cap'>🎓 Lesson Radar — 3/4 lessons, no tier "
+                + f"<span class='fn-sub'>{len(three)} names</span></summary>"
+                + generate_coil_table(three, "3/4 lessons — filtered", "bg-aminus",
+                                      subtitle="one lesson short of full confluence · informational only")
+                + "</details>")
+    return out
 
 
 def generate_coil_table(matches: List[dict], title: str, bg_class: str,
@@ -5488,8 +6090,8 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
                     {_plan_jump(m['ticker'])}
                 </div>
                 {pb_html}
-                {_edge_details(m, [_lessons_line(m), _support_line(m), _sr_line(m),
-                                   _pb2_line(m), _tl_line(m), _ch_line(m)])}
+                {_edge_details(m, [_lessons_line(m), _mtf_line(m), _lbw_line(m), _support_line(m),
+                                   _sr_line(m), _pb2_line(m), _tl_line(m), _ch_line(m)])}
             </td>
             {_narr_cell(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}
             <td class="num c-stat" data-label="ADR" data-sort="{m['adr']}">{m['adr']}%</td>
@@ -5516,7 +6118,43 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
 # unreadable source becomes a friendly inline note, never a scan failure.
 # ---------------------------------------------------------------------------
 MINERVINI_DIR = os.path.expanduser("~/minervini_engine/buy_lists")
-TRILOGY_RTB = os.path.expanduser("~/Downloads/Chart learning project claude/webapp/ready_to_buy.json")
+# Trilogy feed: the Downloads original is TCC-protected (launchd runs get
+# PermissionError(1) — the documented com.madrry.scanner failure signature), so the
+# Trilogy nightly (08:10, runs WITH Downloads access) mirrors the final file to
+# feeds/ (step 7d, feed_exports in its pipeline_config). Prefer whichever readable
+# copy is FRESHER; the Downloads path still works for manual Terminal runs.
+TRILOGY_RTB_PATHS = [
+    os.path.expanduser("~/.openclaw/workspace/feeds/trilogy_ready_to_buy.json"),
+    os.path.expanduser("~/Downloads/Chart learning project claude/webapp/ready_to_buy.json"),
+]
+TRILOGY_RTB = TRILOGY_RTB_PATHS[0]  # kept for log messages / back-compat
+
+
+def _read_trilogy_rtb():
+    """Read the freshest readable Trilogy ready_to_buy copy; raise if none is."""
+    best, best_mtime, last_exc = None, -1.0, None
+    for _p in TRILOGY_RTB_PATHS:
+        try:
+            _m = os.path.getmtime(_p)
+        except OSError as exc:
+            last_exc = exc
+            continue
+        if _m > best_mtime:
+            best, best_mtime = _p, _m
+    if best is None:
+        raise last_exc if last_exc is not None else FileNotFoundError(TRILOGY_RTB_PATHS[0])
+    try:
+        return _read_json_retry(best), best
+    except (OSError, ValueError) as exc:
+        # freshest copy unreadable (e.g. Downloads under launchd/TCC) -> try the other(s)
+        for _p in TRILOGY_RTB_PATHS:
+            if _p == best:
+                continue
+            try:
+                return _read_json_retry(_p), _p
+            except (OSError, ValueError) as exc2:
+                exc = exc2
+        raise exc
 
 
 def _ext_empty(msg: str) -> str:
@@ -5820,13 +6458,16 @@ def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float =
     """Trilogy nightly O'Neil reference-class buy-stop list -> MADRRY-style table.
     limit=None shows ALL candidates (default); pass an int to cap the display."""
     try:
-        data = _read_json_retry(TRILOGY_RTB)
+        data, _rtb_src = _read_trilogy_rtb()
+        log.info("Trilogy feed source: %s", _rtb_src)
     except (OSError, ValueError) as exc:
         # Surface the real errno — a background launchd run failing here on a file that
-        # a manual run reads fine is the TCC/Full-Disk-Access signature (PermissionError),
-        # NOT the write-race the retry guards. Logging it makes the cause visible.
-        log.error("Trilogy feed unreadable (%s): %r", TRILOGY_RTB, exc)
-        return _ext_empty("Trilogy: ready_to_buy.json not found / unreadable."), 0
+        # a manual run reads fine is the TCC/Full-Disk-Access signature (PermissionError).
+        # With the feeds/ mirror in place this should only fire if the Trilogy nightly
+        # itself never ran (no mirror) AND Downloads is TCC-blocked.
+        log.error("Trilogy feed unreadable (tried %s): %r", TRILOGY_RTB_PATHS, exc)
+        return _ext_empty("Trilogy: ready_to_buy.json not found / unreadable "
+                          "(no readable copy among mirrors)."), 0
     cands = data.get("candidates", []) or []
     asof = data.get("asof", "")
     total = len(cands)
@@ -6345,6 +6986,8 @@ def _persist_breadth_history(breadth: dict, data_date: Optional[str]) -> None:
     cap. Same-day re-runs overwrite (final run of a data date wins)."""
     if not breadth or not breadth.get("ok") or not data_date:
         return
+    if breadth.get("stale"):
+        return   # never re-persist a carried reading as today's fresh data
     try:
         hist = {}
         if os.path.exists(BREADTH_HISTORY_PATH):
@@ -6429,6 +7072,9 @@ def build_market_section(market_data: List[dict], breadth: dict,
             col = "val-green" if val > 50 else "val-red"
             return f"&gt; {label}: <span class='{col}'>{val:.1f}%</span>{_bd_chip(chg)}"
         asof = breadth.get("asof", "")
+        foot = (f"% of S&amp;P 500 members · carried from {esc(asof)} (live feed unavailable)"
+                if breadth.get("stale")
+                else f"% of S&amp;P 500 members · vs prev day · Barchart {esc(asof)}")
         breadth_html = (
             f"""<div class="market-card">
                 <h3>S&amp;P 500 Breadth</h3>
@@ -6436,7 +7082,7 @@ def build_market_section(market_data: List[dict], breadth: dict,
                     {brow("20MA (S5TW)", breadth['above20'], breadth.get('chg20'))}<br>
                     {brow("50MA (S5FI)", breadth['above50'], breadth.get('chg50'))}<br>
                     {brow("200MA (S5TH)", breadth['above200'], breadth.get('chg200'))}<br>
-                    <span style="font-size:var(--fs-caption);">% of S&amp;P 500 members · vs prev day · Barchart {esc(asof)}</span>
+                    <span style="font-size:var(--fs-caption);">{foot}</span>
                 </div>
             </div>""")
     else:
@@ -6450,26 +7096,732 @@ def build_market_section(market_data: List[dict], breadth: dict,
     return "".join(out), overall_trend
 
 
+# ----------------------------------------------------------------------------
+# IBD-STYLE PAGE-1 SECTIONS (2026-07-08): MADRRY TOP 10 news briefs, THE BIG
+# PICTURE + Market Pulse, YOUR WEEKLY REVIEW. All fetchers follow the house
+# fail-safe pattern: catch -> diag.warn -> sentinel; builders are pure
+# formatters that render "" / an Unavailable note on empty input, so a feed
+# outage can never take the report down.
+# ----------------------------------------------------------------------------
+
+def _fetch_url_bytes(url: str, timeout: int = 15, wall_s: float = 20.0,
+                     max_bytes: int = 4_000_000) -> bytes:
+    """GET raw bytes with a browser UA (some feeds 403 the default urllib UA).
+    urlopen(timeout=) is a PER-SOCKET-OP deadline: a CDN that drips >=1 byte
+    every <timeout seconds keeps resp.read() alive forever. Read in chunks so a
+    total wall-clock cap (and a size cap) can actually fire — this is the
+    difference between a bounded fetch and a silent overnight hang (audit
+    2026-07-08)."""
+    req = urllib.request.Request(url, headers={"User-Agent": HEADERS.get("User-Agent", "Mozilla/5.0")})
+    t0 = time.time()
+    chunks: List[bytes] = []
+    total = 0
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        while True:
+            if time.time() - t0 > wall_s:
+                raise TimeoutError(f"read exceeded {wall_s:.0f}s wall budget")
+            # read1(), NOT read(n): read(n) blocks INSIDE the call until it has n
+            # bytes, so a drip feed never returns control to the wall check above.
+            # read1() returns after one socket read (bounded by `timeout`), so a
+            # slow-drip CDN actually trips the wall budget (audit 2026-07-08).
+            chunk = resp.read1(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError(f"feed exceeded {max_bytes} bytes")
+    return b"".join(chunks)
+
+
+_NEWS_TAG_RE = re.compile(r"<[^>]+>")
+_NEWS_WS_RE = re.compile(r"\s+")
+
+
+def _news_clean(text: str) -> str:
+    """Strip tags/entities/whitespace from feed text."""
+    t = html_lib.unescape(_NEWS_TAG_RE.sub(" ", text or ""))
+    return _NEWS_WS_RE.sub(" ", t).strip()
+
+
+def _rss_items(url: str, feed: str, weight: float, max_age_h: float = 26.0) -> List[dict]:
+    """Parse one RSS feed with stdlib ElementTree (feedparser is not installed
+    on this Mac — probed 2026-07-08). Freshness is asserted per item: several
+    big-name feeds (WSJ dj.com) return HTTP 200 with months-old content."""
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    root = ET.fromstring(_fetch_url_bytes(url))
+    now = datetime.now(timezone.utc)
+    out: List[dict] = []
+    for it in root.findall(".//item"):
+        try:
+            pub = parsedate_to_datetime(it.findtext("pubDate") or "")
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
+            age_h = (now - pub).total_seconds() / 3600
+        except Exception:  # noqa: BLE001 - unparseable date -> not trustworthy
+            continue
+        if age_h > max_age_h or age_h < -1:
+            continue
+        title = _news_clean(it.findtext("title") or "")
+        if not title:
+            continue
+        summary = _news_clean(it.findtext("description") or "")
+        # Google News quirks: titles end " - Source"; descriptions are a list of
+        # related-coverage links (an importance tell, not a summary).
+        n_related = 0
+        if feed == "gnews":
+            n_related = (it.findtext("description") or "").count("<a ")
+            src = it.findtext("source")
+            if src and title.endswith(" - " + src.strip()):
+                title = title[: -(len(src.strip()) + 3)].rstrip()
+            summary = ""
+        if summary == title:
+            summary = ""
+        out.append({
+            "title": title, "summary": summary, "source": feed,
+            "provider": (it.findtext("source") or "").strip() if feed == "gnews" else feed,
+            "url": (it.findtext("link") or "").strip(),
+            "age_h": age_h, "weight": weight + min(n_related, 5) * 0.25,
+        })
+    return out
+
+
+_NEWS_STOPWORDS = frozenset(
+    "a an and are as at be but by for from has have in into is it its of on or "
+    "that the their this to was were will with after amid over more than says "
+    "say said new report reports today just how what why who when your you"
+    .split())
+
+# Macro/market-wide words that mark a story as broadly important (vs one-stock
+# color). Counted over the representative title, capped, in the cluster score.
+_NEWS_MACRO_WORDS = frozenset(
+    "fed fomc powell rates rate inflation cpi ppi tariff tariffs treasury yield "
+    "yields jobs payrolls unemployment gdp recession opec oil crude stimulus "
+    "congress senate house shutdown china trade deal earnings nasdaq dow "
+    "stocks stock market markets selloff sell-off rally record futures economy "
+    "dollar bitcoin bonds".split())
+
+# Providers inside the yfinance pool: curated outlets score up, listicle mills
+# score down (they dominate item counts but are never the day's top stories).
+_NEWS_GOOD_PROVIDERS = ("reuters", "bloomberg", "barron", "investor's business daily",
+                        "cnbc", "yahoo finance", "associated press", "ap finance",
+                        "wall street journal", "marketwatch", "financial times", "fortune")
+_NEWS_JUNK_PROVIDERS = ("motley fool", "24/7 wall st", "zacks", "simply wall st",
+                        "insider monkey", "gurufocus", "benzinga")
+
+
+def _news_tokens(title: str) -> frozenset:
+    toks = re.findall(r"[a-z0-9&$%.']+", (title or "").lower())
+    return frozenset(t.strip(".'") for t in toks
+                     if len(t) >= 3 and t not in _NEWS_STOPWORDS)
+
+
+def fetch_top10_news(diag: Optional[Diagnostics] = None, deadline_s: float = 50.0) -> List[dict]:
+    """The day's ten most important market/business stories, ranked WITHOUT an
+    LLM: substantive summaries come from the yfinance index/ETF news pool (the
+    only free source with multi-sentence text — probed 2026-07-08); importance
+    comes from cross-outlet corroboration (CNBC Top / MarketWatch Top / Google
+    News Business clusters / NYT Business) + macro-keyword and freshness boosts.
+    Returns [] on any failure — never raises."""
+    t_start = time.time()
+    left = lambda: deadline_s - (time.time() - t_start)  # noqa: E731
+    pool: List[dict] = []
+    try:
+        # -- content pool: yfinance news on the majors (parallel, budgeted) --
+        def _yf_news(sym):
+            items = []
+            for x in (yf.Ticker(sym).news or []):
+                c = x.get("content") or {}
+                title = _news_clean(c.get("title") or "")
+                pub = c.get("pubDate") or ""
+                if not title or not pub:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+                    age_h = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+                except Exception:  # noqa: BLE001
+                    continue
+                if age_h > 26:
+                    continue
+                prov = ((c.get("provider") or {}).get("displayName") or "").strip()
+                pl = prov.lower()
+                w = 1.2
+                if any(g in pl for g in _NEWS_GOOD_PROVIDERS):
+                    w += 0.8
+                if any(j in pl for j in _NEWS_JUNK_PROVIDERS):
+                    w -= 1.2
+                items.append({
+                    "id": x.get("id"), "title": title,
+                    "summary": _news_clean(c.get("summary") or ""),
+                    "source": "yf", "provider": prov,
+                    "url": ((c.get("canonicalUrl") or {}).get("url")
+                            or (c.get("clickThroughUrl") or {}).get("url") or ""),
+                    "age_h": age_h, "weight": w,
+                })
+            return items
+
+        seen_ids = set()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+            futs = [ex.submit(_yf_news, s) for s in ("^GSPC", "^DJI", "^IXIC", "SPY", "QQQ")]
+            for f in futs:
+                try:
+                    for it in f.result(timeout=max(5.0, left())):
+                        if it["id"] and it["id"] in seen_ids:
+                            continue
+                        seen_ids.add(it["id"])
+                        pool.append(it)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("top10 yf pool: %s", exc)
+
+        # -- importance pool: curated RSS (each guarded; freshness asserted) --
+        feeds = [
+            ("https://www.cnbc.com/id/100003114/device/rss/rss.html", "cnbc", 3.0),
+            ("https://feeds.content.dowjones.io/public/rss/mw_topstories", "marketwatch", 2.5),
+            ("https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=en-US&gl=US&ceid=US:en", "gnews", 2.0),
+            ("https://rss.nytimes.com/services/xml/rss/nyt/Business.xml", "nyt", 2.5),
+        ]
+        for url, feed, w in feeds:
+            if left() < 8:
+                log.warning("top10: deadline reached, skipping remaining feeds")
+                break
+            try:
+                pool.extend(_rss_items(url, feed, w))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("top10 feed %s: %s", feed, exc)
+
+        if not pool:
+            if diag:
+                diag.warn("Top 10 news: every source came back empty")
+            return []
+
+        # -- cluster near-duplicate stories across outlets by title tokens.
+        # Match against the SEED item's fixed token set (never a growing union):
+        # a union that accretes tokens as items join lets story A→B→C chain
+        # through a shared bridge word even when A and C are unrelated (audit
+        # 2026-07-08). Anchoring to the seed keeps every member close to it. --
+        clusters: List[dict] = []
+        for it in pool:
+            toks = _news_tokens(it["title"])
+            if len(toks) < 2:
+                continue
+            best = None
+            for cl in clusters:
+                shared = len(toks & cl["tokens"])
+                ratio = shared / max(1, min(len(toks), len(cl["tokens"])))
+                if shared >= 4 or (shared >= 3 and ratio >= 0.5):
+                    best = cl
+                    break
+            if best is None:
+                clusters.append({"tokens": frozenset(toks), "items": [it]})
+            else:
+                best["items"].append(it)      # tokens stay pinned to the seed
+
+        # -- score: corroboration + source weight + macro words + freshness --
+        scored = []
+        for cl in clusters:
+            items = cl["items"]
+            rep = max(items, key=lambda x: x["weight"])
+            body_item = max(items, key=lambda x: len(x.get("summary") or ""))
+            body = body_item.get("summary") or ""
+            n_feeds = len({x["source"] for x in items})
+            fresh = min(x["age_h"] for x in items)
+            score = sum(x["weight"] for x in items)
+            score += (n_feeds - 1) * 0.8
+            score += min(sum(1 for t in _news_tokens(rep["title"]) if t in _NEWS_MACRO_WORDS), 3) * 0.6
+            score += 1.0 if fresh <= 6 else (0.5 if fresh <= 14 else 0.0)
+            score += 0.5 if len(body) >= 150 else 0.0
+            if len(body) > 420:                    # sentence-boundary truncate
+                cut = body[:420]
+                dot = cut.rfind(". ")
+                body = (cut[:dot + 1] if dot > 150 else cut.rstrip() + "…")
+            url = rep.get("url") or body_item.get("url") or ""
+            if rep["source"] == "gnews" and body_item.get("url"):
+                url = body_item["url"]             # prefer a direct link over the redirect
+            scored.append({
+                "title": rep["title"], "brief": body,
+                "provider": rep.get("provider") or rep["source"],
+                "url": url, "age_h": fresh, "n_src": n_feeds,
+                "score": score,
+            })
+        scored.sort(key=lambda s: s["score"], reverse=True)
+        top = scored[:10]
+        for i, s in enumerate(top, 1):
+            s["rank"] = i
+        _attach_zh_translations(top, diag)   # additive title_zh/brief_zh; fail-safe
+        log.info("top10 news: %d pool items -> %d clusters -> %d briefs in %.1fs",
+                 len(pool), len(clusters), len(top), time.time() - t_start)
+        return top
+    except Exception as exc:  # noqa: BLE001
+        if diag:
+            diag.warn(f"Top 10 news failed: {exc}")
+        return []
+
+
+_NEWS_FEED_DISPLAY = {"cnbc": "CNBC", "marketwatch": "MarketWatch", "nyt": "NY Times",
+                      "gnews": "Google News", "yf": "Yahoo Finance"}
+
+NEWS_ZH_CACHE_PATH = os.path.join(WORKSPACE, "news_zh_cache.json")
+
+
+def _translate_zh_tw(text: str, timeout: float = 6.0) -> Optional[str]:
+    """One short EN -> zh-TW translation via the keyless Google endpoint.
+    Returns None on ANY failure — callers keep the English original."""
+    try:
+        if not text or not text.strip():
+            return None
+        import urllib.parse as _up
+        url = ("https://translate.googleapis.com/translate_a/single"
+               "?client=gtx&sl=en&tl=zh-TW&dt=t&q=" + _up.quote(text[:900]))
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        data = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+        out = "".join(seg[0] for seg in (data[0] or []) if seg and seg[0])
+        return out.strip() or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _attach_zh_translations(stories: List[dict], diag: Optional[Diagnostics] = None,
+                            budget_s: float = 25.0) -> None:
+    """Traditional-Chinese titles/briefs for the Top-10 briefs (2026-07-10 USER).
+    ADDITIVE keys title_zh / brief_zh; disk-cached by English text so re-runs and
+    unchanged stories cost nothing; time-boxed; NEVER raises — any miss simply
+    renders in English."""
+    try:
+        cache = {}
+        if os.path.exists(NEWS_ZH_CACHE_PATH):
+            try:
+                cache = json.load(open(NEWS_ZH_CACHE_PATH))
+            except Exception:  # noqa: BLE001
+                cache = {}
+        t0 = time.time()
+        dirty = False
+        misses = 0
+        for s in stories:
+            for key_en, key_zh in (("title", "title_zh"), ("brief", "brief_zh")):
+                en = (s.get(key_en) or "").strip()
+                if not en:
+                    continue
+                if en in cache:
+                    s[key_zh] = cache[en]
+                    continue
+                if time.time() - t0 > budget_s:
+                    misses += 1
+                    continue
+                zh = _translate_zh_tw(en)
+                if zh:
+                    s[key_zh] = zh
+                    cache[en] = zh
+                    dirty = True
+                else:
+                    misses += 1
+        if dirty:
+            try:
+                # keep the cache bounded (~400 newest entries)
+                if len(cache) > 400:
+                    cache = dict(list(cache.items())[-400:])
+                _atomic_write(NEWS_ZH_CACHE_PATH, json.dumps(cache, ensure_ascii=False))
+            except Exception:  # noqa: BLE001
+                pass
+        if misses and diag:
+            diag.warn(f"Top 10 news: {misses} translation(s) missed — shown in English")
+    except Exception as exc:  # noqa: BLE001
+        if diag:
+            diag.warn(f"Top 10 news translation skipped: {exc}")
+
+
+def build_top10_news(stories: List[dict]) -> str:
+    """Numbered IBD-style briefs. Collapsible, open by default; absent when the
+    fetch produced nothing (the diag panel carries the warning)."""
+    if not stories:
+        return ""
+    cards = []
+    for s in stories:
+        n = s.get("rank", 0)
+        title_en = esc(s.get("title", ""))
+        title_zh = esc(s.get("title_zh") or "")
+        title = title_zh or title_en          # 2026-07-10 USER: 繁體中文 headline
+        url = s.get("url") or ""
+        head = (f"<a href='{esc(url)}' target='_blank' rel='noopener'>{title}</a>"
+                if url.startswith("http") else title)
+        # keep the English original visible (links go to English articles)
+        orig = (f"<div class='t10-orig'>{title_en}</div>" if title_zh else "")
+        prov = s.get("provider") or ""
+        meta_bits = [esc(_NEWS_FEED_DISPLAY.get(prov, prov))]
+        age = s.get("age_h")
+        if age is not None:
+            meta_bits.append(f"{age:.0f}h ago" if age >= 1 else "just in")
+        if (s.get("n_src") or 1) > 1:
+            meta_bits.append(f"{s['n_src']} outlets")
+        brief = esc(s.get("brief_zh") or s.get("brief") or "")
+        cards.append(
+            f"<div class='t10-card'><div class='t10-head'><span class='t10-num'>{n}</span>"
+            f"<span class='t10-title'>{head}</span></div>"
+            + orig
+            + f"<div class='t10-meta'>{' · '.join(b for b in meta_bits if b)}</div>"
+            + (f"<div class='t10-brief'>{brief}</div>" if brief else "")
+            + "</div>")
+    return (
+        "<details class='collapsis' open><summary class='section-title' "
+        "style='background-color:var(--surface);color:var(--accent);border-bottom:3px solid var(--accent);'>"
+        "MADRRY TOP 10<span class='section-sub'>當日十大要聞（繁體中文）· ranked by "
+        "cross-outlet corroboration, no LLM</span></summary>"
+        f"<div class='t10-grid'>{''.join(cards)}</div></details>")
+
+
+def fetch_market_pulse_movers(rs_map: Dict[str, Any], diag: Optional[Diagnostics] = None) -> dict:
+    """IBD Market Pulse lists: leaders (RS>=87) up / down on >=1.3x 10-day
+    relative volume. Two cheap TradingView POSTs with the house liquidity
+    floors; RS is intersected client-side (it lives in the Fred6725 CSV, not in
+    TradingView). Sentinel {'ok': False} on any failure."""
+    def _one(direction: str) -> List[dict]:
+        op = "egreater" if direction == "up" else "eless"
+        payload = {
+            "filter": [
+                {"left": "type", "operation": "in_range", "right": ["stock", "dr"]},
+                {"left": "close", "operation": "egreater", "right": 10},
+                {"left": "average_volume_30d_calc", "operation": "egreater", "right": 500000},
+                {"left": "market_cap_basic", "operation": "egreater", "right": 2000000000},
+                {"left": "change", "operation": op, "right": 1.5 if direction == "up" else -1.5},
+                {"left": "relative_volume_10d_calc", "operation": "egreater", "right": 1.3},
+            ],
+            "columns": ["name", "close", "change", "relative_volume_10d_calc", "volume"],
+            "sort": {"sortBy": "relative_volume_10d_calc", "sortOrder": "desc"},
+            "range": [0, 300],
+        }
+        rows = []
+        # diag=None on purpose: tv_post -> _request_json records diag.error() on
+        # final failure, which would trip the morning script's errors=0 publish
+        # gate. This section is non-fatal — the except below diag.warns instead.
+        data = tv_post(payload, label=f"pulse_{direction}", diag=None)
+        for r in data.get("data", []):
+            d = r.get("d")
+            if not d or d[1] is None or d[2] is None:
+                continue
+            sym = str(d[0]).upper().replace(".", "-")
+            rs = rs_map.get(sym)
+            if not isinstance(rs, (int, float)) or rs < 87:
+                continue
+            if sym in EXCLUDED_TICKERS:
+                continue
+            rows.append({"ticker": sym, "close": float(d[1]), "change": float(d[2]),
+                         "relvol": float(d[3] or 0), "rs": int(rs)})
+        rows.sort(key=lambda x: x["relvol"], reverse=True)
+        return rows[:8]
+
+    try:
+        time.sleep(1)
+        up = _one("up")
+        down = _one("down")
+        return {"ok": True, "up": up, "down": down}
+    except Exception as exc:  # noqa: BLE001
+        if diag:
+            diag.warn(f"Market Pulse movers failed: {exc}")
+        return {"ok": False, "up": [], "down": []}
+
+
+_PULSE_STATE = {
+    "GREEN": ("CONFIRMED UPTREND", "var(--up)"),
+    "YELLOW": ("UPTREND UNDER PRESSURE", "var(--warn)"),
+    "RED": ("MARKET IN CORRECTION", "var(--down)"),
+}
+
+
+def _pulse_chip(m: dict, up: bool) -> str:
+    col = "val-green" if up else "val-red"
+    return (f"<span class='pulse-chip'><a href='https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}'"
+            f" target='_blank' rel='noopener'>{esc(m['ticker'])}</a> "
+            f"<span class='{col}'>{m['change']:+.1f}%</span>"
+            f" <span class='sub'>{m['relvol']:.1f}×</span></span>")
+
+
+def _vol_phrase(v: Optional[float]) -> str:
+    if v is None:
+        return ""
+    if v >= 8:
+        return f"volume up {v:.0f}%"
+    if v <= -8:
+        return f"volume down {abs(v):.0f}%"
+    return "volume about even"
+
+
+def build_big_picture(market_data: List[dict], breadth: dict, t2108: dict,
+                      regime: str, allow_breakouts: bool,
+                      leader_stats: dict, movers: dict) -> str:
+    """IBD 'The Big Picture' column: a short data-composed narrative of the
+    day's action + the Market Pulse box (outlook state, IBD dist-day counts,
+    leaders up/down in volume). Pure formatter — no network I/O."""
+    try:
+        by_tk = {m["ticker"]: m for m in market_data if m}
+        ixic, spx = by_tk.get("^IXIC"), by_tk.get("^GSPC")
+        iwm, ndx = by_tk.get("IWM"), by_tk.get("^NDX")
+        # Degrade gracefully: both cards come from the same Yahoo endpoint, so a
+        # single miss is rare — but if one fails, still render from the survivor
+        # rather than dropping the whole section (audit 2026-07-08).
+        if not ixic and not spx:
+            return ""
+        ref = spx or ixic          # reference index for cross-index comparisons
+
+        def _act(md):
+            chg = md.get("change_pct", 0.0)
+            if chg > 0.05:
+                return f"rose {abs(chg):.1f}%"
+            if chg < -0.05:
+                return f"fell {abs(chg):.1f}%"
+            return "closed about flat"
+
+        def _dd(md):
+            return str(md.get("dist_days_ibd", 0)) if md else "n/a"
+
+        # P1 — the tape: index moves with the volume comparison O'Neil reads.
+        if ixic and spx:
+            vol_bits = [p for p in (_vol_phrase(ixic.get("vol_vs_prev")),) if p]
+            p1 = (f"The Nasdaq Composite {_act(ixic)} and the S&amp;P 500 {_act(spx)}"
+                  + (f", with Nasdaq {vol_bits[0]} versus the prior session" if vol_bits else "") + ".")
+        else:
+            one = ixic or spx
+            name = "Nasdaq Composite" if ixic else "S&amp;P 500"
+            vb = _vol_phrase(one.get("vol_vs_prev"))
+            p1 = (f"The {name} {_act(one)}"
+                  + (f", with {vb} versus the prior session" if vb else "") + ".")
+        if iwm and abs(iwm.get("change_pct", 0) - ref.get("change_pct", 0)) >= 0.75:
+            lead = "outperformed" if iwm["change_pct"] > ref["change_pct"] else "lagged"
+            p1 += f" Small caps {lead}: the Russell 2000 ETF {_act(iwm)}."
+        elif ndx and abs(ndx.get("change_pct", 0) - ref.get("change_pct", 0)) >= 0.75:
+            lead = "led" if ndx["change_pct"] > ref["change_pct"] else "lagged"
+            p1 += f" Big-cap tech {lead}: the Nasdaq-100 {_act(ndx)}."
+
+        # P2 — character: distribution, breadth, leaders. "IBD-style" not "IBD
+        # count": we count close-down >=0.2% on higher volume over 25 sessions
+        # with a close-based 5% expiry, but have no intraday data for stalling
+        # days, so the number runs a touch lighter than IBD's published one.
+        p2 = (f"Distribution days (25 sessions, IBD-style; excl. stalling days): "
+              f"Nasdaq {_dd(ixic)}, S&amp;P 500 {_dd(spx)}.")
+        if breadth.get("ok"):
+            p2 += (f" {breadth['above50']:.0f}% of S&amp;P 500 members hold their 50-day line"
+                   f" ({breadth['above200']:.0f}% the 200-day).")
+        if leader_stats.get("n"):
+            p2 += (f" Among the {leader_stats['n']} scanned leaders, "
+                   f"{leader_stats['below50']:.0f}% sit below their own 50-day.")
+        if t2108 and t2108.get("ok") and t2108.get("t2108") is not None:
+            p2 += f" T2108 stands at {t2108['t2108']:.0f}%."
+
+        # P3 — the verdict, in regime terms the rest of the report already uses.
+        state, scol = _PULSE_STATE.get(regime, _PULSE_STATE["YELLOW"])
+        bo = "breakout buys are ON" if allow_breakouts else "breakout buys are OFF"
+        p3 = (f"The 10-tell regime verdict is <b style='color:{scol};'>{regime}</b> — "
+              f"in IBD terms, <b style='color:{scol};'>{state.title()}</b> — and {bo}.")
+        if regime == "RED":
+            # A rally count only means something off a FRESH low — past ~25
+            # sessions the 60-bar argmin is just an old uptrend low, and "day 60"
+            # would read as noise (caught in the standalone exercise 2026-07-08).
+            rd = max((ixic or {}).get("rally_day", 0), (spx or {}).get("rally_day", 0))
+            fresh = 0 < rd <= 25
+            ftd_ix, ftd_sp = (ixic or {}).get("ftd_today"), (spx or {}).get("ftd_today")
+            if fresh and (ftd_ix or ftd_sp):
+                which = "Nasdaq" if ftd_ix else "S&amp;P 500"
+                p3 += (f" <b>Today qualified as a possible follow-through day on the {which}</b>"
+                       " (day-4+ rally of 1.2%+ on rising volume) — watch for confirmation.")
+            elif fresh:
+                p3 += (f" Rally attempt: day {rd}. A follow-through day (a 1.2%+ gain on rising"
+                       " volume, day 4 or later) would signal a new uptrend attempt.")
+            else:
+                p3 += (" Watch for a fresh rally attempt — the first close above a new low"
+                       " starts the follow-through-day count.")
+
+        # Market Pulse box.
+        pulse_rows = [f"<div class='pulse-state' style='color:{scol};border-color:{scol};'>{state}</div>"]
+        pulse_rows.append(
+            f"<div class='pulse-line sub'>Dist days: IXIC {_dd(ixic)} · "
+            f"SPX {_dd(spx)} <span class='sub'>(25-session, close-based 5% expiry)</span></div>")
+        if movers.get("ok"):
+            up_h = "".join(_pulse_chip(m, True) for m in movers.get("up", [])) or "<span class='sub'>none today</span>"
+            dn_h = "".join(_pulse_chip(m, False) for m in movers.get("down", [])) or "<span class='sub'>none today</span>"
+            pulse_rows.append(f"<div class='pulse-line'><b>Leaders up in volume</b><br>{up_h}</div>")
+            pulse_rows.append(f"<div class='pulse-line'><b>Leaders down in volume</b><br>{dn_h}</div>")
+            pulse_rows.append("<div class='pulse-line sub'>leaders = RS≥87 · move ≥1.5% · ≥1.3× 10-day rel-vol</div>")
+        else:
+            pulse_rows.append("<div class='pulse-line sub'>Leaders up/down in volume unavailable (screener fetch failed).</div>")
+
+        # 2026-07-10 USER: too complicated -> collapsed by default with the ONLY
+        # must-see facts on the summary line (verdict · breakouts · dist days ·
+        # breadth); the narrative + Market Pulse open on demand.
+        summary_bits = [f"<b style='color:{scol};'>{regime}</b>",
+                        esc(state.title()),
+                        ("Breakouts ON" if allow_breakouts else "Breakouts OFF"),
+                        f"Dist days IXIC {_dd(ixic)} · SPX {_dd(spx)}"]
+        if breadth.get("ok"):
+            summary_bits.append(f"50MA breadth {breadth['above50']:.0f}%")
+        return (
+            "<details class='collapsis'><summary class='section-title' "
+            "style='background-color:var(--surface);color:var(--accent);border-bottom:3px solid var(--accent);'>"
+            "THE BIG PICTURE<span class='section-sub'>"
+            + " · ".join(summary_bits)
+            + " — tap for the story</span></summary>"
+            "<div class='market-panel bigpic'>"
+            "<div class='bigpic-wrap'>"
+            f"<div class='bigpic-text'><p>{p3}</p><p>{p1}</p><p>{p2}</p></div>"
+            f"<div class='market-card pulse-box'><h3>Market Pulse</h3>{''.join(pulse_rows)}</div>"
+            "</div></div></details>")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("build_big_picture failed: %s", exc)
+        return ""
+
+
+WEEKLY_REVIEW_N = 15
+
+
+def fetch_weekly_review(rs_map: Dict[str, Any], diag: Optional[Diagnostics] = None) -> List[dict]:
+    """YOUR WEEKLY REVIEW rows: quality leaders up >=5% over the trailing week
+    (TradingView Perf.W), RS>=80, above the 200-day, within 25% of the 52-week
+    high, house liquidity floors. One screener POST + one batched yfinance
+    download for the charts. Returns {'ok': bool, 'rows': [...]} — 'ok' is False
+    on a fetch failure or an empty RS map, so the renderer can tell a genuinely
+    quiet week from a data outage (never raises)."""
+    if not rs_map:                     # RS-gating an empty map guarantees 0 rows
+        if diag:
+            diag.warn("Weekly Review: RS map empty — section unavailable")
+        return {"ok": False, "rows": []}
+    try:
+        time.sleep(1)
+        payload = {
+            "filter": [
+                {"left": "type", "operation": "in_range", "right": ["stock", "dr"]},
+                {"left": "close", "operation": "egreater", "right": 10},
+                {"left": "average_volume_30d_calc", "operation": "egreater", "right": 500000},
+                {"left": "market_cap_basic", "operation": "egreater", "right": 2000000000},
+                {"left": "close", "operation": "egreater", "right": "SMA200"},
+                {"left": "Perf.W", "operation": "egreater", "right": 5},
+            ],
+            "columns": ["name", "close", "Perf.W", "Perf.1M", "price_52_week_high",
+                        "sector", "industry", "relative_volume_10d_calc", "change"],
+            "sort": {"sortBy": "Perf.W", "sortOrder": "desc"},
+            "range": [0, 400],
+        }
+        # diag=None: non-fatal section — keep tv_post's failure out of diag.errors
+        # (else the errors=0 publish gate trips). The except below diag.warns.
+        data = tv_post(payload, label="weekly_review", diag=None)
+        cands: List[dict] = []
+        for r in data.get("data", []):
+            d = r.get("d")
+            if not d or d[1] is None or d[2] is None:
+                continue
+            sym = str(d[0]).upper().replace(".", "-")
+            if sym in EXCLUDED_TICKERS:
+                continue
+            rs = rs_map.get(sym)
+            if not isinstance(rs, (int, float)) or rs < 80:
+                continue
+            hi52 = d[4]
+            off_high = ((hi52 - d[1]) / hi52 * 100) if hi52 else None
+            if off_high is None or off_high > 25:
+                continue
+            cands.append({
+                "ticker": sym, "close": float(d[1]), "perf_w": float(d[2]),
+                "perf_1m": float(d[3]) if d[3] is not None else None,
+                "off_high": off_high, "sector": d[5] or "", "industry": d[6] or "",
+                "relvol": float(d[7]) if d[7] is not None else None,
+                "rs": int(rs),
+            })
+            if len(cands) >= WEEKLY_REVIEW_N:
+                break
+        if not cands:
+            return {"ok": True, "rows": []}       # genuine quiet week
+        hmap = fetch_histories_batch([c["ticker"] for c in cands], period="1y", min_rows=60)
+        for c in cands:
+            hist = hmap.get(c["ticker"])
+            c["spark"] = make_candle_chart(hist, None, 60)
+            c["wk_vol_x"] = None
+            try:
+                if hist is not None and len(hist) >= 55:
+                    v = hist["Volume"].astype(float)
+                    # Drop zero-volume bars (a TV-patched EOD-lag bar carries vol=0,
+                    # see :1106) and compare per-day AVERAGES so a dropped bar can't
+                    # itself deflate the week side (audit 2026-07-08).
+                    recent = [x for x in v.iloc[-5:] if x > 0]
+                    basev = [x for x in v.iloc[-55:-5] if x > 0]
+                    if len(recent) >= 3 and len(basev) >= 20:
+                        c["wk_vol_x"] = (sum(recent) / len(recent)) / (sum(basev) / len(basev))
+            except Exception:  # noqa: BLE001
+                pass
+        return {"ok": True, "rows": cands}
+    except Exception as exc:  # noqa: BLE001
+        if diag:
+            diag.warn(f"Weekly Review fetch failed: {exc}")
+        return {"ok": False, "rows": []}
+
+
+def generate_weekly_review_table(data: dict) -> str:
+    """IBD 'Your Weekly Review' analog: the week's strongest quality leaders,
+    each with the house candlestick chart. Rolling 5-session window so the
+    daily report always carries it (Saturday's run covers the calendar week).
+    `data` is fetch_weekly_review's {'ok', 'rows'} sentinel."""
+    rows = (data or {}).get("rows", [])
+    ok = (data or {}).get("ok", True)
+    out = ["<div class='section-title' style='background-color:var(--surface);color:var(--accent);"
+           "border-bottom:3px solid var(--accent);'><span class='tdot' style='background:var(--accent);'></span>"
+           "YOUR WEEKLY REVIEW<span class='section-sub'>leaders up ≥5% this week · RS≥80 · above 200-day · "
+           "within 25% of 52-wk high</span></div>",
+           "<div class='table-container rowcards-container'><table class='rowcards'>",
+           "<thead><tr><th data-col='tk'>Ticker</th><th data-col='chart'>Chart</th>"
+           "<th data-col='wk' class='num'>Week %</th><th data-col='rs' class='num'>RS</th>"
+           "<th data-col='off' class='num'>Off High</th><th data-col='m1' class='num'>1M %</th>"
+           "<th data-col='note'>Note</th></tr></thead>"]
+    if not rows:
+        msg = ("No leader gained 5%+ this week — a quiet tape for the strongest names."
+               if ok else "Weekly Review unavailable — screener or RS data did not load this run.")
+        out.append(f"<tr><td colspan='7' style='color:#82827c;'>{msg}</td></tr>")
+    for m in rows:
+        wk = m.get("perf_w", 0.0)
+        note_bits = [f"Up {wk:+.1f}% for the week"]
+        if m.get("wk_vol_x"):
+            note_bits.append(f"on {m['wk_vol_x']:.1f}× average weekly volume")
+        note = " ".join(note_bits) + f"; {m.get('off_high', 0):.0f}% off the 52-week high."
+        sec = esc(m.get("sector", ""))
+        ind = esc(m.get("industry", ""))
+        m1 = m.get("perf_1m")
+        out.append(
+            f"<tr data-sector='{sec}'>"
+            + _tk_cell(m)
+            + _chart_cell(m.get("spark", ""), m.get("close", 0))
+            + f"<td class='c-stat num' data-label='Week %' data-sort='{wk:.2f}'><span class='val-green'>{wk:+.1f}%</span></td>"
+            + f"<td class='c-stat num' data-label='RS' data-sort='{m.get('rs', 0)}'>{m.get('rs', 0)}</td>"
+            + f"<td class='c-stat num' data-label='Off High' data-sort='{m.get('off_high', 0):.1f}'>{m.get('off_high', 0):.1f}%</td>"
+            + (f"<td class='c-stat num' data-label='1M %' data-sort='{m1:.1f}'>{m1:+.1f}%</td>" if m1 is not None
+               else "<td class='c-stat num' data-label='1M %' data-sort='0'>—</td>")
+            + _narr_cell(m.get("ticker", ""), f"<span class='theme-tag'>{sec}</span> <span class='sub'>{ind}</span><br>"
+                                              f"<span class='sub'>{esc(note)}</span>")
+            + "</tr>")
+    out.append("</table></div>")
+    return "".join(out)
+
+
 def build_runbar(counts: Dict[str, int], market_modifier: float, runtime: float,
                  regime: str, allow_breakouts: bool) -> str:
     cls = {"GREEN": "green", "YELLOW": "warn", "RED": "red"}.get(regime, "")
     # No emoji here: a red 🚫 inside a YELLOW chip reads as mixed signals.
     bo = ("<span style='color:var(--green);'>Breakouts ON</span>" if allow_breakouts
           else "<span style='color:var(--red);'>Breakouts OFF</span>")
+    # GLOBAL chips only (2026-07-10 USER: per-section counts were mixed into the
+    # global bar — tier counts now render inside their own tabs via build_tab_counts).
     return f"""
     <div class="runbar">
         <span class="chip {cls}"><b>{regime}</b> Regime · {bo}</span>
-        <span class="chip">A+ <b>{counts['a_plus']}</b></span>
-        <span class="chip">A <b>{counts['a']}</b></span>
-        <span class="chip">A- <b>{counts['a_minus']}</b></span>
-        <span class="chip">HVE <b>{counts['hve']}</b></span>
-        <span class="chip">U&amp;R <b>{counts['ur']}</b></span>
-        <span class="chip red">Short <b>{counts.get('short', 0)}</b></span>
         <span class="chip">Mkt Mod <b>{market_modifier}x</b></span>
         <span class="chip">Run <b>{runtime:.1f}s</b></span>
         <button class="chip livebtn" onclick="refreshPrices(this)">🔄 Refresh Prices</button>
         <span class="chip" id="liveStamp" style="color:#82827c;">prices frozen at scan — tap 🔄 for live</span>
     </div>"""
+
+
+def build_tab_counts(pairs: List[Tuple[str, int, str]]) -> str:
+    """Per-tab count pills (label, count, extra chip class). Lives at the TOP of
+    the tab whose sections it counts — A+/A/A− in the MADRRY tab, HVE/U&R in
+    Pivots, Short in Short (2026-07-10 USER placement fix)."""
+    chips = "".join(
+        f"<span class='chip {xcls}'>{esc(lab)} <b>{n}</b></span>"
+        for lab, n, xcls in pairs)
+    return f"<div class='runbar' style='justify-content:flex-start;margin:2px 0 14px;'>{chips}</div>"
 
 
 def build_diag_panel(diag: Diagnostics) -> str:
@@ -7535,6 +8887,12 @@ def run_scanners_and_generate_html() -> str:
     with timed(diag, "market_health"):
         market_data, breadth = fetch_market_health(diag)
 
+    # Top-10 news runs in its OWN executor (not the regime pool): its result()
+    # gets a hard timeout, and on timeout we shutdown(wait=False) so a straggler
+    # feed thread can never block the report — the shared pool's implicit
+    # shutdown(wait=True) would otherwise join it (audit 2026-07-08).
+    _news_ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    f_news = _news_ex.submit(fetch_top10_news, diag)
     with timed(diag, "regime_data"):
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as rpool:
             f_vix = rpool.submit(fetch_vix, diag)
@@ -7543,6 +8901,13 @@ def run_scanners_and_generate_html() -> str:
             vix = f_vix.result()
             t2108 = f_t2108.result()
             sector_rs = f_sect.result()
+    try:
+        top10_stories = f_news.result(timeout=120)
+        _news_ex.shutdown(wait=False)
+    except Exception as exc:  # noqa: BLE001 - incl. TimeoutError
+        diag.warn(f"Top 10 news timed out/failed: {exc}")
+        top10_stories = []
+        _news_ex.shutdown(wait=False)
 
     ixic_trend = next((m["trend"] for m in market_data if m["ticker"] == "^IXIC"), "GREEN")
     spx_trend = next((m["trend"] for m in market_data if m["ticker"] == "^GSPC"), "GREEN")
@@ -7594,13 +8959,14 @@ def run_scanners_and_generate_html() -> str:
     _persist_breadth_history(breadth, data_date)
 
     with timed(diag, "scan_coil"):
-        tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full, coil_funnel = scan_coil(rs_map, market_modifier, diag)
+        tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full, lesson_radar, coil_funnel = scan_coil(
+            rs_map, market_modifier, diag, industry_rs.get("by_ticker") or {})
         # Geometry ratification: switch coil A+/A/A- to the 1.5×ADR stop + 5-day validity for
         # sessions >= STOP_REGIME_SWITCH_SESSION. Runs BEFORE write_order_plan + HTML render so
         # the printed stop, IBKR sizing, and the ledger snapshot all follow. Date-gated: on a
         # pre-switch session (e.g. a holiday re-run of older data) it only stamps stop_version +
         # the stable stop_tight/stop_atr fields and changes nothing printed. Idempotent.
-        _apply_stop_regime(tier_a_plus + tier_a + tier_a_minus + tier_a_minus_full, data_date)
+        _apply_stop_regime(tier_a_plus + tier_a + tier_a_minus + tier_a_minus_full + lesson_radar, data_date)
     with timed(diag, "scan_htf"):
         htf_matches = scan_htf(rs_map, market_modifier, diag, data_date)
         # Merge HTF fires INTO Tier A+ (user's chosen placement). Dedup against
@@ -7610,6 +8976,9 @@ def run_scanners_and_generate_html() -> str:
         if new_htf:
             tier_a_plus = sorted(tier_a_plus + new_htf,
                                  key=lambda x: x["meta_score"], reverse=True)
+        # a name can be tierless in the coil scan yet enter A+ via HTF — never show twice
+        _apn = {s["ticker"] for s in tier_a_plus}
+        lesson_radar = [s for s in lesson_radar if s["ticker"] not in _apn]
     with timed(diag, "scan_hve"):
         ep_matches = scan_hve(hve_history, diag)
     with timed(diag, "scan_ur"):
@@ -7632,6 +9001,7 @@ def run_scanners_and_generate_html() -> str:
         tier_a = _drop(tier_a)
         tier_a_minus = _drop(tier_a_minus)
         tier_a_minus_full = _drop(tier_a_minus_full)
+        lesson_radar = _drop(lesson_radar)
         ep_matches = _drop(ep_matches)
         ur_matches = _drop(ur_matches)
         short_matches = _drop(short_matches)
@@ -7645,6 +9015,10 @@ def run_scanners_and_generate_html() -> str:
         if _before != _after:
             log.info("Excluded %d row(s) via excluded_tickers.txt (%s)",
                      _before - _after, ", ".join(sorted(EXCLUDED_TICKERS)))
+    # SHADOW weekly/1h lesson read on the displayed names (radar prioritized
+    # ahead of the deep A- pool so the 80-ticker cap favors it).
+    with timed(diag, "mtf_lessons"):
+        _enrich_mtf_lessons(tier_a_plus + tier_a + lesson_radar + tier_a_minus_full, diag)
     # 52wk-high daily monitor: record today's new highs, prune to the watch window,
     # then re-check every watched name for a low-volume pullback (awareness signal).
     with timed(diag, "nh52_monitor"):
@@ -7664,6 +9038,15 @@ def run_scanners_and_generate_html() -> str:
     # Industry-group RS (Fred6725 rs_industries) — display-only leadership tag.
     attach_industry_rs(tier_a_plus + tier_a + tier_a_minus_full
                        + nh_data.get("green", []) + ep_matches + ur_matches, industry_rs["by_ticker"])
+
+    # IBD-style extras: Weekly Review rows (own screener POST + chart batch) and
+    # the Market Pulse leader movers. Both fetchers are fail-safe (sentinel on
+    # error) — neither can block the report.
+    with timed(diag, "weekly_review"):
+        weekly_data = fetch_weekly_review(rs_map, diag)
+        weekly_rows = weekly_data.get("rows", [])
+    with timed(diag, "market_pulse"):
+        pulse_movers = fetch_market_pulse_movers(rs_map, diag)
 
     save_hve_history(hve_history)
 
@@ -7690,6 +9073,13 @@ def run_scanners_and_generate_html() -> str:
     regime_html, regime, allow_breakouts = build_regime(
         market_data, breadth, t2108, vix, sector_rs, leader_stats, winrate)
     market_html, overall_trend = build_market_section(market_data, breadth, regime, allow_breakouts)
+    # IBD-style page-1 sections: The Big Picture (narrative + Market Pulse) and
+    # the Top-10 briefs. Builders are pure formatters that return "" on empty /
+    # broken input, so they can never take the report down.
+    big_picture_html = build_big_picture(market_data, breadth, t2108, regime,
+                                         allow_breakouts, leader_stats, pulse_movers)
+    top10_html = build_top10_news(top10_stories)
+    weekly_review_html = generate_weekly_review_table(weekly_data)
     # Deterministic IBKR draft-order INTENT (top_picks_orders.json) FIRST, so the
     # dashboard cards can show which picks were actually drafted. No orders, no
     # account data — the staging step alone touches IBKR (drafts only).
@@ -7706,8 +9096,9 @@ def run_scanners_and_generate_html() -> str:
     # Batched + disk-cached + time-boxed; never fatal (Minervini/Trilogy warm their own).
     _prefetch_fundamentals(
         [s.get("ticker") for s in (tier_a_plus + tier_a + tier_a_minus_full
-                                   + ep_matches + ur_matches + short_matches)]
-        + [m.get("ticker") for m in nh_data.get("green", [])])
+                                   + lesson_radar + ep_matches + ur_matches + short_matches)]
+        + [m.get("ticker") for m in nh_data.get("green", [])]
+        + [m.get("ticker") for m in weekly_rows])   # Weekly Review narrative cells tap fundamentals too
     # Tier 3 — estimate-revision counts (per-ticker yfinance) for the TOP PICKS only.
     _prefetch_revisions([s.get("ticker") for _, s in
                          _rank_top_picks(tier_a_plus, tier_a, tier_a_minus_full)[:REVISIONS_TOP_N]])
@@ -7732,6 +9123,7 @@ def run_scanners_and_generate_html() -> str:
         f"<button class='tab-btn' data-tab='pivots'>Pivots &amp; U&amp;R<span class='tab-count'>{len(ep_matches) + len(ur_matches)}</span></button>"
         f"<button class='tab-btn' data-tab='short'>Short<span class='tab-count'>{len(short_matches)}</span></button>"
         f"<button class='tab-btn' data-tab='hi52'>52-Week High<span class='tab-count'>{nh_data.get('total', 0)}</span></button>"
+        f"<button class='tab-btn' data-tab='weekly'>Weekly Review<span class='tab-count'>{len(weekly_rows)}</span></button>"
         f"<button class='tab-btn' data-tab='tracking'>Tracking<span class='tab-count'>{tier_a_study_n}</span></button>"
         "</div>"
     )
@@ -7750,15 +9142,22 @@ def run_scanners_and_generate_html() -> str:
         # act on every tab, so they live outside the panels).
         market_html,
         regime_html,
+        # IBD-style page 1 (2026-07-08): The Big Picture narrative + Market Pulse
+        # right after the regime it interprets, then the Top-10 news briefs.
+        big_picture_html,
+        top10_html,
         hot_themes_html,
         hot_industries_html,
         "<input id='search' type='search' placeholder='🔎 Search the whole report — ticker (e.g. NVDA)…' autocomplete='off'>",
         # ---- engine tabs: switch between MADRRY watchlist, Minervini, Trilogy ----
         tabs_bar,
         "<div class='tab-panel active' id='tab-madrry'>",
+        build_tab_counts([("A+", counts["a_plus"], ""), ("A", counts["a"], ""),
+                          ("A−", counts["a_minus"], "")]),
         top_picks_html,
         tracking_html,
         build_filter_funnel(coil_funnel, len(tier_a_plus), len(tier_a), len(tier_a_minus_full)),
+        build_lesson_radar(lesson_radar),
         generate_coil_table(tier_a_plus, "Tier A+ — trigger ready", "bg-aplus",
                             subtitle="strict 3-day flag · ≤1% from EMA · 3-day vol ≤50% of prev-day or 50-day avg · incl. HTF"),
         generate_coil_table(tier_a, "Tier A — developing", "bg-a",
@@ -7770,11 +9169,14 @@ def run_scanners_and_generate_html() -> str:
         f"<div class='tab-panel' id='tab-trilogy'>{trilogy_html}</div>",
         # ---- Episodic Pivots (HVE) + Post-HVE U&R — own tab ----
         "<div class='tab-panel' id='tab-pivots'>",
+        build_tab_counts([("HVE", counts["hve"], ""), ("U&R", counts["ur"], "")]),
         generate_hve_table(ep_matches),
         generate_ur_table(ur_matches),
         "</div>",
         # ---- Parabolic Short — own tab ----
-        f"<div class='tab-panel' id='tab-short'>{generate_short_table(short_matches)}</div>",
+        f"<div class='tab-panel' id='tab-short'>"
+        f"{build_tab_counts([('Short', counts.get('short', 0), 'red')])}"
+        f"{generate_short_table(short_matches)}</div>",
         # ---- 52-Week High — New Highs + Pullback as two sub-tabs ----
         "<div class='tab-panel' id='tab-hi52'>",
         "<div class='subtabs' role='tablist'>",
@@ -7784,6 +9186,8 @@ def run_scanners_and_generate_html() -> str:
         f"<div class='subtab-panel active' id='subtab-nh'>{new_highs_html}</div>",
         f"<div class='subtab-panel' id='subtab-pull'>{nh52_monitor_html}</div>",
         "</div>",
+        # ---- Your Weekly Review (IBD-style weekly leaders) — own tab ----
+        f"<div class='tab-panel' id='tab-weekly'>{weekly_review_html}</div>",
         f"<div class='tab-panel' id='tab-tracking'>{tier_a_study_html}</div>",
         build_mindset_panel(),
         build_diag_panel(diag),
