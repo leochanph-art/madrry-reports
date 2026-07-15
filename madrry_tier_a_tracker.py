@@ -65,8 +65,28 @@ def parse_meta_details(details):
     return out
 
 
+ARCHIVE_DIR = os.path.join(WORKSPACE, "snapshots_archive")
+
+
+def snapshot_files():
+    """All dated snapshot files from the DURABLE archive + the live workspace, deduped by
+    data date (archive preferred — it is never pruned), sorted chronologically. Points the
+    study at the FULL signal history so cohorts no longer vanish when the scanner prunes
+    dated snapshots to the newest 14 (IMPROVEMENT_PLAN Phase 0/3 — grows the resolved
+    sample the auto-apply / refit gates wait on). Additive: same first-appearance dedup."""
+    import re
+    rx = re.compile(r"latest_setups_(\d{4}-\d{2}-\d{2})\.json$")
+    by_date = {}
+    for base in (ARCHIVE_DIR, WORKSPACE):          # archive first -> archive wins ties
+        for f in glob.glob(os.path.join(base, "latest_setups_*.json")):
+            m = rx.search(f)
+            if m:
+                by_date.setdefault(m.group(1), f)
+    return [by_date[d] for d in sorted(by_date)]
+
+
 def build_trackers():
-    files = sorted(glob.glob(os.path.join(WORKSPACE, "latest_setups_2026-*.json")))
+    files = snapshot_files()
     seen = {}
     for f in files:
         dt = os.path.basename(f).split("latest_setups_")[1].replace(".json", "")
@@ -107,6 +127,11 @@ def build_trackers():
                 "ants_3m_peak": r.get("ants_3m_peak"),
                 "ants_rs_rising": r.get("ants_rs_rising"),
                 "adr": r.get("adr"),
+                # Basis marker: records from ~2026-06-30 on store the canonical 20-day ADR%
+                # (TradingView ADRP / 100·(mean(H/L)−1)); a MISSING field = the older 1-day
+                # Volatility.D basis (~40% larger). Any ADR-conditioned study must segregate
+                # on this before comparing adr across the boundary.
+                "adr_basis": "adrp20",
                 "dist_52w": r.get("dist_52w"),
                 "at_high": bool(r.get("at_high")),
                 "nh_1m": r.get("nh_1m"),

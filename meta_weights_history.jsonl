@@ -1,1 +1,5 @@
 {"version": "2026-06-24", "generated": "2026-06-24", "n_resolved": 107, "denom": 153, "spread_v1": 59, "spread_v2": 63, "weights": {"Trend": 20, "Proximity": 15, "10MA Quality": 9, "Vol Contraction": 15, "Vol Expansion": 8, "Flag": 9, "Base Quality": 16, "RS": 22, "Volatility": 15, "Supply Shock": 15, "Risk": 9}}
+{"version": "reverted-to-default-2026-06-24", "event": "revert", "reason": "audit: in-sample fit + broken gate", "denom": 140}
+{"version": "v3-best-winrate-2026-06-25", "event": "apply_v3", "denom": 103, "weights": {"Trend": 0, "Proximity": 30, "10MA Quality": 40, "Vol Contraction": 0, "Vol Expansion": 0, "Flag": 0, "Base Quality": 15, "RS": 0, "Volatility": 0, "Supply Shock": 3, "Risk": 15}}
+{"date": "2026-07-04", "at": "2026-07-04T08:19:21+08:00", "event": "wait", "reason": "insufficient_sample", "n_fit": 0, "n_test": 384, "min_fit": 100, "min_test": 150, "label_basis": "tier_a_structural"}
+{"date": "2026-07-11", "at": "2026-07-11T08:21:40+08:00", "event": "wait", "reason": "insufficient_sample", "n_fit": 51, "n_test": 447, "min_fit": 100, "min_test": 150, "label_basis": "tier_a_structural"}

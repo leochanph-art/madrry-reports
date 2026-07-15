@@ -130,12 +130,13 @@ def compute_features(df: pd.DataFrame) -> dict:
     return f
 
 
-def meta_v4_score(df: pd.DataFrame):
-    """0-100 enhanced score (percentile of P(+2ADR win)). None if model/data missing."""
+def meta_v4_score_prob(df: pd.DataFrame):
+    """(percentile, raw_prob) from ONE feature pass. percentile is the 0-100 rank of
+    P(+2ADR win) (== meta_v4_score()); raw_prob is that probability in [0,1] BEFORE the
+    percentile calibration (what the Phase-3 calibration table keys on). None if
+    model/data missing. Requires >= 200 bars (matches the pos>=252 training regime;
+    short-history names are out-of-distribution -> None -> scanner uses legacy score)."""
     m = _model()
-    # Require >= 200 bars so SMA200 (coef +0.20) and the 252-lookbacks are TRUE
-    # full-window values, matching the training regime (pos>=252). Short-history
-    # names are out-of-distribution -> return None -> scanner uses legacy score.
     if m is None or df is None or len(df) < 200:
         return None
     try:
@@ -147,6 +148,20 @@ def meta_v4_score(df: pd.DataFrame):
         z = (x - np.array(m["mean"])) / scale
         logit = float(np.dot(z, m["coef"]) + m["intercept"])
         prob = 1.0/(1.0+np.exp(-logit))
-        return round(float(np.interp(prob, m["calib_pctile"], np.linspace(0, 100, 101))), 1)
+        pctile = round(float(np.interp(prob, m["calib_pctile"], np.linspace(0, 100, 101))), 1)
+        return pctile, round(float(prob), 5)
     except Exception:
         return None
+
+
+def meta_v4_score(df: pd.DataFrame):
+    """0-100 enhanced score (percentile of P(+2ADR win)). None if model/data missing.
+    Thin wrapper over meta_v4_score_prob() — behaviour byte-identical to the prior version."""
+    r = meta_v4_score_prob(df)
+    return r[0] if r else None
+
+
+def meta_v4_prob(df: pd.DataFrame):
+    """Raw P(+2ADR win) in [0,1] (pre-percentile). None if model/data missing."""
+    r = meta_v4_score_prob(df)
+    return r[1] if r else None

@@ -63,7 +63,7 @@ def load_mature(min_bars=MATURE_BARS):
     min_bars is relaxed under --force so the pipeline can be smoke-tested early."""
     feats = json.load(open(MODEL))["features"]
     recs = json.load(open(TRACK)).get("records", {})
-    X, y, tick = [], [], []
+    X, y, tick, sect = [], [], [], []
     for r in recs.values():
         if r.get("outcome") not in ("win", "loss", "expired"):
             continue
@@ -77,7 +77,10 @@ def load_mature(min_bars=MATURE_BARS):
         X.append([float(f.get(k, 0.0)) for k in feats])
         y.append(int(r["label_2adr"]))
         tick.append(r["ticker"])
-    return np.array(X), np.array(y), np.array(tick), feats
+        # §3b: composition tag. Records frozen BEFORE the widening carry no section — they are all
+        # coil (the incumbent's original composition), so default to "coil".
+        sect.append((r.get("section") or "coil").lower())
+    return np.array(X), np.array(y), np.array(tick), feats, np.array(sect)
 
 
 def build_model(X, y, feats):
@@ -104,9 +107,32 @@ def main():
     force = "--force" in sys.argv
     if not os.path.exists(TRACK):
         print("no v4_tracking.json yet — nothing to re-fit."); return 0
-    X, y, tick, feats = load_mature(min_bars=1 if force else MATURE_BARS)
+    X, y, tick, feats, sect = load_mature(min_bars=1 if force else MATURE_BARS)
     n, nt = len(y), len(set(tick.tolist()))
     print(f"mature resolved records: {n} (need {MIN_MATURE}) · distinct tickers: {nt} (need {MIN_TICKERS})")
+
+    # §3b DUAL-BASELINE (informational — never changes a gate). Surfaces dataset-COMPOSITION drift so
+    # a promotion can't masquerade as it (§2.5). §4-rule-3: the OLD anchor is the incumbent scored on
+    # the coil-ONLY subset of THESE mature records — the composition it was originally judged on — NOT
+    # a fresh re-sampled mix. NEW = incumbent on all sections. A large OLD→NEW gap means the combined
+    # set is easier/harder, and the candidate's margin must be read against that, not the raw NEW corr.
+    if n:
+        try:
+            _inc = json.load(open(MODEL))
+            _coil = (sect == "coil")
+            inc_old = corr(apply_model(_inc, X[_coil]), y[_coil]) if _coil.sum() >= 20 else None
+            inc_new = corr(apply_model(_inc, X), y)
+            drift = (f"  drift {inc_new - inc_old:+.3f}" if inc_old is not None else "  (coil n<20 → no anchor yet)")
+            print(f"[dual-baseline] incumbent corr — OLD coil-only (n={int(_coil.sum())})="
+                  f"{'n/a' if inc_old is None else round(inc_old, 3)} vs NEW all-sections (n={n})="
+                  f"{round(inc_new, 3)}{drift}")
+            for s in ("coil", "nh52", "minervini"):
+                m = (sect == s)
+                if m.sum() >= 10:
+                    print(f"    {s}: n={int(m.sum())}  incumbent corr {corr(apply_model(_inc, X[m]), y[m]):+.3f}"
+                          f"  win-rate {y[m].mean():.2f}")
+        except Exception as exc:  # noqa: BLE001 — a diagnostic must never block the refit
+            print(f"[dual-baseline] skipped ({exc})")
 
     # GATE 1+2: maturity / sample size
     if not force and (n < MIN_MATURE or nt < MIN_TICKERS or len(set(y.tolist())) < 2):

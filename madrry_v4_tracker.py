@@ -42,11 +42,34 @@ WINDOW = 40
 LOSS_MULT = 0.92
 TARGET_K = 2.0
 TIER_A = {"A+", "A", "A-"}
+# §3b: NH52 + Minervini are LONG setups (§2.5 forbids SHORT); the tracker recomputes features +
+# the +2ADR/-8% long label from price history, so they need no special handling — only inclusion.
+# SENTINEL-GATED so the dataset-composition change is deliberate, not silent: absent = coil-only
+# (unchanged); create V4_LONG_SECTIONS_ENABLED to widen (during the sequenced §3b execution, after
+# the acceptance scan + backfill). Each record now carries `section` for the refit's dual-baseline.
+_LONG_SECTIONS_EXT = {"nh52", "minervini"}
+INCLUDE_LONG_SECTIONS = os.path.exists(os.path.join(WORKSPACE, "V4_LONG_SECTIONS_ENABLED"))
+
+
+def _pick_section(r):
+    """Return the row's normalised section if it belongs in the v4 (long) dataset, else None.
+    coil keeps its A+/A/A- gate; nh52/minervini join only when the sentinel is present; SHORT
+    and everything else are excluded."""
+    sec = (r.get("section") or "").lower()
+    direction = (r.get("direction") or "").lower()
+    if direction == "short" or sec == "short":
+        return None                                   # §2.5 — never train on SHORT
+    if sec == "coil":
+        return "coil" if (r.get("tier") or "") in TIER_A else None
+    if sec in _LONG_SECTIONS_EXT and INCLUDE_LONG_SECTIONS:
+        return sec
+    return None
 
 
 def build_picks():
-    """First-appearance Tier-A picks from the dated snapshots."""
-    files = sorted(glob.glob(os.path.join(WORKSPACE, "latest_setups_2026-*.json")))
+    """First-appearance v4 picks from the dated snapshots (coil A+/A/A-; + NH52/Minervini long
+    when the sentinel is set)."""
+    files = T.snapshot_files()   # durable archive + live workspace (Phase 0/3 cohort-loss fix)
     seen = {}
     for f in files:
         dt = os.path.basename(f).split("latest_setups_")[1].replace(".json", "")
@@ -55,12 +78,14 @@ def build_picks():
         except Exception:
             continue
         for r in rows:
-            if (r.get("tier") or "") not in TIER_A:
+            sec = _pick_section(r)
+            if sec is None:
                 continue
             t = r.get("ticker")
             if not t or t in seen:
                 continue
             seen[t] = {"ticker": t, "pick_date": dt, "tier": r.get("tier"),
+                       "section": sec,
                        "sector": r.get("sector"), "legacy_meta_score": r.get("meta_score")}
     return seen
 

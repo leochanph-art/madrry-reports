@@ -6,3 +6,47 @@ latest_setups*.json
 .DS_Store
 __pycache__/
 *.pyc
+fundamentals_cache.json*
+
+# --- Winner-radar build (IMPROVEMENT_PLAN.md) — data artifacts, never publish ---
+snapshots_archive/
+madrry_ledger.db
+madrry_ledger.db-wal
+madrry_ledger.db-shm
+madrry_ledger_backtest.db
+madrry_ledger_backtest.db-wal
+madrry_ledger_backtest.db-shm
+stock_data_current/
+universe_manifest.json
+backtest_section_stats.json
+meta_diagnostics.json
+entry_studies.json
+baseline_data_*.tar.gz
+*.tar.gz
+*.bak_20*
+backup_pre_taste_*/
+score_calibration.json
+sr_study.json*
+pb2_study.json*
+preflight_block.sh
+V4_LONG_SECTIONS_ENABLED
+tl_study.json*
+ch_study.json*
+lesson_study.json*
+
+# lesson backtests (2026-07-07)
+lesson_bt_cache/
+lesson_tf_cache/
+lesson_backtest_results.json*
+lesson_tf_results.json*
+BACKTEST_LESSONS.md
+
+# agent/session dirs — never publish
+.claude/
+.clawhub/
+.learnings/
+.openclaw/
+news_zh_cache.json
+VERIFICATION.md
+rs_filter_bt/
+stage_bt/
