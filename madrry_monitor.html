@@ -662,7 +662,7 @@ function evaluateAlerts(syms) {
   // viewing, and pre/post-market prices would refire GAP OVER after the midnight
   // dedupe rollover. Keeping prevTick null overnight also makes the first RTH
   // poll correctly fire the GAP variant.
-  if (!inRTH(p)) return;
+  if (!inRTH(p) && !S.testRTH) return;
   syms.forEach(function (t) {
     var d = S.byT[t], q = S.quotes[t];
     if (!d || !q) return;
@@ -931,6 +931,19 @@ function boot() {
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
 else boot();
 
+// Debug/preview hook: run a synthetic TRIGGER through the real alert engine
+// (feed, sound, notification, dedupe). Console: __monTest() or __monTest('DDOG').
+window.__monTest = function (t) {
+  if (!S.data) return 'data not loaded yet';
+  var d = t ? S.byT[String(t).toUpperCase()] : S.tickers.filter(function (x) { return x.entry != null; })[0];
+  if (!d || d.entry == null) return 'no such ticker with an entry';
+  S.quotes[d.t] = { price: Math.round(d.entry * 101) / 100, prevClose: d.close,
+    dayHigh: null, dayLow: null, vol: null, state: 'REGULAR', t: null };
+  S.testRTH = true;
+  try { evaluateAlerts([d.t]); } finally { S.testRTH = false; }
+  renderList();
+  return S.feed[0] ? (S.feed[0].type + ' | ' + S.feed[0].msg) : 'no alert fired (already deduped today? clear via Settings)';
+};
 })();
 </script>
 </body>
