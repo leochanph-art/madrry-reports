@@ -59,6 +59,13 @@ def _pick_section(r):
     direction = (r.get("direction") or "").lower()
     if direction == "short" or sec == "short":
         return None                                   # §2.5 — never train on SHORT
+    if r.get("is_etf"):
+        # ETF coil rows (scanner ETF leg, 2026-07-15) are REPORT-ONLY here: the
+        # +2·ADR win / −8% loss geometry is asymmetric for low-ADR funds (SMH
+        # ~1.5-2% ADR ⇒ a ~+3-4% win bar vs the fixed −8%), and `adr` is a model
+        # feature — training on funds would teach the re-fit a "low ADR wins"
+        # shortcut that mis-ranks stocks after promotion.
+        return None
     if sec == "coil":
         return "coil" if (r.get("tier") or "") in TIER_A else None
     if sec in _LONG_SECTIONS_EXT and INCLUDE_LONG_SECTIONS:

@@ -97,6 +97,12 @@ def build_trackers():
         for r in rows:
             if (r.get("tier") or "") not in TIER_A:
                 continue
+            if r.get("is_etf"):
+                # ETF coil rows (2026-07-15) never enter the Tier-A forward
+                # study: index/levered-fund outcomes are tape-driven and
+                # mutually correlated (SMH/SOXX/TQQQ ≈ one bet) and would
+                # distort the component edges that drive META weight nudges.
+                continue
             t = r.get("ticker")
             if not t or t in seen:
                 continue

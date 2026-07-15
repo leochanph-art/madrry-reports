@@ -28,6 +28,7 @@ Run it the same way as the original:  python3 madrry_html_scanner_v2.py
 
 from __future__ import annotations
 
+import bisect
 import concurrent.futures
 import csv
 import html as html_lib
@@ -158,10 +159,18 @@ except Exception:  # noqa: BLE001
     _fund = None
 
 
+# ETF tickers seen by this run's coil scan (populated in scan_coil). Funds have
+# no fundamentals: without this short-circuit the row cells below would each
+# trigger a synchronous per-ticker TradingView POST + Yahoo scrape + cache flush
+# at render time (madrry_fundamentals.get() is not cache-only on a miss), and
+# the not-ok fund record expires daily so the cost would recur EVERY run.
+_ETF_TICKERS: set = set()
+
+
 def _narrative(ticker: str, inner_html: str) -> str:
     """Wrap a row's narrative (theme/sector/industry) so tapping it reveals the
     fundamentals panel. Falls back to the bare narrative if data/module unavailable."""
-    if _fund is None:
+    if _fund is None or ticker in _ETF_TICKERS:
         return inner_html
     try:
         return _fund.details_html(ticker, inner_html)
@@ -359,7 +368,7 @@ def _fwd_yoy_cell(ticker: str) -> str:
     so clicking descending puts the fastest-growing names first; missing → '—' with
     data-sort −999 (parks last on descending). Never raises."""
     y, lbl = None, ""
-    if _fund is not None:
+    if _fund is not None and ticker not in _ETF_TICKERS:   # funds: no fetch, no junk cache
         try:
             rec = _fund.get(ticker)
             if rec:
@@ -388,7 +397,7 @@ def _eps_accel_cell(ticker: str) -> str:
     in YoY rate in pp, so clicking descending puts the fastest accelerators first; missing →
     '—' parked last (data-sort −9999). Reads the fundamentals cache; never raises."""
     a = None
-    if _fund is not None:
+    if _fund is not None and ticker not in _ETF_TICKERS:   # funds: no fetch, no junk cache
         try:
             rec = _fund.get(ticker)
             a = rec.get("eps_accel") if rec else None
@@ -563,6 +572,21 @@ RS_HISTORY_PATH = os.path.join(WORKSPACE, "memory", "rs_history.json")
 RS_INDUSTRIES_URL = "https://raw.githubusercontent.com/Fred6725/rs-log/main/output/rs_industries.csv"
 RS_INDUSTRIES_CACHE = os.path.join(WORKSPACE, "memory", "rs_industries_cache.csv")
 IND_RS_STRONG = 90            # industry-group RS percentile that counts as "leadership"
+# ---- ETF coil leg (USER 2026-07-15: "screen ETFs as well — ETF charts trade by
+# our method"). ETFs run the SAME coil pipeline (52w band, RS 80+ gate, RS-line
+# swing gate, tiers, entry engines); only the data plumbing differs:
+#   · size gate = AUM ≥ $2B (funds have no market_cap_basic; mirrors the $2B cap)
+#   · Stage-2 RS 80+: funds are absent from the Fred6725 stock/industry RS feeds,
+#     so the SAME score is computed locally — verified formula (0.005 median err
+#     vs the source CSV): 100·(1+strength)/(1+strength_SPY), strength =
+#     0.4·q1+0.2·q2+0.2·q3+0.2·q4 over trailing 63-bar windows — then percentile-
+#     ranked against the stock cross-section's raw scores (RS cache CSV). An ETF
+#     must rank RS ≥ 80 AMONG STOCKS to pass; not computable ⇒ dropped (hard gate).
+#   · ETF rows are REPORT-ONLY for the learning loops: tier-A tracker, v4 tracker
+#     and calibration skip is_etf rows so stock-fit models never train on fund
+#     label geometry (low-ADR ETFs hit the +2·ADR win bar far too easily).
+ETF_AUM_MIN = 2_000_000_000   # $2B AUM — fund-side analogue of the $2B cap gate
+ETF_THEME_MAX = 44            # fund-name chars shown as the row's theme
 
 TV_SCAN_URL = "https://scanner.tradingview.com/america/scan"
 # Use the FULL ranked universe (rs_stocks.csv ≈ 5.9k names, percentile 0-99).
@@ -2472,6 +2496,10 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
             outcome = "win" if (t_close >= y_entry and not stopped_out) else "loss"
             log_records.append({"ticker": ticker, "tier": y_tier, "outcome": outcome,
                                 "htf": bool(s.get("is_htf")),
+                                # ETF picks (2026-07-15) ARE graded — they're displayed picks and
+                                # the win-rate chip reflects what the report showed — but the tag
+                                # keeps the series separable from the stock breakout stats.
+                                "is_etf": bool(s.get("is_etf")),
                                 # regime marker so the rolling win-rate series isn't misread across
                                 # the 2026-07-06 stop-geometry boundary (graded on THIS pick's y_stop).
                                 "stop_version": s.get("stop_version", "tight_3day")})
@@ -3157,6 +3185,70 @@ def _rs_line_swings_up(hist_df, bench_close, lookback: int = 126,
         return True, False
 
 
+# ---- ETF RS percentile (Stage-2 ETF leg, 2026-07-15) ------------------------
+_ETF_RS_SCORES: Optional[List[float]] = None    # sorted stock raw RS scores (lazy)
+
+
+def _stock_rs_score_dist() -> Optional[List[float]]:
+    """Sorted raw 'Relative Strength' scores of the full stock cross-section,
+    read from the RS cache CSV (fetch_and_load_rs_scores keeps only Percentile
+    in memory but always writes the full raw CSV to RS_CACHE_PATH). Used to
+    percentile-rank locally computed ETF scores. None ⇒ unavailable (the ETF
+    RS gate then stands down LOUDLY, mirroring the stock-side outage rule)."""
+    global _ETF_RS_SCORES
+    if _ETF_RS_SCORES is not None:
+        return _ETF_RS_SCORES
+    try:
+        scores: List[float] = []
+        with open(RS_CACHE_PATH, newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                try:
+                    scores.append(float(row["Relative Strength"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+        if len(scores) >= 500:          # sanity: a real cross-section, not a stub
+            scores.sort()
+            _ETF_RS_SCORES = scores
+    except Exception:  # noqa: BLE001
+        _ETF_RS_SCORES = None
+    return _ETF_RS_SCORES
+
+
+def _ibd_strength(closes) -> Optional[float]:
+    """Fred6725/skyte weighted strength: 0.4·q1 + 0.2·q2 + 0.2·q3 + 0.2·q4,
+    where qN = cumulative return over the last N·63 bars (overlapping windows,
+    exactly `closes.tail(N*63)` last/first − 1 — verified 0.005 median error
+    against the source CSV on 2026-07-15). None ⇒ not computable."""
+    try:
+        c = closes.dropna().astype(float)
+        if len(c) < 64:                 # need at least one full quarter
+            return None
+        qs = []
+        for n in (1, 2, 3, 4):
+            w = c.tail(min(len(c), n * 63))
+            qs.append(float(w.iloc[-1] / w.iloc[0]) - 1.0)
+        return 0.4 * qs[0] + 0.2 * qs[1] + 0.2 * qs[2] + 0.2 * qs[3]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _etf_rs_percentile(hist_df, bench_strength: Optional[float]) -> Optional[int]:
+    """IBD-style RS percentile for an ETF, comparable to the Fred6725 stock
+    percentiles: score = 100·(1+strength)/(1+strength_bench), ranked into the
+    stock cross-section's raw-score distribution. None ⇒ not computable for
+    THIS name (missing/short history) — the caller treats that as a hard-gate
+    fail, same as a stock absent from a live RS feed."""
+    dist = _stock_rs_score_dist()
+    if hist_df is None or bench_strength is None or not dist:
+        return None
+    s = _ibd_strength(hist_df["Close"])
+    if s is None or (1.0 + bench_strength) == 0:
+        return None
+    score = 100.0 * (1.0 + s) / (1.0 + bench_strength)
+    pos = bisect.bisect_left(dist, score)
+    return max(0, min(99, int(pos * 100 / len(dist))))
+
+
 def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
               industry_by_ticker: Optional[Dict[str, dict]] = None):
     """Two-pass coil scan: cheap server filter, then batched yfinance enrichment.
@@ -3196,6 +3288,31 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
         "range": [0, 5000],
     }
 
+    # ETF leg (USER 2026-07-15): same technical filters, fund plumbing. `aum`
+    # takes market_cap_basic's SLOT so the positional 23-tuple unpack below is
+    # unchanged (mcap var simply carries AUM for fund rows); `description` is
+    # appended as column 24 so the row can show the fund's real name as its
+    # theme. All 23 required columns verified populated for type=fund (probe
+    # 2026-07-15: 73/73 rows, zero nulls).
+    _etf_cols = list(payload_coil["columns"])
+    _etf_cols[_etf_cols.index("market_cap_basic")] = "aum"
+    payload_etf = {
+        "filter": [
+            {"left": "type", "operation": "in_range", "right": ["fund"]},
+            {"left": "typespecs", "operation": "has", "right": ["etf"]},
+            {"left": "close", "operation": "egreater", "right": 10},
+            {"left": "volume", "operation": "egreater", "right": 500000},
+            {"left": "average_volume_30d_calc", "operation": "egreater", "right": 500000},
+            {"left": "average_volume_60d_calc", "operation": "egreater", "right": 500000},
+            {"left": "close", "operation": "egreater", "right": "SMA200"},
+            {"left": "aum", "operation": "egreater", "right": ETF_AUM_MIN},
+            {"left": "ADRP", "operation": "egreater", "right": 1.5},
+        ],
+        "columns": _etf_cols + ["description"],
+        "sort": {"sortBy": "ADRP", "sortOrder": "desc"},
+        "range": [0, 1000],
+    }
+
     tier_a_plus: List[dict] = []
     tier_a: List[dict] = []
     tier_a_minus: List[dict] = []
@@ -3212,6 +3329,10 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
     drop_rs = 0                # failed the stock/industry RS 80+ gate
     drop_rsline = 0            # RS line not rising swing-over-swing
     drop_unsupported = 0       # met a tier but no verified entry engine backs it
+    # ETF-leg instrumentation (2026-07-15, additive-only keys in the funnel)
+    n_universe_etf = None      # TradingView fund count matching the ETF Stage-1 filter
+    n_stage1_etf = 0           # ETF rows actually fetched
+    drop_rs_etf = 0            # ETF subset of drop_rs (locally computed RS < 80 / uncomputable)
     n_aplus_raw = n_a_raw = n_aminus_raw = n_aminus_total = 0
 
     industry_by_ticker = industry_by_ticker or {}
@@ -3238,14 +3359,40 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
         n_stage1 = len(_rows)
         _univ = data.get("totalCount")
         n_universe = _univ if isinstance(_univ, int) else None
-        for row in _rows:
+        # ETF leg — its OWN try: a fund-scan outage must never take down the
+        # stock scan (the report just runs stock-only that day, warned loudly).
+        # diag=None on purpose: _request_json would log a diag.ERROR before
+        # raising, which trips the morning script's errors=0 publish gate — a
+        # transient fund-feed outage must degrade to a WARNING, not an alert.
+        _etf_rows: List[dict] = []
+        try:
+            time.sleep(2)
+            _etf_data = tv_post(payload_etf, label="coil_etf", diag=None)
+            _etf_rows = _etf_data.get("data", []) or []
+            _etf_univ = _etf_data.get("totalCount")
+            n_universe_etf = _etf_univ if isinstance(_etf_univ, int) else None
+        except Exception as exc:  # noqa: BLE001
+            diag.warn(f"ETF coil scan failed — today's coil universe is stock-only ({exc})")
+        n_stage1_etf = len(_etf_rows)
+        for _src_etf, row in ([(False, r) for r in _rows]
+                              + [(True, r) for r in _etf_rows]):
             d = row.get("d")
-            if not d or len(d) < 23:
+            if not d or len(d) < (24 if _src_etf else 23):
                 drop_missing += 1
                 continue
+            etf_desc = None
+            if _src_etf:
+                etf_desc = str(d[23] or "").strip()
+                d = d[:23]              # aum sits in the mcap slot — same unpack
             (ticker, close, opn, vol, avg_vol, ema9, ema21, sma50, sma200, adr,
              mcap, perf_1m, perf_3m, perf_6m, perf_y, sector, industry,
              high, low, change, high_52w, float_shares, low_52w) = d
+            if _src_etf:
+                # funds: TradingView's sector/industry are boilerplate
+                # ("Miscellaneous" / "Investment Trusts/Mutual Funds") — the
+                # sector chip becomes "ETF" and the fund NAME becomes the theme.
+                sector, industry = "ETF", None
+                _ETF_TICKERS.add(ticker)   # render cells skip fundamentals for these
 
             if any(x is None for x in (close, vol, avg_vol, ema9, ema21, sma50,
                                        sma200, adr, perf_1m, perf_3m, high, low,
@@ -3274,7 +3421,10 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
             # resolve_rs carries forward the last known value for names that
             # flicker out of the source (ADRs / spinoffs), so a one-day source
             # gap doesn't drop a leader.
-            if rs_gate_active:
+            # ETF rows are NOT exempt — their RS check needs price history the
+            # cheap TV feed doesn't carry, so it is DEFERRED to the enrichment
+            # pass below (same 80+ bar, computed via _etf_rs_percentile).
+            if rs_gate_active and not _src_etf:
                 _rs_v, _rs_asof = resolve_rs(ticker, rs_map)
                 if not isinstance(_rs_v, int):
                     # class shares: TradingView prints BRK.B, the RS sources
@@ -3309,7 +3459,8 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
                     is_squat = True
 
             power_score = (perf_1m * 0.4) + (perf_3m * 0.3) + (p6 * 0.2) + (py * 0.1)
-            theme = get_theme(ticker, industry)
+            theme = (etf_desc[:ETF_THEME_MAX] if (_src_etf and etf_desc)
+                     else get_theme(ticker, industry))
             hugging_ma = "9EMA" if dist_fast <= dist_slow else "21EMA"
             ma_val = ema9 if hugging_ma == "9EMA" else ema21
 
@@ -3355,6 +3506,9 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
                 status_labels.append("⚠️ Wide Stop (Size Down!)")
             if is_premium_cluster:
                 status_labels.append("🛡️ MA Cluster (Premium)")
+            if _src_etf:
+                # cap column shows AUM for funds — the badge makes that explicit
+                status_labels.append(f"🧺 ETF · AUM ${round((mcap or 0) / 1e9)}B")
 
             coil_candidates.append({
                 "ticker": ticker, "close": round(close, 2), "adr": round(adr, 2),
@@ -3372,6 +3526,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
                 "dist_52w": round(dist_52w, 1),
                 "ema9": ema9, "ema21": ema21, "day_range_pct": day_range_pct,
                 "is_tight_1d": is_tight_1d, "pb_entry": pb_entry, "pb_stop": pb_stop, "pb_risk": pb_risk,
+                "is_etf": _src_etf, "etf_desc": etf_desc,
             })
     except Exception as exc:  # noqa: BLE001
         diag.error(f"Coil scan (fetch/parse): {exc}")
@@ -3390,6 +3545,35 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
         if bench_close is None:
             diag.warn(f"Stage-2 RS-line swing gate STOOD DOWN — {ANTS_BENCHMARK} "
                       "history unavailable; universe not gated on RS-line slope")
+        # ETF RS-gate prerequisites (2026-07-15): benchmark strength (SPY — the
+        # source CSV's verified reference; ^GSPC fallback carries a ~0.7-point
+        # score bias, acceptable) + the stock raw-score distribution. If either
+        # is unavailable the ETF leg of the RS gate STANDS DOWN — LOUDLY, per
+        # the house rule that silent gate reshaping is never allowed.
+        etf_gate_ready = False
+        spy_strength = None
+        if rs_gate_active and any(c.get("is_etf") for c in coil_candidates):
+            try:
+                _spy_df = fetch_stock_history("SPY", period="1y")
+                spy_strength = (_ibd_strength(_spy_df["Close"])
+                                if _spy_df is not None else None)
+            except Exception:  # noqa: BLE001
+                spy_strength = None
+            if spy_strength is None and bench_close is not None:
+                spy_strength = _ibd_strength(bench_close)
+                if spy_strength is not None:
+                    # the fallback silently shifts scores ~0.7pt (^GSPC is a
+                    # price index) — enough to flip a borderline ETF across the
+                    # hard 80 bar, so it must be LOUD like every other
+                    # degradation path.
+                    diag.warn("ETF RS gate benchmark DEGRADED to ^GSPC — SPY "
+                              "history unavailable; ETF scores carry a ~0.7-pt "
+                              "upward bias vs the verified SPY reference")
+            etf_gate_ready = bool(spy_strength is not None and _stock_rs_score_dist())
+            if not etf_gate_ready:
+                diag.warn("Stage-2 RS gate STOOD DOWN for ETFs — benchmark "
+                          "strength or stock RS-score distribution unavailable; "
+                          "ETF rows not RS-gated this run")
         rsline_checked = 0     # names the RS-line gate actually EVALUATED
         for c in coil_candidates:
             hist_df = hist_map.get(c["ticker"])
@@ -3398,6 +3582,19 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
             if is_dead_pinned(hist_df):
                 drop_dead += 1
                 continue
+            # Stage-2 RS gate, ETF leg (deferred from the parse loop — needs
+            # history): same 80+ bar as stocks, percentile computed locally.
+            # HARD gate: uncomputable (young ETF, <200-bar history ⇒ hist_df
+            # None) counts as a fail, exactly like a stock absent from a live
+            # RS feed. Young funds also lack the history every entry engine
+            # needs, so this doubles as the "scanned but can never tier" fix.
+            if c.get("is_etf") and rs_gate_active and etf_gate_ready:
+                _etf_pct = _etf_rs_percentile(hist_df, spy_strength)
+                if _etf_pct is None or _etf_pct < RS_GATE_MIN:
+                    drop_rs += 1
+                    drop_rs_etf += 1
+                    continue
+                c["etf_rs_pct"] = _etf_pct
             # Stage-2 RS-line slope gate (USER 2026-07-15): RS line must be
             # making higher swing highs vs ^GSPC. Runs BEFORE the heavy
             # enrichment so rejected names never pay for charts/engines.
@@ -3456,6 +3653,8 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
                 days_since_high = int(len(recent) - 1 - int(recent.argmax()))
 
             _rs_val, _rs_asof = resolve_rs(c["ticker"], rs_map)
+            if c.get("is_etf") and c.get("etf_rs_pct") is not None:
+                _rs_val, _rs_asof = c["etf_rs_pct"], None   # computed fresh this run
             stock_data = {
                 "ticker": c["ticker"], "close": c["close"], "adr": c["adr"],
                 "perf_1m": c["perf_1m"], "perf_6m": c["perf_6m"], "perf_12m": c["perf_12m"],
@@ -3470,6 +3669,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
                 "_ma_dist": (_ma_dist_data(hist_df["Close"].tolist())
                              if (hist_df is not None and len(hist_df) >= 2) else None),
                 "pb_entry": c["pb_entry"], "pb_stop": c["pb_stop"], "pb_risk": c["pb_risk"], "ema9": c["ema9"],
+                "is_etf": bool(c.get("is_etf")), "etf_desc": c.get("etf_desc"),
                 "below_20dma": below_20dma, "below_50dma": below_50dma, "days_since_high": days_since_high,
                 **_sr_quality(hist_df, c["entry"], "long"),
                 **_pb2_quality(hist_df),
@@ -3599,14 +3799,21 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
         "drop_rsline": drop_rsline,          # RS line not rising swing-over-swing (2026-07-15)
         "stage2_candidates": len(coil_candidates),
         # Stage-2 survivors AFTER the enrichment-side drops (dead pins + RS-line
-        # gate) — what the funnel card displays. stage2_candidates keeps its old
-        # meaning (parse-loop survivors) for downstream compatibility.
-        "stage2_final": max(0, len(coil_candidates) - drop_dead - drop_rsline),
+        # gate + the DEFERRED ETF RS gate, which also fires on rows already in
+        # coil_candidates) — what the funnel card displays. stage2_candidates
+        # keeps its old meaning (parse-loop survivors) for downstream compat.
+        "stage2_final": max(0, len(coil_candidates) - drop_dead - drop_rsline - drop_rs_etf),
         "drop_unsupported": drop_unsupported,
         "lesson_radar": len(lesson_radar),
         "stage3_aplus": n_aplus_raw,
         "stage3_a": n_a_raw,
         "stage3_aminus": n_aminus_total,
+        # ETF-leg breakdown (2026-07-15, additive-only). NOTE: universe_total /
+        # stage1_fetched above stay STOCK-ONLY (unchanged semantics per the
+        # additive-only rule); the funnel card sums both legs for display.
+        "etf_universe_total": n_universe_etf,
+        "etf_stage1_fetched": n_stage1_etf,
+        "drop_rs_etf": drop_rs_etf,          # ETF subset of drop_rs
     }
     return tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full, lesson_radar, funnel
 
@@ -5944,17 +6151,26 @@ def _trendline_block(m: dict) -> str:
 
 
 def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
-    """How the ~10k US-stock universe narrows to the coil tiers. The survivor count
-    after each stage comes from scan_coil's per-stage instrumentation (this run's real
-    numbers — see the `funnel` dict it returns). Plain divs so the table JS ignores it."""
+    """How the ~10k US stock + ETF universe narrows to the coil tiers. The survivor
+    count after each stage comes from scan_coil's per-stage instrumentation (this run's
+    real numbers — see the `funnel` dict it returns). Plain divs so the table JS ignores
+    it. universe_total/stage1_fetched are the STOCK leg; the ETF leg (2026-07-15) rides
+    in the additive etf_* keys and is summed here for display."""
     fn = fn or {}
 
     def _n(v):
         return f"{v:,}" if isinstance(v, int) else "—"
 
-    s1_total = fn.get("universe_total")
-    s1_fetched = fn.get("stage1_fetched")
+    def _sum2(a, b):
+        # stock + ETF legs; either may be missing — sum what exists, else None
+        vals = [v for v in (a, b) if isinstance(v, int)]
+        return sum(vals) if vals else None
+
+    s1_total = _sum2(fn.get("universe_total"), fn.get("etf_universe_total"))
+    s1_fetched = _sum2(fn.get("stage1_fetched"), fn.get("etf_stage1_fetched"))
     s1 = _n(s1_total if isinstance(s1_total, int) else s1_fetched)
+    n_etf = fn.get("etf_universe_total")
+    etf_note = f" (incl. {n_etf} ETFs)" if isinstance(n_etf, int) and n_etf > 0 else ""
     cap_note = ""
     if isinstance(s1_total, int) and isinstance(s1_fetched, int) and s1_total > s1_fetched:
         cap_note = f" <span class='fn-sub'>(top {s1_fetched:,} by ADR fetched)</span>"
@@ -5965,11 +6181,12 @@ def build_filter_funnel(fn: dict, n_aplus: int, n_a: int, n_aminus: int) -> str:
     dropped = _n(fn.get("drop_unsupported")) if fn.get("drop_unsupported") is not None else "–"
     return (
         "<details class='funnel'><summary class='fn-cap'>📋 How this list was built "
-        f"<span class='fn-sub'>10,000+ stocks → {s1} liquid leaders → {s2} RS leaders near highs → "
+        f"<span class='fn-sub'>10,000+ stocks &amp; ETFs → {s1} liquid leaders → {s2} RS leaders near highs → "
         f"A+ {n_aplus} · A {n_a} · A− {n_aminus}</span></summary>"
         "<div class='fn-stage'><div class='fn-body'><div class='fn-title'>1 · Liquid leaders</div>"
-        "<div class='fn-crit'>$10+ · ADR ≥ 1.5% · 500k+ volume · above 200MA · $2B+ cap</div>"
-        f"</div><div class='fn-count'>{s1}{cap_note}</div></div>"
+        "<div class='fn-crit'>$10+ · ADR ≥ 1.5% · 500k+ volume · above 200MA · $2B+ cap "
+        "(ETFs: $2B+ AUM)</div>"
+        f"</div><div class='fn-count'>{s1}{esc(etf_note)}{cap_note}</div></div>"
         "<div class='fn-stage'><div class='fn-body'><div class='fn-title'>2 · RS leaders near highs</div>"
         "<div class='fn-crit'>within 20% of the 52-week high · stock or industry-group RS 80+ · "
         "RS line rising swing-over-swing</div>"
@@ -9086,7 +9303,11 @@ def run_scanners_and_generate_html() -> str:
     _plan = write_order_plan(tier_a_plus, tier_a, tier_a_minus, regime, allow_breakouts, data_date)
     _drafted = [p.get("ticker") for p in (_plan.get("picks") or [])]
     top_picks_html = build_top_picks(tier_a_plus, tier_a, tier_a_minus, drafted=_drafted)
-    hot_themes_html = build_hot_themes(tier_a_plus + tier_a + tier_a_minus + ep_matches)
+    # ETF rows are excluded from HOT SECTORS: sector="ETF" is a plumbing label,
+    # not a sector-leadership read, and the chip doubles as a row filter.
+    hot_themes_html = build_hot_themes(
+        [s for s in (tier_a_plus + tier_a + tier_a_minus + ep_matches)
+         if not s.get("is_etf")])
     hot_industries_html = build_hot_industries(industry_rs, tier_a_plus + tier_a + tier_a_minus)
 
     # Warm the fundamentals cache for EVERY narrative-bearing MADRRY ticker BEFORE the
@@ -9096,12 +9317,14 @@ def run_scanners_and_generate_html() -> str:
     # Batched + disk-cached + time-boxed; never fatal (Minervini/Trilogy warm their own).
     _prefetch_fundamentals(
         [s.get("ticker") for s in (tier_a_plus + tier_a + tier_a_minus_full
-                                   + lesson_radar + ep_matches + ur_matches + short_matches)]
+                                   + lesson_radar + ep_matches + ur_matches + short_matches)
+         if not s.get("is_etf")]     # funds have no fundamentals — skip, don't cache junk
         + [m.get("ticker") for m in nh_data.get("green", [])]
         + [m.get("ticker") for m in weekly_rows])   # Weekly Review narrative cells tap fundamentals too
     # Tier 3 — estimate-revision counts (per-ticker yfinance) for the TOP PICKS only.
     _prefetch_revisions([s.get("ticker") for _, s in
-                         _rank_top_picks(tier_a_plus, tier_a, tier_a_minus_full)[:REVISIONS_TOP_N]])
+                         _rank_top_picks(tier_a_plus, tier_a, tier_a_minus_full)[:REVISIONS_TOP_N]
+                         if not s.get("is_etf")])
 
     new_highs_html = generate_new_highs_section(nh_data)
     nh52_monitor_html = generate_nh52_monitor_section(nh52_pullbacks, nh52_monitored)
