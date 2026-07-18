@@ -83,6 +83,8 @@ WORKSPACE = "/Users/boundbythese/.openclaw/workspace"
 LATEST_SETUPS_PATH = os.path.join(WORKSPACE, "latest_setups.json")
 HVE_HISTORY_PATH = os.path.join(WORKSPACE, "hve_history.json")
 BREADTH_HISTORY_PATH = os.path.join(WORKSPACE, "breadth_history.json")
+HEADLINE_METER_HISTORY_PATH = os.path.join(WORKSPACE, "headline_meter_history.json")
+MARKET_INTERNALS_PATH = os.path.join(WORKSPACE, "market_internals.json")
 EXT_PCTILE_PATH = os.path.join(WORKSPACE, "spy_qqq_extension_percentiles.csv")
 FORWARD_BASERATE_PATH = os.path.join(WORKSPACE, "forward_baserates.json")
 BREAKOUT_LOG_PATH = os.path.join(WORKSPACE, "breakout_log.json")
@@ -801,6 +803,15 @@ def _expected_session_date() -> Optional[str]:
 # and every generated report's "🔄 Refresh Prices" button uses it.
 LIVE_PRICE_PROXY = ""
 
+# v9 chart-first layout (2026-07-18): card deck on narrow screens, master-detail
+# "Desk" on wide (foldable unfolded / desktop). False restores the legacy
+# 8-tab table report — legacy generators and their JS stay in this file.
+LAYOUT_V9 = True
+# REV 10 (USER 2026-07-18: "make the chart has 6 months to 1y history 'i can
+# select'"). Daily chart payloads now carry ~1 trading year so CANDLE_JS can
+# slice a 3M/6M/1Y window client-side. Weekly sparks keep their own length.
+CHART_WINDOW = 252
+
 
 def _lp(ticker: Any, close: Any, *, style: str = "",
         entry: Any = None, stop: Any = None, fmt: str = "{:.2f}") -> str:
@@ -814,8 +825,9 @@ def _lp(ticker: Any, close: Any, *, style: str = "",
     if stop is not None:
         extra += f" data-stop='{stop}'"
     unit = "" if str(ticker).startswith("^") else "$"
-    return (f"<span class='lp' data-tkr='{esc(str(ticker))}' data-snap='{close}'{extra} "
-            f"style='{style}'>{unit}{fmt.format(close)}</span>")
+    style_attr = f" style='{style}'" if style else ""
+    return (f"<span class='lp' data-tkr='{esc(str(ticker))}' data-snap='{close}'{extra}"
+            f"{style_attr}>{unit}{fmt.format(close)}</span>")
 
 
 # ----------------------------------------------------------------------------
@@ -954,10 +966,13 @@ def fetch_and_load_industry_rs(diag: Optional[Diagnostics] = None) -> dict:
                     "p3m": int(row.get("3M_RS_Percentile") or 0),
                 }
                 rows.append(rec)
+                _n = 0
                 for t in (row.get("Tickers") or "").split(","):
                     t = t.strip().upper().replace(".", "-")
                     if t:
                         by_ticker[t] = rec
+                        _n += 1
+                rec["n_tickers"] = _n   # sector-wave denominator (additive)
         except Exception as exc:  # noqa: BLE001
             if diag:
                 diag.warn(f"industry RS parse failed: {exc}")
@@ -968,11 +983,114 @@ def fetch_and_load_industry_rs(diag: Optional[Diagnostics] = None) -> dict:
 
 def attach_industry_rs(stocks: List[dict], by_ticker: Dict[str, dict]) -> None:
     """Tag each pick with its industry-group RS percentile + name (display-only;
-    never touches the IBKR draft plan)."""
+    never touches the IBKR draft plan). Also attaches the weekly Weinstein
+    group-stage read (group_stage_map.json, 14-day staleness suppressor) as
+    additive grp_* keys for the GRP chip."""
+    gmap, gwaves = _load_group_stage_map(), _sector_wave_index()
     for s in stocks:
         rec = by_ticker.get((s.get("ticker") or "").upper().replace(".", "-"))
         s["ind_rs"] = rec["pct"] if rec else None
         s["ind_name"] = rec["industry"] if rec else None
+        try:
+            g = gmap.get(s["ind_name"]) if (gmap and s.get("ind_name")) else None
+            if g:
+                s["grp_stage"] = g.get("stage")
+                s["grp_above"] = g.get("pct_above")
+            w = gwaves.get(s.get("ind_name")) if gwaves else None
+            if w:
+                s["grp_wave_n"] = w.get("n")
+                s["grp_wave_size"] = w.get("size")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_group_stage_cache: Optional[dict] = None
+_sector_wave_cache: Optional[dict] = None
+
+
+def _load_group_stage_map() -> Optional[dict]:
+    """group_stage_map.json (weekly, build_group_stage.py) with a 14-day
+    staleness suppressor. Cached per run. Never raises."""
+    global _group_stage_cache
+    if _group_stage_cache is not None:
+        return _group_stage_cache or None
+    out = {}
+    try:
+        with open(os.path.join(WORKSPACE, "group_stage_map.json")) as fh:
+            d = json.load(fh)
+        asof = datetime.strptime(d.get("asof", "1970-01-01"), "%Y-%m-%d").date()
+        if (date.today() - asof).days <= 14:
+            out = d.get("groups") or {}
+        else:
+            log.warning("group_stage_map.json stale (asof %s) — GRP stage suppressed", d.get("asof"))
+    except Exception:  # noqa: BLE001
+        out = {}
+    _group_stage_cache = out
+    return out or None
+
+
+def _sector_wave_index() -> dict:
+    """{industry: wave-dict} from the run's sector-wave computation (cached by
+    compute_sector_waves). Empty when unavailable."""
+    return {w["industry"]: w for w in (_sector_wave_cache or [])}
+
+
+def compute_sector_waves(by_ticker: Dict[str, dict]) -> List[dict]:
+    """Group-ignition detector (Weinstein ch.3 bottom-up tally, calibrated
+    2026-07-17): distinct non-ETF tickers with outcome=='win' in the last 5
+    breakout-log dates, per industry; fires on (n>=3 AND n/group_size>=20%)
+    OR n>=10. Informational banner only — thresholds are cadence-calibrated
+    (28 log days), not proven edge. Never raises."""
+    global _sector_wave_cache
+    try:
+        with open(BREAKOUT_LOG_PATH) as fh:
+            bl = json.load(fh)
+        dates = sorted(bl)[-5:]
+        prev_dates = sorted(bl)[-6:-1]
+        if not dates:
+            _sector_wave_cache = []
+            return []
+
+        def _tally(dts):
+            seen: Dict[str, set] = {}
+            for dkey in dts:
+                for r in bl.get(dkey, []):
+                    if r.get("outcome") != "win" or r.get("is_etf"):
+                        continue
+                    tk = (r.get("ticker") or "").upper().replace(".", "-")
+                    rec = by_ticker.get(tk)
+                    if not rec or not rec.get("industry"):
+                        continue
+                    seen.setdefault(rec["industry"], set()).add(tk)
+            return seen
+
+        cur, prev = _tally(dates), _tally(prev_dates)
+
+        def _fires(ind, tks):
+            size = None
+            for rec in by_ticker.values():
+                if rec.get("industry") == ind:
+                    size = rec.get("n_tickers")
+                    break
+            n = len(tks)
+            share = (n / size) if size else 0.0
+            return (n >= 3 and share >= 0.20) or n >= 10, size, share
+
+        waves = []
+        for ind, tks in cur.items():
+            ok, size, share = _fires(ind, tks)
+            if not ok:
+                continue
+            was, _s, _sh = _fires(ind, prev.get(ind, set()))
+            waves.append({"industry": ind, "n": len(tks), "size": size,
+                          "share": round(share * 100), "members": sorted(tks),
+                          "is_new": not was})
+        waves.sort(key=lambda w: -w["n"])
+        _sector_wave_cache = waves
+        return waves
+    except Exception:  # noqa: BLE001
+        _sector_wave_cache = []
+        return []
 
 
 def fetch_stock_history(ticker: str, period: str = "1y", interval: str = "1d") -> Optional[pd.DataFrame]:
@@ -1050,6 +1168,16 @@ def fetch_histories_batch_intraday(tickers: List[str], period: str = "60d",
         except Exception:  # noqa: BLE001
             continue
     return out
+
+
+def _pct_off_52wk_of(valid, c) -> Optional[float]:
+    """% distance of close c from the 52-week high of the (close, vol) series.
+    Feeds the headline-meter complacency check. Never raises."""
+    try:
+        hi = max(x[0] for x in valid[-252:])
+        return round((c / hi - 1.0) * 100.0, 2) if hi > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _fetch_one_index(ticker: str) -> Optional[dict]:
@@ -1185,6 +1313,31 @@ def _fetch_one_index(ticker: str) -> Optional[dict]:
                 and (lc - pc2) / pc2 * 100 >= 1.2 and lv > pv2):
             ftd_today = True
 
+    # Weinstein stage read for the Market Overview banner (30-week ≈ 150-day MA
+    # on the daily series; slope over ~5 weeks = 25 sessions; churn window 50
+    # sessions ≈ 10 weeks). ADDITIVE keys — nothing above changes.
+    wk_stage = wk_ma_slope = None
+    try:
+        arr = np.asarray([x[0] for x in valid], dtype=float)
+        if arr.size >= 176:
+            ma150 = np.convolve(arr, np.full(150, 1.0 / 150.0), mode="valid")
+            if ma150.size >= 26:
+                slope_raw = float(ma150[-1] / ma150[-26] - 1.0) * 100.0
+                if np.isfinite(slope_raw):
+                    above = bool(arr[-1] > ma150[-1])
+                    tail = min(50, ma150.size)
+                    # Churn on ~weekly points (every 5th session) so the index
+                    # read matches the stock version's 10-weekly-bar basis —
+                    # daily bars whipsaw a flat MA far more often (review fix).
+                    diff = (arr[-tail:] - ma150[-tail:])[::-1][::5]
+                    sgn = np.sign(diff)
+                    churn = int(np.sum(sgn[1:] * sgn[:-1] < 0)) if sgn.size >= 2 else 0
+                    # classify on the UNROUNDED slope (parity with _stage_read)
+                    wk_stage = _stage_label(above, slope_raw, churn)
+                    wk_ma_slope = round(slope_raw, 2)
+    except Exception:  # noqa: BLE001
+        wk_stage = wk_ma_slope = None
+
     return {
         "ticker": ticker,
         "close": c,
@@ -1209,6 +1362,9 @@ def _fetch_one_index(ticker: str) -> Optional[dict]:
         "dist_days_ibd": dist_days_ibd,
         "rally_day": rally_day,
         "ftd_today": ftd_today,
+        "wk_stage": wk_stage,
+        "wk_ma_slope": wk_ma_slope,
+        "pct_off_52wk": _pct_off_52wk_of(valid, c),
     }
 
 
@@ -2064,12 +2220,13 @@ def _cfin(x, nd: int = 2) -> Optional[float]:
 
 
 def _candle_overlays(plan: Optional[dict]) -> dict:
-    """Whitelisted chart levels, short-keyed to keep the payload small. USER
-    2026-07-06 declutter: the chart draws only the meaningful few — the SR zone
-    band, the plan entry/stop, and the two SALIENT trendlines (tl_draw_* — most-
-    touched/recent/near-price, chosen by the engine's salience pass, NOT the
-    trade-nearest line). Channel rails, PB lines and the SR-stop line were
-    dropped from the chart (still shown in the collapsible text details)."""
+    """Whitelisted chart levels, short-keyed to keep the payload small. v9
+    (2026-07-18): the CLEAN chart draws only the SR zone band + the two SALIENT
+    trendlines (tl_draw_* — most-touched/recent/near-price, chosen by the
+    engine's salience pass). The plan entry/stop are NO LONGER drawn on the
+    canvas (user picked a clean chart; the levels read as text in the card and
+    live on the .lp span's data-entry/data-stop). Channel rails, PB lines and
+    the SR-stop line are not drawn either (still in the collapsible text)."""
     if not plan:
         return {}
     ov: Dict[str, Any] = {}
@@ -2079,8 +2236,6 @@ def _candle_overlays(plan: Optional[dict]) -> dict:
         if f is not None:
             ov[k] = f
 
-    put("e", plan.get("entry"))
-    put("s", plan.get("stop"))
     # draw the last-60-bar-anchored zone when the engine produced one, else the
     # trade/gate protecting zone (USER 2026-07-06 progressive-lookback drawing)
     put("srl", plan.get("sr_draw_lo", plan.get("sr_prot_lo")))
@@ -2494,6 +2649,25 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
         # Log the breakout outcome for the rolling win-rate (untriggered = skip).
         if triggered and ticker_fresh:
             outcome = "win" if (t_close >= y_entry and not stopped_out) else "loss"
+            # Weinstein VOL read (S1 study 2026-07-17): trigger-day volume vs the
+            # scan-time 5-day base stamped on the pick. Display/log ONLY — never a
+            # filter (94% of monsters trigger on <2x volume).
+            dvol = None
+            try:
+                vb = s.get("vol_base5")
+                tv = float(today.get("Volume") or 0)
+                if vb and tv > 0:
+                    dvol = round(tv / float(vb), 2)
+            except Exception:  # noqa: BLE001
+                dvol = None
+            # Loss post-mortem factor labels (Weinstein ch.10 diary; F4 spec) —
+            # descriptive booleans computed from the FROZEN pick row; None when
+            # the source field is missing. f_lowvol is a LABEL only: the quiet-
+            # volume FILTER is refuted (pb2 study), this never gates anything.
+            _vp = s.get("vol_pct")
+            _rs = s.get("rs_rating")
+            _ir = s.get("ind_rs")
+            _st = s.get("wk_stage")
             log_records.append({"ticker": ticker, "tier": y_tier, "outcome": outcome,
                                 "htf": bool(s.get("is_htf")),
                                 # ETF picks (2026-07-15) ARE graded — they're displayed picks and
@@ -2502,7 +2676,12 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
                                 "is_etf": bool(s.get("is_etf")),
                                 # regime marker so the rolling win-rate series isn't misread across
                                 # the 2026-07-06 stop-geometry boundary (graded on THIS pick's y_stop).
-                                "stop_version": s.get("stop_version", "tight_3day")})
+                                "stop_version": s.get("stop_version", "tight_3day"),
+                                "dvol": dvol,
+                                "f_lowvol": (bool(_vp < 50) if isinstance(_vp, (int, float)) else None),
+                                "f_rs_low": (bool(_rs < 80) if isinstance(_rs, (int, float)) else None),
+                                "f_ind_weak": (bool(_ir < 50) if isinstance(_ir, (int, float)) else None),
+                                "f_not_s2": (not str(_st).startswith("S2")) if _st else None})
             n_win += outcome == "win"
             n_loss += outcome == "loss"
 
@@ -2576,6 +2755,17 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
     if coiled_total:
         cb = " · ".join(f"{t} {coiled[t]}" for t in ("A+", "A", "A-") if coiled.get(t))
         coiled_bit = f" &nbsp;|&nbsp; <span style='color:#82827c;'>{coiled_total} still coiling ({cb})</span>"
+    # Weinstein VOL aggregate for today's triggered picks (display/log only).
+    vol_bit = ""
+    _dv = [r["dvol"] for r in log_records if r.get("dvol")]
+    if _dv:
+        _n2 = sum(1 for v in _dv if v >= 2.0)
+        _tip = ("Trigger-day volume vs the pick's prior-5-day average (Weinstein ch.4 "
+                "2x rule). Backtest 2026-07-17, 181,212 triggered coil episodes: >=2x -> "
+                "65%/69% +1R rate (pre-2026/2026+) vs 49.5%/46% under 1x - but 94% of "
+                "monsters trigger under 2x volume, so informational only, never a filter.")
+        vol_bit = (f" &nbsp;|&nbsp; <span style='color:#82827c;' title='{esc(_tip)}'>"
+                   f"VOL≥2x on {_n2}/{len(_dv)} triggered · avg {sum(_dv)/len(_dv):.1f}x</span>")
     # Regime footnote (continuity marker, §3a) — self-activating: shows ONLY once the log carries
     # atr_5day outcomes, so it's invisible on pre-switch reports and marks the boundary once live.
     regime_bit = ""
@@ -2591,10 +2781,10 @@ def track_previous_setups(diag: Optional[Diagnostics] = None,
     except Exception:  # noqa: BLE001 — a footnote must never break the report
         regime_bit = ""
     summary = (f"<span style='color:#ececea;'>Graded <b>{n_eval}</b> prior picks{src_bit}</span> "
-               f"&nbsp;|&nbsp; {win_bit}{cum_bit}{coiled_bit}{regime_bit}")
+               f"&nbsp;|&nbsp; {win_bit}{cum_bit}{coiled_bit}{vol_bit}{regime_bit}")
 
     return f"""
-    <div style="background-color:#18181b;border-radius:8px;padding:12px 15px;margin-bottom:25px;box-shadow:0 0 15px rgba(0,0,0,0.5);border-left:4px solid #aecfe8;">
+    <div style="background-color:#18181b;border-radius:8px;padding:12px 15px;margin-bottom:25px;box-shadow:0 0 15px rgba(0,0,0,0.5);">
         <span style="color:#aecfe8;font-weight:bold;font-size:var(--fs-body);text-transform:uppercase;">Yesterday's Watchlist:</span>
         <span style="font-size:var(--fs-table);">&nbsp;{summary}</span>
     </div>
@@ -2880,6 +3070,471 @@ def _lbw_line(m: dict) -> str:
         return ""
 
 
+# ---- Weinstein Phase-1 chips (2026-07-16 book study): Mansfield RS zero-cross,
+# overhead-supply zone, weekly stage read. ALL additive display keys, SHADOW/
+# display-only — no tier, plan, gate or draft impact. Verdicts + backtest numbers
+# recorded in memory note `weinstein-study-verdicts`.
+
+_STOOQ_ROOT = os.path.expanduser("~/Downloads/data/daily/us")
+_stooq_files_cache: Optional[Dict[str, str]] = None
+
+
+def _stooq_file(ticker: str) -> Optional[str]:
+    """Path of the local Stooq daily file for `ticker` (one os.walk, cached).
+    Stooq names are lowercase with '-' for '.' (BRK.B -> brk-b.us.txt)."""
+    global _stooq_files_cache
+    if _stooq_files_cache is None:
+        idx: Dict[str, str] = {}
+        try:
+            for base, _dirs, files in os.walk(_STOOQ_ROOT):
+                for f in files:
+                    if f.endswith(".us.txt"):
+                        idx[f[:-len(".us.txt")].upper()] = os.path.join(base, f)
+        except Exception:  # noqa: BLE001
+            idx = {}
+        if not idx:
+            # Loud, once: under launchd the 08:16 run may be TCC-blocked from
+            # ~/Downloads (known Mac behavior in this project) — OH chips then
+            # silently run on the 2y basis. Make that visible in the log.
+            log.warning("Stooq dump at %s unreadable/empty (TCC on launchd?) — "
+                        "OH chips fall back to the 2y basis", _STOOQ_ROOT)
+        _stooq_files_cache = idx
+    return _stooq_files_cache.get((ticker or "").upper().replace(".", "-"))
+
+
+def _overhead_read(ticker: str, close, hist_df) -> dict:
+    """Overhead-supply zone vs the prior multi-year high. Reference = max high
+    over the past 5y EXCLUDING the last ~3 months (local Stooq file; falls back
+    to the 2y yfinance history excluding the last 63 bars). Zones from the
+    2026-07-16 backtest (5,307 breakouts): DEEP <0.67x / SUPPLY 0.67-0.85 /
+    CLEAR 0.85-1.09 (best median+failure zone) / EXT >1.09. Heavy-supply names
+    showed ~2x the MONSTER rate, so this must never become a veto. Additive
+    display keys only. Never raises."""
+    try:
+        if (not close) and hist_df is not None and len(hist_df):
+            close = float(hist_df["Close"].iloc[-1])
+        if not close or close != close or close <= 0:  # None / NaN / non-positive
+            return {}
+        # 2y yfinance reference (always computed when possible): fallback when
+        # no Stooq file exists, and blended in when the local dump has gone
+        # stale enough (>100d) that the [now-5y, now-92d] window would silently
+        # miss recent shelf highs.
+        yf_ref = None
+        if hist_df is not None and len(hist_df) > 130:
+            v = float(hist_df["High"].iloc[:-63].max())
+            if v == v and v > 0:                       # NaN-safe
+                yf_ref = v
+        ref = basis = None
+        p = _stooq_file(ticker)
+        if p:
+            try:
+                raw = pd.read_csv(p)
+                dts = pd.to_datetime(raw.iloc[:, 2].astype(str), format="%Y%m%d",
+                                     errors="coerce")
+                his = pd.to_numeric(raw.iloc[:, 5], errors="coerce")
+                now = pd.Timestamp.today()
+                w = (dts >= now - pd.Timedelta(days=5 * 365)) & \
+                    (dts <= now - pd.Timedelta(days=92))
+                if int(w.sum()) >= 150 and his[w].notna().any():
+                    ref, basis = float(his[w].max()), "5y"
+                    # Post-dump split guard (2026-07-17 review): the dump is a
+                    # frozen snapshot, so a split AFTER its last bar leaves the
+                    # 5y highs in pre-split terms while the live close is post-
+                    # split. Compare closes on overlapping dates; a persistent
+                    # ratio != 1 is the split factor — rescale the reference.
+                    try:
+                        if hist_df is not None and len(hist_df):
+                            stq = pd.Series(
+                                pd.to_numeric(raw.iloc[:, 7], errors="coerce").values,
+                                index=dts).dropna()
+                            stq = stq[stq.index.notna()]
+                            yfc = hist_df["Close"].copy()
+                            yfc.index = yfc.index.normalize()
+                            common = stq.index.intersection(yfc.index)[-10:]
+                            if len(common) >= 3:
+                                f = float((yfc.loc[common] / stq.loc[common]).median())
+                                if f > 0 and abs(f - 1.0) > 0.02:
+                                    ref *= f
+                    except Exception:  # noqa: BLE001
+                        pass
+                    # Stale-dump blend: past ~100d the [now-5y, now-92d] window
+                    # loses recent shelf highs — hand over to the live 2y ref
+                    # when it is the higher one (and label it honestly).
+                    if (dts.max() < now - pd.Timedelta(days=100)
+                            and yf_ref is not None and yf_ref > ref):
+                        ref, basis = yf_ref, "2y"
+            except Exception:  # noqa: BLE001
+                ref = None
+        if ref is None and yf_ref is not None:
+            ref, basis = yf_ref, "2y"
+        if not ref or ref != ref or ref <= 0:          # None / NaN / non-positive
+            return {}
+        ratio = close / ref
+        zone = ("DEEP" if ratio < 0.67 else "SUPPLY" if ratio < 0.85
+                else "CLEAR" if ratio <= 1.09 else "EXT")
+        return {"oh_ratio": round(ratio, 3), "oh_zone": zone,
+                "oh_basis": basis, "oh_ref": round(ref, 2)}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _mansfield_read(hist_df, spy_close) -> dict:
+    """Weinstein/Mansfield RS: weekly (W-FRI) stock/S&P ratio vs its own 52-week
+    SMA (the 'zero line'). mans_val = ratio/SMA52 - 1 for the latest week;
+    mans_cross_wks = full weekly bars since the last neg->pos zero cross while
+    still positive today (0 = this week), None if never/uncomputable/crossed
+    before the 2y window. Backtest 2026-07-16 (69,512 breakouts, 10y Stooq):
+    a cross <=8wk before a 52w-high breakout catches 71.6% of the monsters the
+    RS-80 gate misses (median lead 3wk, era-consistent) at ~19 non-monsters per
+    monster -> monster-FINDER chip, never a gate. Never raises."""
+    try:
+        if hist_df is None or spy_close is None or not len(hist_df):
+            return {}
+        wk_s = hist_df["Close"].resample("W-FRI").last().dropna()
+        wk_b = spy_close.resample("W-FRI").last().dropna()
+        ratio = (wk_s / wk_b).dropna()
+        if len(ratio) < 56:                    # 52wk MA + a little cross context
+            return {}
+        mans = (ratio / ratio.rolling(52).mean() - 1.0).dropna()
+        if len(mans) < 2:
+            return {}
+        vals = mans.values
+        cross = None
+        if vals[-1] > 0:
+            k = len(vals) - 1
+            while k > 0 and vals[k - 1] > 0:
+                k -= 1
+            if k > 0:                          # vals[k-1] <= 0 -> genuine cross
+                cross = len(vals) - 1 - k
+        return {"mans_val": round(float(vals[-1]), 4),
+                "mans_cross_wks": (int(cross) if cross is not None else None)}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _stage_read(hist_df) -> dict:
+    """Weinstein weekly stage classifier (ch.2 quiz algorithm): 30-week MA of
+    W-FRI closes; slope over ~5 weeks (rising > +0.5%, falling < -0.5%); churn
+    = >=3 MA crossings in the last 10 weeks (Stage-3 whipsaw tell). Additive
+    display keys only. Never raises."""
+    try:
+        if hist_df is None or len(hist_df) < 190:
+            return {}
+        wk = hist_df["Close"].resample("W-FRI").last().dropna()
+        if len(wk) < 36:
+            return {}
+        ma = wk.rolling(30).mean().dropna()
+        if len(ma) < 6:
+            return {}
+        slope = float(ma.iloc[-1] / ma.iloc[-6] - 1.0) * 100.0
+        above = bool(float(wk.iloc[-1]) > float(ma.iloc[-1]))
+        diff = (wk.reindex(ma.index) - ma).dropna().tail(10)
+        sgn = np.sign(diff.values)
+        churn = int(np.sum(sgn[1:] * sgn[:-1] < 0)) if len(sgn) >= 2 else 0
+        st = _stage_label(above, slope, churn)
+        return {"wk_stage": st, "wk_ma_slope": round(slope, 2),
+                "wk_above_ma": above}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _stage_label(above: bool, slope: float, churn: int) -> str:
+    """Shared Weinstein stage classification (stocks + index cards).
+    S1 branch (review 2026-07-17): price below a FLAT MA is a Stage-1 base,
+    not Stage 4 — ch.2 reserves Stage 4 for a genuinely declining MA."""
+    if above and slope > 0.5:
+        return "S2"
+    if above and slope >= -0.5:
+        return "S3? churn" if churn >= 3 else "S2 flat-MA"
+    if above:
+        return "S3? MA↘"
+    if slope > 0.5:
+        return "S2 dip"
+    if slope >= -0.5:
+        return "S1 base"
+    return "S4⚠"
+
+
+def _weinstein_keys(s: dict, df, spy_close) -> None:
+    """Attach the three Weinstein Phase-1 chip key sets to one row (additive;
+    each helper returns {} on any problem so a partial fetch can never poison
+    the row)."""
+    s.update(_mansfield_read(df, spy_close))
+    s.update(_stage_read(df))
+    s.update(_overhead_read(s.get("ticker"), s.get("close"), df))
+    s.update(_tc_read(df, s.get("entry")))
+
+
+def attach_weinstein(stocks: List[dict], diag=None, hist=None, spy_close=None) -> None:
+    """Standalone Weinstein-chip attachment for displayed rows that do NOT go
+    through attach_ants (NH-52wk green rows, Lesson Radar). Reuses a caller-
+    provided history batch when available; otherwise fetches its own (2y +
+    benchmark). Additive keys only; never raises."""
+    try:
+        if not stocks:
+            return
+        if hist is None:
+            tickers = sorted({s["ticker"] for s in stocks if s.get("ticker")}
+                             | {ANTS_BENCHMARK})
+            hist = fetch_histories_batch(tickers, period="2y", min_rows=60)
+        if spy_close is None:
+            spy_df = hist.get(ANTS_BENCHMARK)
+            spy_close = spy_df["Close"] if spy_df is not None else None
+        for s in stocks:
+            _weinstein_keys(s, hist.get(s.get("ticker")), spy_close)
+    except Exception as exc:  # noqa: BLE001
+        if diag:
+            diag.warn(f"Weinstein chip attachment skipped: {exc}")
+
+
+def _etf_note(m: dict) -> str:
+    """Cohort disclosure for ETF rows: every Weinstein study cohort was US
+    common stocks (the backtests excluded ETF dirs), but ETFs ride the same
+    scan_coil path and render the same chips (2026-07-18 review)."""
+    return (" NOTE: this row is an ETF - the cited study cohort was US common "
+            "stocks only, so treat the numbers as context, not a measured rate."
+            ) if m.get("is_etf") else ""
+
+
+def _pba_advance(hist_df, entry) -> dict:
+    """Pre-breakout advance (Weinstein ch.5 TC signal C): entry vs the lowest
+    LOW of the last 126 trading days (inclusive). Backtest 2026-07-17 (214,286
+    full-window coil episodes 2016-2025): monster rate (+50% in 12m) by bucket
+    8.6% (<15) / 12.5% (15-40) / 26.3% (40-100) / 45.5% (>=100), era-consistent
+    and monotone every year — but win% at entry is FLAT and the risk-adjusted
+    net premium era-flips, so this is monster-CONTEXT only, never a score or
+    gate. Additive display key. Never raises."""
+    try:
+        if hist_df is None or len(hist_df) < 126 or not entry:
+            return {}
+        lo = float(hist_df["Low"].iloc[-126:].min())
+        if lo != lo or lo <= 0:
+            return {}
+        return {"pba_pct": round((float(entry) / lo - 1.0) * 100.0, 1)}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _pba_line(m: dict) -> str:
+    """PBA chip — renders only at >=40% (mobile-first, no noise); amber at
+    >=100%. '' otherwise."""
+    try:
+        pba = m.get("pba_pct")
+        if pba is None or pba < 40:
+            return ""
+        tip = ("Pre-breakout advance: entry vs the lowest low of the last 126 trading "
+               "days. Backtest 2026-07-17, 214,286 full-window coil episodes 2016-2025: "
+               "+50%-within-12m rate by PBA bucket 8.6% (<15%) / 12.5% (15-40) / 26.3% "
+               "(40-100) / 45.5% (>=100) - era-consistent, monotone every year. Two-sided: "
+               "the same names also fail big more often (-33% rate 14.8% -> 35.8%) and "
+               "win% at entry is flat (~51-54%). The risk-adjusted net premium FLIPS SIGN "
+               "between backtest halves, so no edge is claimed. Measured on the coil board. "
+               "Monster-context only - no tier, plan or draft impact." + _etf_note(m))
+        # Visible text stays two-sided on its own (mobile has no hover, so the
+        # tooltip's caveats can't be the only place they live — 2026-07-18
+        # review). Full numbers remain in the tooltip for desktop.
+        if pba >= 100:
+            body = ("<span style='color:#d3a04d;font-weight:600;'>+%.0f%%</span> off 6-mo "
+                    "low · big prior advance · more monsters AND more big failures" % pba)
+        else:
+            body = ("+%.0f%% off 6-mo low · stored energy · more monsters AND more "
+                    "big failures" % pba)
+        return ("<div class='edge-line' title='" + esc(tip) + "'>"
+                "<span class='lbl'>PBA</span> " + body + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _tc_read(hist_df, entry) -> dict:
+    """Weinstein Triple-Confirmation state (ch.5). Conditions at scan time:
+    B = Mansfield fresh zero-cross (read from the row's mans_cross_wks by the
+    caller), C = entry >= 1.40x the min CLOSE of the last 126 td (the tested
+    S6 definition — distinct from the PBA chip's min-LOW basis). A (volume) is
+    only knowable at/after the trigger via the validated week-to-date PACE
+    rule: week-to-date volume x5/elapsed-days >= 2x trailing-4wk avg AND > any
+    single week of the last 26. Returns additive keys tc_pba_ok / tc_vol_pace
+    (today's pace ratio vs 4wk avg, informational). Backtest 2026-07-17
+    (181,444 triggered episodes): B+C = 40% monster proxy vs 24% board avg;
+    full TC (pace variant) = 50.5% monster, +0.62R vs +0.05R avg, ~34/yr.
+    Never raises."""
+    try:
+        if hist_df is None or len(hist_df) < 140 or not entry:
+            return {}
+        cl = hist_df["Close"].iloc[-126:]
+        cmin = float(cl.min())
+        if cmin != cmin or cmin <= 0:
+            return {}
+        pba_ok = bool(float(entry) / cmin >= 1.40)
+        out = {"tc_pba_ok": pba_ok}
+        # week-to-date volume pace vs the trailing 4 full weeks (Fri-anchored)
+        try:
+            vol = hist_df["Volume"].resample("W-FRI").sum().dropna()
+            days = hist_df["Volume"].resample("W-FRI").count().dropna()
+            if len(vol) >= 6:
+                elapsed = max(1, int(days.iloc[-1]))
+                pace = float(vol.iloc[-1]) * 5.0 / elapsed
+                base4 = float(vol.iloc[-5:-1].mean())
+                wk26max = float(vol.iloc[-27:-1].max()) if len(vol) >= 27 else float(vol.iloc[:-1].max())
+                if base4 > 0:
+                    out["tc_vol_pace"] = round(pace / base4, 2)
+                    out["tc_vol_over26"] = bool(pace > wk26max)
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _tc_line(m: dict) -> str:
+    """TC chip: 'setup 2/3' when MRS fresh cross + PBA>=40% co-fire (asof-
+    knowable), gold 'TC 3/3' when the week-to-date volume pace also clears the
+    tested bar. '' otherwise."""
+    try:
+        wks = m.get("mans_cross_wks")
+        if not m.get("tc_pba_ok") or wks is None or wks > 8:
+            return ""
+        tip = ("Weinstein triple-confirmation (backtest 2026-07-17, 181k triggered coil "
+               "episodes, 10y): Mansfield fresh cross + prior advance >=40% = 40% monster "
+               "proxy vs 24% board avg; if the breakout week then prints volume >=2x its "
+               "4-week average AND above every single week of the last 26 -> full TC: "
+               "~50% monster proxy (2.1x), +0.6R vs +0.05R avg, ~34/yr. Median TC trade "
+               "still stops out - the edge is the ~24% that run >=2R. Numbers measured on "
+               "the COIL board only. Informational only - no tier, plan or draft impact." + _etf_note(m))
+        pace = m.get("tc_vol_pace")
+        if pace is not None and pace >= 2.0 and m.get("tc_vol_over26"):
+            body = ("<span style='color:var(--yellow);font-weight:600;'>TC ✓ 3/3</span> "
+                    "vol pace %.1fx 4wk-avg · MRS cross %sw · PBA ok" % (pace, wks))
+        else:
+            body = ("setup ◆ 2/3 · MRS cross %sw · PBA ok%s"
+                    % (wks, (" · vol pace %.1fx" % pace) if pace is not None else ""))
+        return ("<div class='edge-line' title='" + esc(tip) + "'>"
+                "<span class='lbl'>TC</span> " + body + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _group_line(m: dict) -> str:
+    """GRP chip: the pick's industry group's weekly Weinstein stage + breadth
+    (+ sector-wave membership when firing). '' when no group data."""
+    try:
+        st = m.get("grp_stage")
+        ind = m.get("ind_name")
+        if not ind or (not st and not m.get("grp_wave_n")):
+            return ""
+        bits = []
+        if st:
+            col = ("var(--red)" if str(st).startswith("S4")
+                   else "var(--yellow)" if str(st).startswith("S3")
+                   else "var(--text-2)")
+            bits.append("%s <span style='color:%s;font-weight:600;'>%s</span>"
+                        % (esc(ind), col, esc(st)))
+            if m.get("grp_above") is not None:
+                bits.append("%.0f%%&gt;150d" % m["grp_above"])
+        else:
+            bits.append(esc(ind))
+        if m.get("grp_wave_n"):
+            bits.append("<span style='color:var(--yellow);'>wave %d/%s</span>"
+                        % (m["grp_wave_n"], m.get("grp_wave_size") or "?"))
+        tip = ("Industry-group Weinstein stage (weekly map, build_group_stage.py: stage from "
+               "median 150d-SMA slope + % members above their own 150d SMA; ch.3: never buy "
+               "into a Stage-3/4 group, the same chart gains 50-75% in a strong group vs "
+               "5-10% in a weak one). 'wave' = distinct 5-day breakout winners in the group "
+               "(ch.3 group-ignition tally). The 50-75%/5-10% figures are Weinstein's book "
+               "numbers, NOT measured here; wave thresholds are cadence-calibrated on 28 "
+               "days of live log - no edge claim. Informational only - no tier, plan or "
+               "draft impact.")
+        return ("<div class='edge-line' title='" + esc(tip) + "'>"
+                "<span class='lbl'>GRP</span> " + " · ".join(bits) + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _mans_line(m: dict) -> str:
+    """MRS chip: fresh zero-cross (gold) or below-zero warning; '' for the
+    common long-positive case and when uncomputable."""
+    try:
+        v = m.get("mans_val")
+        if v is None:
+            return ""
+        wks = m.get("mans_cross_wks")
+        tip = ("Weinstein/Mansfield RS: weekly stock/S&P-500 ratio vs its own 52-week "
+               "average (zero line). Backtest 2026-07-16 (69,512 breakouts, 10y): a fresh "
+               "negative-to-positive cross within 8 weeks of breakout catches 71.6% of the "
+               "monsters the RS-80 gate misses (median lead 3 weeks) at ~19 non-monsters "
+               "per monster - monster-FINDER, not a gate. Latest week may be partial "
+               "intraweek. Informational only - no tier, plan or draft impact." + _etf_note(m))
+        if wks is not None and wks <= 8:
+            when = "this week" if wks == 0 else "%dw ago" % wks
+            body = ("<span style='color:var(--yellow);font-weight:600;'>zero-cross ⊕</span> "
+                    "%s · MRS %+.1f%%" % (when, v * 100))
+        elif v <= 0:
+            body = ("<span style='color:var(--text-2);'>below zero (MRS %+.1f%%) - "
+                    "52w RS base not reclaimed</span>" % (v * 100))
+        else:
+            return ""
+        return ("<div class='edge-line' title='" + esc(tip) + "'>"
+                "<span class='lbl'>MRS</span> " + body + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _oh_line(m: dict) -> str:
+    """Overhead-supply zone chip. '' when uncomputable."""
+    try:
+        zone = m.get("oh_zone")
+        if not zone:
+            return ""
+        ratio = m.get("oh_ratio") or 0.0
+        basis = m.get("oh_basis") or "multi-year"
+        ref = m.get("oh_ref")
+        tip = ("Overhead supply vs the prior %s high (excluding the last ~3 months). "
+               "Backtest 2026-07-16 (5,307 breakouts, 10y): CLEAR zone (0.85-1.09x the old "
+               "high) beat heavy-supply breakouts by +6-7pp median 12m return and 8-12pp "
+               "fewer -20%%-first failures, era-consistent - BUT heavy-supply names showed "
+               "~2x the monster rate, so this is a zone label, never a veto. Informational "
+               "only - no tier, plan or draft impact." % basis + _etf_note(m))
+        # "BLUE SKY" (not "EXTENDED") — the report's EXTENDED vocabulary means
+        # chase-risk distance above the pivot; OH >1.09x means no overhead
+        # supply at all, which the backtest shows is merely a THINNER edge than
+        # CLEAR, not a chase warning (2026-07-17 review).
+        style = {"CLEAR": "var(--green)", "EXT": "var(--yellow)",
+                 "SUPPLY": "var(--yellow)", "DEEP": "var(--red)"}[zone]
+        note = {"CLEAR": "no meaningful overhead",
+                "EXT": "%.0f%% above the old high — thinner edge than CLEAR" % ((ratio - 1) * 100),
+                "SUPPLY": "shelf overhead near $%s" % ref,
+                "DEEP": "heavy supply up to $%s" % ref}[zone]
+        body = ("<span style='color:%s;font-weight:600;'>%s</span> · %.2fx %s high · %s"
+                % (style, "BLUE SKY" if zone == "EXT" else zone, ratio, basis, note))
+        return ("<div class='edge-line' title='" + esc(tip) + "'>"
+                "<span class='lbl'>OH</span> " + body + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _stage_line(m: dict) -> str:
+    """Weekly Weinstein stage chip. '' when uncomputable."""
+    try:
+        st = m.get("wk_stage")
+        if not st:
+            return ""
+        slope = m.get("wk_ma_slope")
+        tip = ("Weinstein weekly stage read (ch.2 quiz algorithm): 30-week MA slope over "
+               "~5 weeks (rising > +0.5%, falling < -0.5%), price vs the MA, and MA-crossing "
+               "churn (>=3 crossings/10wk = Stage-3 whipsaw). Live spot-check 2026-07-15: "
+               "5 A- coil picks had a still-declining 30-week MA. Latest week may be "
+               "partial intraweek. Informational only - no tier, plan or draft impact.")
+        col = ("var(--red)" if st.startswith("S4")
+               else "var(--yellow)" if st.startswith("S3")
+               else "var(--text-2)")
+        sl_txt = (" · 30wk MA %+.1f%%/5wk" % slope) if slope is not None else ""
+        body = ("<span style='color:%s;font-weight:600;'>%s</span>%s"
+                % (col, esc(st), sl_txt))
+        return ("<div class='edge-line' title='" + esc(tip) + "'>"
+                "<span class='lbl'>STAGE</span> " + body + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _mtf_line(m: dict) -> str:
     """Compact multi-timeframe lesson row: 'TF D 4/4 · W 2/4 · H 3/4'. The
     denominator is ALWAYS 4 (PB auto-fails on weekly: needs >=120 weekly
@@ -2981,6 +3636,39 @@ def _ch_quality(hist_df, entry, direction):
         return out if isinstance(out, dict) and "ch_error" not in out else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+def _chart_plan(m: dict, hist_df, *, direction: str = "long") -> dict:
+    """REV 10 (USER 2026-07-18: "you didnt draw lines in 52 week pullback and all
+    others… draw at all charts. thats the whole point").
+
+    Returns a COPY of the row enriched with the S/R-zone + salient-trendline
+    draw keys, purely so make_candle_chart()/_candle_overlays() can put the same
+    lesson levels on THIS section's chart that coil cards already get. Only the
+    engine's own reads are used — sr_draw_lo/hi and tl_draw_sup/res_now+slope_d
+    from _sr_quality/_tl_quality/_ch_quality — never an invented line.
+
+    Deliberately NON-MUTATING: the caller's row (and therefore the ledger
+    snapshot written to latest_setups_*.json) is untouched, so this is
+    display-only and cannot perturb tracking or the M.E.T.A. recalibration.
+    Keys a section already computed win. Never raises — a chart is decoration."""
+    plan = dict(m) if isinstance(m, dict) else {}
+    if hist_df is None:
+        return plan
+    if plan.get("sr_draw_lo") is not None and plan.get("tl_draw_sup_now") is not None:
+        return plan                                  # section already has a read
+    entry = next((plan.get(k) for k in
+                  ("entry", "pivot", "ideal_buy", "last_close", "close")
+                  if plan.get(k) is not None), None)
+    if entry is None:
+        return plan
+    try:
+        for _fn in (_sr_quality, _tl_quality, _ch_quality):
+            for k, v in (_fn(hist_df, entry, direction) or {}).items():
+                plan.setdefault(k, v)
+    except Exception:  # noqa: BLE001 — chart decoration must never kill a scan
+        pass
+    return plan
 
 
 def _atr_stop(entry, adr, direction):
@@ -3183,6 +3871,175 @@ def _rs_line_swings_up(hist_df, bench_close, lookback: int = 126,
                     or (vals[-1] > vals[-21:].mean() and vals[-1] > vals[0])), True
     except Exception:  # noqa: BLE001
         return True, False
+
+
+# ---- Stage-4 short leg helpers (Weinstein ch.7, 2026-07-17) -----------------
+# Per §2.6 NO backtest verdict exists or is claimed for short outcomes
+# (survivorship: the local dump lacks the delisted blowups shorts profit on);
+# every outcome-quality question is WAIT-FOR-DATA via the live ledger.
+
+def _rs_line_swings_down(hist_df, bench_close, lookback: int = 126,
+                         tol: float = 0.03) -> Tuple[bool, bool]:
+    """Mirror of _rs_line_swings_up for the SHORT leg: the RS line must slope
+    DOWN swing-over-swing — each recent CONFIRMED swing LOW below the previous
+    (swing lows of rs == swing highs of -rs, so _zigzag_swing_highs is reused
+    verbatim on the negated series). Collapse-guard mirror: a fresh RS rip
+    >15% above the latest swing low disqualifies. Returns (ok, evaluated) —
+    CRITICAL INVERSION vs the long gate: the CALLER must treat evaluated=False
+    as NOT passed. A short REQUIREMENT fails CLOSED — missing data must never
+    qualify a short; the independent rs_pct<=25 OR-branch keeps the leg
+    outage-resilient."""
+    if hist_df is None or bench_close is None or len(hist_df) < 40:
+        return False, False
+    try:
+        close = _date_indexed(hist_df["Close"].astype(float))
+        bench = _date_indexed(bench_close.astype(float)).replace(0, np.nan)
+        rs = (close / bench.reindex(close.index).ffill()).dropna()
+        if len(rs) < 40:
+            return False, False
+        vals = rs.iloc[-lookback:].to_numpy()
+        lows_idx, cur_leg_neg = _zigzag_swing_highs(-vals, tol)
+        lo_vals = [float(vals[i]) for i in lows_idx]
+        cur_leg_lo = (-cur_leg_neg) if cur_leg_neg is not None else None
+        if cur_leg_lo is not None and (not lo_vals or cur_leg_lo < lo_vals[-1]):
+            lo_vals.append(cur_leg_lo)
+        last = lo_vals[-3:]
+        if len(last) >= 2:
+            descending = all(b < a for a, b in zip(last, last[1:]))
+            return bool(descending and vals[-1] <= last[-1] * 1.15), True
+        # <2 confirmed swing lows: pass only when the line is pinned near its
+        # window low, or below its 21-day mean AND net-down over the window.
+        return bool(vals[-1] <= 1.05 * vals.min()
+                    or (vals[-1] < vals[-21:].mean() and vals[-1] < vals[0])), True
+    except Exception:  # noqa: BLE001
+        return False, False
+
+
+def _round_buy_stop(raw: float) -> float:
+    """Short protective buy-stop placed just ABOVE the next round number
+    (ch.7: covering orders cluster at round figures; below $20 every half-
+    point counts). Grid $1.00/$0.10 nudge >= $20, $0.50/$0.05 below."""
+    grid, nudge = (1.0, 0.10) if raw >= 20 else (0.5, 0.05)
+    return round(math.ceil(raw / grid - 1e-9) * grid + nudge, 2)
+
+
+def _swing_rule_target(hist_df, support_low: float) -> Optional[dict]:
+    """Downside swing-rule target (ch.7 measured move): top-area window =
+    weekly bars since the last W-FRI close above the 30-week MA (capped 52w;
+    26w when never above); target = support_low - (peak - support_low)."""
+    try:
+        wk_c = hist_df["Close"].resample("W-FRI").last().dropna()
+        wk_h = hist_df["High"].resample("W-FRI").max().dropna()
+        ma = wk_c.rolling(30).mean()
+        above = (wk_c > ma).fillna(False)
+        idx = None
+        for i in range(len(above) - 1, -1, -1):
+            if bool(above.iloc[i]):
+                idx = i
+                break
+        n_since = (len(above) - 1 - idx) if idx is not None else 26
+        window = max(4, min(n_since, 52))
+        peak = float(wk_h.iloc[-window:].max())
+        target = support_low - (peak - support_low)
+        out = {"peak": round(peak, 2)}
+        if target > 0.05 * support_low:
+            out["target_swing"] = round(target, 2)
+        else:
+            out["target_swing"] = None       # measured move exceeds price
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_RS_STOCKS_CACHE_CSV = os.path.join(WORKSPACE, "memory", "rs_stocks_cache.csv")
+
+
+def _dtc_lookup(tickers: List[str], diag=None, budget_s: float = 25.0) -> Dict[str, dict]:
+    """Days-to-cover for the (bounded, <=15) final short survivors. Primary =
+    yfinance Ticker.info shortRatio (FINRA bi-monthly, worst-case ~3.5wk
+    stale); fallback = the already-cached Fred CSV: ShortFloatPct (fraction)
+    x Float / AvgVol10. Missing data flags, never excludes."""
+    csv_map: Dict[str, dict] = {}
+    try:
+        with open(_RS_STOCKS_CACHE_CSV) as fh:
+            for row in csv.DictReader(fh):
+                tk = (row.get("Ticker") or "").strip().upper()
+                if tk:
+                    csv_map[tk] = row
+    except Exception:  # noqa: BLE001
+        csv_map = {}
+    out: Dict[str, dict] = {}
+    t0 = time.time()
+    for t in tickers:
+        rec = {"dtc": None, "dtc_src": None, "short_pct_float": None, "dtc_asof": None}
+        try:
+            # Wall-clock budget (2026-07-18 review): yf .info is a serial network
+            # call with no internal deadline — a hung endpoint would stall the
+            # whole run. Past the budget we skip the slow leg and fall through to
+            # the free CSV, so every row still gets stamped.
+            if time.time() - t0 > budget_s:
+                raise TimeoutError("dtc budget exhausted")
+            info = yf.Ticker(t).info or {}
+            sr = info.get("shortRatio")
+            if sr:
+                rec["dtc"] = round(float(sr), 2)
+                rec["dtc_src"] = "yf"
+                spf = info.get("shortPercentOfFloat")
+                rec["short_pct_float"] = round(float(spf) * 100, 1) if spf else None
+                dsi = info.get("dateShortInterest")
+                if dsi:
+                    try:
+                        rec["dtc_asof"] = datetime.fromtimestamp(int(dsi)).strftime("%Y-%m-%d")
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception:  # noqa: BLE001
+            pass
+        if rec["dtc"] is None:
+            row = csv_map.get(t.upper().replace(".", "-")) or csv_map.get(t.upper())
+            if row:
+                try:
+                    spf = float(row.get("ShortFloatPct") or 0)
+                    flt = float(row.get("Float") or 0)
+                    av = float(row.get("AvgVol10") or 0)
+                    if spf > 0 and flt > 0 and av > 0:
+                        rec["dtc"] = round(spf * flt / av, 2)
+                        rec["dtc_src"] = "csv"
+                        rec["short_pct_float"] = round(spf * 100, 1)
+                except Exception:  # noqa: BLE001
+                    pass
+        out[t] = rec
+    return out
+
+
+def _dtc_line(m: dict) -> str:
+    """DTC chip for short cards: red >=5x (squeeze fuel), plain otherwise,
+    'n/a · flag' when uncomputable."""
+    try:
+        # Rows that never went through _dtc_lookup (parabolic-short leg) carry no
+        # 'dtc' key at all — stay silent there rather than printing a misleading
+        # "n/a" on every card. Stage-4 rows always get the key (possibly None),
+        # so a genuine lookup failure still flags (2026-07-18).
+        if "dtc" not in m:
+            return ""
+        dtc = m.get("dtc")
+        tip = ("Days-to-cover = short interest / avg daily volume (FINRA bi-monthly "
+               "settlement, published ~T+7bd — worst-case ~3.5 weeks stale%s). Weinstein "
+               "ch.7: 3-4x is normal for heavily-shorted names, >=5x is squeeze fuel "
+               "(Bowmar ~10x squeezed 20->45; HSN 31x squeezed 18->282), >=10x excluded. "
+               "Informational chip; the 10x exclusion is the only gate."
+               % (f"; asof {m['dtc_asof']}" if m.get("dtc_asof") else ""))
+        if dtc is None:
+            body = "<span style='color:var(--text-2);'>n/a · flag (both sources failed)</span>"
+        elif dtc >= 5:
+            spf = m.get("short_pct_float")
+            body = ("<span style='color:var(--red);font-weight:600;'>%.1fx — squeeze risk</span>%s"
+                    % (dtc, f" · {spf}% of float short" if spf else ""))
+        else:
+            body = "%.1fx (%s)" % (dtc, m.get("dtc_src") or "?")
+        return ("<div class='edge-line' title='" + esc(tip) + "'>"
+                "<span class='lbl'>DTC</span> " + body + "</div>")
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 # ---- ETF RS percentile (Stage-2 ETF leg, 2026-07-15) ------------------------
@@ -3676,6 +4533,14 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
                 **_tl_quality(hist_df, c["entry"], "long"),
                 **_ch_quality(hist_df, c["entry"], "long"),
                 **_line_break_watch(hist_df, c["close"]),
+                **_pba_advance(hist_df, c["entry"]),
+                # scan-time 5-day volume base for the next-morning VOL grading
+                # read (S1 study 2026-07-17: trigger-day vol >= 2x prior-5-td avg
+                # -> +15.6/+23.0pp win-1R both eras; display/log only, 94% of
+                # monsters trigger under 2x so this must NEVER gate).
+                "vol_base5": (round(float(hist_df["Volume"].iloc[-5:].mean()), 0)
+                              if len(hist_df) >= 5 and float(hist_df["Volume"].iloc[-5:].mean()) > 0
+                              else None),
             }
             # Lesson-refined plan BEFORE the chart, so entry/stop overlays, the
             # IBKR order plan and the trackers all carry the SAME refined plan.
@@ -3689,7 +4554,7 @@ def scan_coil(rs_map: dict, market_modifier: float, diag: Diagnostics,
                 stock_data["status_labels"] = _labs
             # Candlestick chart AFTER the engine merge so the payload can draw
             # the lesson levels (SR zone, PB trigger/stop, TL/CH diagonals).
-            stock_data["spark"] = make_candle_chart(hist_df, stock_data, 60)
+            stock_data["spark"] = make_candle_chart(hist_df, stock_data, CHART_WINDOW)
 
             is_tight_flag_3d = meta_score_data.get("is_flag", False)
             is_tight_1d = c["is_tight_1d"]
@@ -4014,7 +4879,8 @@ def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
         meta_score_data = calculate_meta_momentum_score(meta_input, df)
         meta_score, _raw_scores = _ranking_meta_score_ex(df, meta_score_data["score"], market_modifier)
 
-        spark = make_candle_chart(df, {"entry": entry, "stop": stop}, 60) if len(df) >= 2 else ""
+        spark = (make_candle_chart(df, _chart_plan({"entry": entry, "stop": stop}, df), CHART_WINDOW)
+                 if len(df) >= 2 else "")
         footprint = analyze_footprint(df)
         trendline_data = calculate_trendline_analysis(t, df)
         theme = get_theme(t, m.get("industry", "N/A"))
@@ -4060,6 +4926,13 @@ def scan_htf(rs_map: dict, market_modifier: float, diag: Diagnostics,
             "pb_entry": None, "pb_stop": None, "pb_risk": None, "ema9": ema9,
             "below_20dma": below_20dma, "below_50dma": below_50dma,
             "days_since_high": days_since_high, "is_htf": True,
+            # HTF fires merge straight into Tier A+ and render with the coil card
+            # spec, so they need the same two scan-time stamps coil rows get
+            # (2026-07-18 review): without vol_base5 their next-session VOL read
+            # is silently None, and without pba_pct the PBA chip can never fire.
+            **_pba_advance(df, entry),
+            "vol_base5": (round(float(V[-5:].mean()), 0)      # V is a numpy array here
+                          if len(V) >= 5 and float(V[-5:].mean()) > 0 else None),
         })
 
     log.info("HTF v2.4.1: %d candidates scanned, %d fires, %d cooldown-suppressed",
@@ -4243,7 +5116,10 @@ def attach_ants(stocks: List[dict], diag: Optional[Diagnostics] = None,
     """Post-scan pass: tag each coil A-list stock with its ANTS read
     (ants_level / ants_chain / ants_label / ants_ok / ants_rs_rising). Mirrors
     attach_persistence — one 2y-history batch (+ ^GSPC) over the displayed tier
-    members. Decision-support only; never touches the IBKR draft plan."""
+    members. Also attaches the Weinstein Phase-1 chips (2026-07-16): Mansfield
+    zero-cross (mans_*), weekly stage (wk_*) and overhead-supply zone (oh_*) —
+    all additive display keys. Decision-support only; never touches the IBKR
+    draft plan."""
     if not stocks:
         return
     if hist is None:
@@ -4264,6 +5140,10 @@ def attach_ants(stocks: List[dict], diag: Optional[Diagnostics] = None,
         s["rs_new_high"] = a["rs_new_high"]
         s["rs_nh_before_price"] = a["rs_nh_before_price"]
         s["rs_ok"] = bool(a["rs_spark_vals"])   # RS line was computable (benchmark aligned)
+        # Weinstein Phase-1 chips (additive keys via the shared helper — the
+        # same attachment runs on NH-52wk and Lesson Radar rows through
+        # attach_weinstein, per the 2026-07-17 review).
+        _weinstein_keys(s, hist.get(s["ticker"]), spy_close)
 
 
 def _classify_new_high(fp: dict, ext50: Optional[float], p3m: float) -> Tuple[str, str]:
@@ -4328,8 +5208,9 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
     if not tickers:
         return {"green": [], "total": 0, "clusters": []}
     # 2y history so each of the last ~63 sessions has a full 252-bar 52wk lookback
-    # for the persistence (recurring-new-high) computation.
-    hist_map = fetch_histories_batch(tickers, period="2y", min_rows=60)
+    # for the persistence (recurring-new-high) computation. ^GSPC rides along for
+    # the Weinstein MRS chip (2026-07-17 fix: NH rows never pass attach_ants).
+    hist_map = fetch_histories_batch(tickers + [ANTS_BENCHMARK], period="2y", min_rows=60)
 
     rows: List[dict] = []
     confirmed: List[str] = []                 # ALL genuine new-high names (for daily monitor)
@@ -4402,7 +5283,13 @@ def scan_new_highs(rs_map: dict, market_modifier: float, diag: Diagnostics) -> d
         })
         _lesson_plan(rows[-1])          # refined plan before chart (one plan everywhere)
         rows[-1]["lesson_confluence"] = _lesson_confluence(rows[-1])
-        rows[-1]["spark"] = make_candle_chart(df, rows[-1], 60)
+        rows[-1]["spark"] = make_candle_chart(df, _chart_plan(rows[-1], df), CHART_WINDOW)
+
+    # Weinstein chips for the displayed NH rows (2026-07-17 review fix: these
+    # rows never pass attach_ants, so the chips were dead code here before).
+    _spy_df = hist_map.get(ANTS_BENCHMARK)
+    attach_weinstein(rows, diag, hist=hist_map,
+                     spy_close=_spy_df["Close"] if _spy_df is not None else None)
 
     # Persistent leaders first (relentless > persistent > none), then by M.E.T.A.
     p_rank = {"R": 2, "P": 1, "": 0}
@@ -4520,7 +5407,7 @@ def scan_nh52_pullbacks(history: dict, rs_map: dict, diag: Diagnostics,
             "spark": "",
             **_pb2_quality(df),
         })
-        monitored[-1]["spark"] = make_candle_chart(df, monitored[-1], 60)
+        monitored[-1]["spark"] = make_candle_chart(df, _chart_plan(monitored[-1], df), CHART_WINDOW)
 
     order = {"GRN": 0, "RED": 1, "HOLD": 2}
     monitored.sort(key=lambda x: (order.get(x["tag"], 9), x["days_since_high"]))
@@ -4593,6 +5480,19 @@ def scan_hve(hve_history: dict, diag: Diagnostics) -> List[dict]:
                 "day1_low": low, "day1_close": close, "rel_vol": rel_vol, "change": change,
             }
         ep_matches.sort(key=lambda x: x["rel_vol"], reverse=True)
+        # v9: HVE cards carry a candle chart. Screener rows hold no history, so
+        # fetch a small batch here (list is tiny; recent IPOs may return few
+        # bars — min_rows low, and a missing frame just means no chart).
+        if ep_matches:
+            try:
+                _hmap = fetch_histories_batch([m["ticker"] for m in ep_matches],
+                                              period="1y", min_rows=30)
+                for m in ep_matches:
+                    _hd = _hmap.get(m["ticker"])
+                    if _hd is not None:
+                        m["spark"] = make_candle_chart(_hd, _chart_plan(m, _hd), CHART_WINDOW)
+            except Exception as exc:  # noqa: BLE001 — chart is decoration, never fatal
+                diag.warn(f"HVE sparks skipped: {exc}")
     except Exception as exc:  # noqa: BLE001
         diag.error(f"HVE scan: {exc}")
     return ep_matches
@@ -4657,6 +5557,17 @@ def scan_ur(hve_history: dict, ep_matches: List[dict], diag: Diagnostics) -> Lis
             except Exception:  # noqa: BLE001
                 continue
         ur_matches.sort(key=lambda x: (x["vol_contraction"], x["days_since_hve"]))
+        # v9: U&R cards carry a candle chart (same tiny-batch pattern as HVE)
+        if ur_matches:
+            try:
+                _hmap = fetch_histories_batch([m["ticker"] for m in ur_matches],
+                                              period="1y", min_rows=30)
+                for m in ur_matches:
+                    _hd = _hmap.get(m["ticker"])
+                    if _hd is not None:
+                        m["spark"] = make_candle_chart(_hd, _chart_plan(m, _hd), CHART_WINDOW)
+            except Exception as exc:  # noqa: BLE001 — chart is decoration, never fatal
+                diag.warn(f"U&R sparks skipped: {exc}")
     except Exception as exc:  # noqa: BLE001
         diag.error(f"U&R scan: {exc}")
     return ur_matches
@@ -4765,7 +5676,177 @@ def scan_parabolic_short(diag: Diagnostics) -> List[dict]:
         if sig:
             shorts.append(sig)
     shorts.sort(key=lambda x: x["dist9"], reverse=True)
-    return shorts[:15]
+    shorts = shorts[:15]
+    # v9: short cards carry a candle chart — history already in memory
+    for s in shorts:
+        _hd = hist_map.get(s["ticker"])
+        if _hd is not None:
+            s["spark"] = make_candle_chart(_hd, _chart_plan(s, _hd, direction="short"), CHART_WINDOW)
+    return shorts
+
+
+def _stage4_short_signal(hist_df, ticker: str, meta: dict, rs_pct,
+                         ind_rec: Optional[dict], bench_close) -> Optional[dict]:
+    """Weinstein ch.7 Stage-4 breakdown candidate. Gates (NO volume condition
+    anywhere — ch.2/ch.7 asymmetry: breakdowns are valid on light volume):
+    1. Stage 4: price below the 30wk MA, MA flat-to-declining (slope <= +0.5).
+    2. Inverted RS: rs_pct <= 25 OR RS-line falling swing-over-swing
+       (fail-CLOSED on missing data — see _rs_line_swings_down).
+    3. Weak group: industry RS percentile <= 25 (unmapped = excluded).
+    4. Entry near the shelf: at/just breaking the 45-bar support low, not
+       already collapsed (anti-chase).
+    Returns the card dict or None."""
+    try:
+        if hist_df is None or len(hist_df) < 190:
+            return None
+        st = _stage_read(hist_df)
+        _slope = st.get("wk_ma_slope") if st else None
+        if not st or st.get("wk_above_ma") is not False or _slope is None or _slope > 0.5:
+            return None
+        rs_ok = isinstance(rs_pct, int) and rs_pct <= 25
+        rs_line_down = None
+        if not rs_ok:
+            down_ok, evaluated = _rs_line_swings_down(hist_df, bench_close)
+            rs_line_down = bool(down_ok and evaluated)
+            if not rs_line_down:
+                return None
+        if not ind_rec or ind_rec.get("pct") is None or ind_rec["pct"] > 25:
+            return None
+        close = float(hist_df["Close"].iloc[-1])
+        support_low = float(hist_df["Low"].iloc[-45:-5].min())
+        if support_low != support_low or support_low <= 0:
+            return None
+        if not (support_low * 0.97 <= close <= support_low * 1.08):
+            return None                       # not at the shelf / already gone
+        entry = round(support_low - 0.10, 2)
+        swing = _swing_rule_target(hist_df, support_low) or {}
+        # ch.7 pattern filter 1: demand a substantial prior advance above the
+        # breakdown (a top, not a flat Stage-1 base — Weinstein: a base is
+        # where you COVER; a top after a flat stage 2 only retraces to its
+        # nearby base). Peak of the top window must be >=30% above the shelf.
+        if not swing.get("peak") or swing["peak"] < support_low * 1.30:
+            return None
+        # protective buy-stop: nearest confirmed rally peak above close in the
+        # last 60 sessions (same +-3 pivot form as the LINE chip); fallback =
+        # the 30wk-MA value.
+        H = hist_df["High"].values.astype(float)
+        n = len(H)
+        raw_stop = None
+        piv = [i for i in range(max(3, n - 60), n - 3)
+               if H[i] == H[i - 3:i + 4].max() and H[i - 3:i + 4].argmax() == 3]
+        cand = [H[i] for i in piv if H[i] > close]
+        if cand:
+            raw_stop = float(min(cand))
+            basis = "rally peak $%.2f" % raw_stop
+        else:
+            wk_ma = hist_df["Close"].resample("W-FRI").last().rolling(30).mean().dropna()
+            if not len(wk_ma):
+                return None
+            raw_stop = float(wk_ma.iloc[-1])
+            basis = "30wk MA $%.2f" % raw_stop
+        buy_stop = _round_buy_stop(raw_stop)
+        risk_pct = round((buy_stop - entry) / entry * 100.0, 1)
+        if risk_pct > 20:                     # ch.7 stop-distance screen
+            return None
+        tgt = swing.get("target_swing")
+        return {
+            "ticker": ticker, "close": round(close, 2),
+            "adr": meta.get("adr"), "perf_1m": meta.get("p1m"),
+            "perf_6m": meta.get("p6m"), "theme": meta.get("theme"),
+            "sector": meta.get("sector") or "N/A",
+            "short_style": "stage4",
+            "wk_stage": st.get("wk_stage"), "wk_ma_slope": st.get("wk_ma_slope"),
+            "rs_pct": (rs_pct if isinstance(rs_pct, int) else None),
+            "rs_line_down": rs_line_down,
+            "ind_rs": ind_rec["pct"], "ind_name": ind_rec.get("industry"),
+            "support_low": round(support_low, 2),
+            "peak": swing.get("peak"), "target_swing": tgt,
+            "to_target_pct": (round((entry - tgt) / entry * 100.0, 1) if tgt else None),
+            "entry": entry, "stop": buy_stop, "buy_stop_basis": basis,
+            "risk_pct": risk_pct,
+            **_sr_quality(hist_df, entry, "short"),
+            **_tl_quality(hist_df, entry, "short"),
+            **_ch_quality(hist_df, entry, "short"),
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def scan_stage4_short(diag: Diagnostics, rs_map: dict,
+                      industry_by_ticker: Dict[str, dict]) -> List[dict]:
+    """Weinstein ch.7 STAGE-4 BREAKDOWN short leg (2026-07-17). Display-only:
+    rows carry section='short' so every learning loop keeps skipping them and
+    they can never reach the IBKR order plan (write_order_plan consumes coil
+    tiers only)."""
+    payload = {
+        "filter": [
+            {"left": "type", "operation": "in_range", "right": ["stock", "dr"]},
+            {"left": "close", "operation": "greater", "right": 10},
+            {"left": "average_volume_30d_calc", "operation": "greater", "right": 1000000},
+            {"left": "market_cap_basic", "operation": "greater", "right": 2000000000},
+            {"left": "close", "operation": "less", "right": "SMA200"},
+            {"left": "ADRP", "operation": "egreater", "right": 1.5},
+        ],
+        "columns": ["name", "close", "ADRP", "Perf.1M", "Perf.6M", "industry", "sector"],
+        "sort": {"sortBy": "Perf.6M", "sortOrder": "asc"},   # weakest first
+        "range": [0, 800],
+    }
+    meta_map: Dict[str, dict] = {}
+    tickers: List[str] = []
+    try:
+        time.sleep(2)
+        data = tv_post(payload, label="stage4_short", diag=diag)
+        for row in data.get("data", []):
+            d = row.get("d")
+            if not d or len(d) < 7:
+                continue
+            tk, close, adr, p1m, p6m, industry, sector = d
+            if close is None:
+                continue
+            # weak-group pre-filter saves history fetches (gate 3 re-checked in
+            # the signal builder)
+            rec = industry_by_ticker.get((tk or "").upper().replace(".", "-"))
+            if not rec or rec.get("pct") is None or rec["pct"] > 25:
+                continue
+            tickers.append(tk)
+            meta_map[tk] = {"adr": adr, "p1m": p1m, "p6m": p6m,
+                            "theme": get_theme(tk, industry), "sector": sector}
+    except Exception as exc:  # noqa: BLE001
+        diag.warn(f"Stage-4 short scan (fetch/parse): {exc}")
+        return []
+    if not tickers:
+        return []
+    tickers = tickers[:120]   # stated cap: first 120 weak-group survivors
+    hist_map = fetch_histories_batch(tickers + [ANTS_BENCHMARK], period="2y", min_rows=190)
+    bench_df = hist_map.get(ANTS_BENCHMARK)
+    bench_close = bench_df["Close"] if bench_df is not None else None
+    rows: List[dict] = []
+    for tk in tickers:
+        hd = hist_map.get(tk)
+        if hd is None or is_dead_pinned(hd):
+            continue
+        sig = _stage4_short_signal(hd, tk, meta_map.get(tk) or {},
+                                   rs_map.get(tk.upper()),
+                                   industry_by_ticker.get(tk.upper().replace(".", "-")),
+                                   bench_close)
+        if sig:
+            rows.append(sig)
+    rows.sort(key=lambda r: (r.get("ind_rs") or 99, r.get("rs_pct") if r.get("rs_pct") is not None else 99))
+    rows = rows[:10]          # display cap (stated)
+    # days-to-cover only for the bounded final survivors (yf .info is slow)
+    dtc = _dtc_lookup([r["ticker"] for r in rows], diag)
+    keep: List[dict] = []
+    for r in rows:
+        r.update(dtc.get(r["ticker"], {}))
+        if r.get("dtc") is not None and r["dtc"] >= 10:
+            continue                          # ch.7 exclusion: >=10x squeeze fuel
+        keep.append(r)
+    # v9: stage-4 cards carry a candle chart — 2y history already in memory
+    for r in keep:
+        _hd = hist_map.get(r["ticker"])
+        if _hd is not None:
+            r["spark"] = make_candle_chart(_hd, _chart_plan(r, _hd, direction="short"), CHART_WINDOW)
+    return keep
 
 
 # ----------------------------------------------------------------------------
@@ -4776,26 +5857,31 @@ PAGE_CSS = """
        Hex values mirror the Python palette constants next to _MA_SPEC —
        keep the two blocks in sync. */
     :root {
-      /* neutrals — warm graphite, no blue cast */
-      --bg:#111113; --surface:#18181b; --raised:#1f1f23; --hover:#232327;
-      --line:#26262b; --line-2:#36363c;
-      --text:#ececea; --text-2:#b4b4ae; --text-3:#82827c;
-      /* ONE accent — desaturated sky */
+      /* neutrals — v9: the ratified dark skin (rev-8 artifacts). Cool graphite-
+         blue ground; same token NAMES so every legacy var() keeps working. */
+      --bg:#0b0e12; --surface:#12161c; --raised:#161b22; --hover:#1a2027;
+      --line:#1a2027; --line-2:#232a33;
+      --text:#e6edf3; --text-2:#b7c0c9; --text-3:#8b949e;
+      /* structural accent — desaturated sky (NOT the act cyan) */
       --accent:#8cb4d6; --accent-2:#aecfe8; --tint-accent:rgba(140,180,214,.08);
       --tint-accent-2:rgba(140,180,214,.16);
+      /* act cyan — strictly interactive / "you are here" (v9 discipline) */
+      --act:#4cc2ff; --act-bd:#2b5a75; --tint-act:rgba(76,194,255,.10);
+      --tier:#3fb68b; --flag-ink:#7da9c4; --flag-bd:#31404d;
       /* semantic trio — trading load-bearing only */
-      --up:#54b87f;   --tint-up:rgba(84,184,127,.08);    --bd-up:#2f6b4b;
-      --down:#e06c6a; --tint-down:rgba(224,108,106,.08); --bd-down:#8a4341;
-      --warn:#d3a04d; --tint-warn:rgba(211,160,77,.08);  --bd-warn:#7d6231;
+      --up:#33d17a;   --tint-up:rgba(51,209,122,.08);    --bd-up:#2f6b4b;
+      --down:#ff5c5c; --tint-down:rgba(255,92,92,.08);   --bd-down:#8a4341;
+      --warn:#d9a83c; --tint-warn:rgba(217,168,60,.08);  --bd-warn:#7d6231;
       /* migration aliases — every legacy var() reference keeps working */
       --green:var(--up); --red:var(--down); --yellow:var(--warn);
       --bd-green:var(--bd-up); --bd-red:var(--bd-down); --bd-yellow:var(--bd-warn);
       --bd-accent:var(--accent); --tint-green:var(--tint-up);
       --tint-red:var(--tint-down); --tint-yellow:var(--tint-warn);
-      /* candlestick chart — HOLLOW candles: light grey = up, light red = down
-         (USER 2026-07-06 round 2: minimal palette, no fills) */
-      --candle-up:#b6bdc4; --candle-down:#e57373; --vol-ma:#9aa4ae;
-      --chart-grid:#232327; --chart-axis:#82827c;
+      /* candlestick chart — TRUE 4-state hollow candles (v9): neutral slate up,
+         red down; colour = close vs prev close, hollow/filled = close vs open */
+      --candle-up:#9aa7b3; --candle-down:#ff5c5c; --vol-ma:#9aa4ae;
+      --chart-grid:#1f2630; --chart-axis:#8b949e;
+      /* MA colours unchanged — the learned 10=blue / 20=gold / 50=grey mapping */
       --ma-fast:#8cb4d6; --ma-mid:#d3a04d; --ma-slow:#6b6b74;
       --mono:ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
       --fs-micro:0.6875rem; --fs-caption:0.75rem; --fs-table:0.8125rem;
@@ -4819,7 +5905,7 @@ PAGE_CSS = """
               position:sticky; top:8px; z-index:10; }
     #search:focus { outline:none; border-color:var(--accent); }
 
-    .market-panel { background-color:var(--surface); border-radius:8px; padding:15px; margin-bottom:24px; border:1px solid var(--line); border-left:4px solid var(--accent); }
+    .market-panel { background-color:var(--surface); border-radius:8px; padding:15px; margin-bottom:24px; border:1px solid var(--line); }
     .market-title { color:var(--accent); font-weight:600; font-size:var(--fs-title); text-transform:uppercase; margin-bottom:10px; }
     .market-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:15px; }
     .market-card { background-color:var(--raised); padding:10px; border-radius:8px; }
@@ -4838,14 +5924,14 @@ PAGE_CSS = """
     .reg-sig-w > summary::-webkit-details-marker { display:none; }
     .reg-sig-w[open] .reg-sig { background:var(--raised); }
     .reg-exp { font-size:var(--fs-caption); color:var(--text-3); line-height:1.5; max-width:420px;
-               margin:4px 2px 4px 8px; padding:4px 8px; border-left:2px solid #2a2a30; }
+               margin:4px 2px 4px 8px; padding:4px 8px; }
     .reg-note { margin-top:8px; font-size:var(--fs-caption); color:var(--text-2); line-height:1.6; }
     .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:4px; vertical-align:1px; }
     .dot-g { background:var(--green); } .dot-y { background:var(--yellow); } .dot-r { background:var(--red); } .dot-i { background:var(--text-3); }
 
     .toppicks { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 24px; }
     .tp-card { flex:1 1 190px; min-width:180px; background:var(--surface); border:1px solid var(--line);
-               border-top:2px solid var(--line-2); border-radius:var(--r-card); padding:11px 13px; }
+               border:1px solid var(--line); border-radius:var(--r-card); padding:11px 13px; }
     .tp-card.t-aplus { border-top-color:var(--up); }
     .tp-card.t-a { border-top-color:var(--warn); }
     .tp-card.t-aminus { border-top-color:var(--down); }
@@ -4913,7 +5999,7 @@ PAGE_CSS = """
     .bg-a .tdot { background:var(--warn); }
     .bg-aminus .tdot, .bg-hve .tdot, .bg-short .tdot { background:var(--down); }
 
-    details.mindset { background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--bd-accent); border-radius:8px; padding:10px 16px; margin:0 0 24px; }
+    details.mindset { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:10px 16px; margin:0 0 24px; }
     details.mindset summary { cursor:pointer; color:var(--accent-2); font-weight:600; font-size:var(--fs-body); list-style:none; }
     details.mindset summary::-webkit-details-marker { display:none; }
     details.mindset ul { margin:10px 0 2px; padding-left:20px; }
@@ -5003,15 +6089,13 @@ PAGE_CSS = """
     .fund-up { color:#54b87f; } .fund-dn { color:#e06c6a; } .fund-flat, .fund-na { color:var(--text-3); }
     .fund-src { color:var(--text-3); font-size:10px; margin-top:3px; opacity:.7; }
     .spark { margin-top:4px; }
-    /* candlestick chart cell: JSON payload rendered lazily by CANDLE_JS */
+    /* candlestick chart cell: JSON payload rendered lazily by CANDLE_JS.
+       v9: chart height is width-independent (262px deck geometry), so the
+       lazy placeholder is a fixed height — no layout jump on render. The
+       OHLCV readout lives in the chart's reserved band (no floating tip). */
     .cchart { margin-top:4px; width:100%; max-width:340px; }
-    .cchart:empty { aspect-ratio:340/220; background:var(--raised); border-radius:var(--r-card); opacity:.45; }
-    .cchart svg { display:block; width:100%; height:auto; }
-    .cc-tip { position:fixed; z-index:99; pointer-events:none; display:none; white-space:nowrap;
-              background:var(--raised); border:1px solid var(--line-2); border-radius:var(--r-card);
-              padding:6px 9px; font:11px var(--mono); color:var(--text);
-              box-shadow:0 4px 14px rgba(0,0,0,.4); }
-    .cc-tip b { color:var(--text-2); font-weight:500; }
+    .cchart:empty { height:262px; background:var(--raised); border-radius:var(--r-card); opacity:.45; }
+    .cchart svg { display:block; width:100%; height:auto; touch-action:pan-y; }
     .livebtn { cursor:pointer; font:inherit; border:1px solid var(--bd-accent) !important; color:var(--accent-2) !important; background:var(--tint-accent) !important; min-width:9.5em; min-height:32px; }
     .livebtn:disabled { opacity:0.6; cursor:wait; }
     .lp { transition:color .25s; font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:var(--fs-title); font-weight:700; }
@@ -5149,6 +6233,124 @@ PAGE_CSS = """
       .bigpic-wrap { grid-template-columns:1fr; }
       .t10-grid { grid-template-columns:1fr; }
     }
+
+    /* ================= v9 — chart-first cards + Foldable Desk ================= */
+    body.v9 #search { position:static; }   /* the secnav is the sticky bar in v9 */
+    .vchip { display:inline-flex; align-items:center; gap:3px; font:600 10px/1 var(--mono); letter-spacing:.06em;
+             text-transform:uppercase; border:1px solid var(--flag-bd); color:var(--flag-ink);
+             border-radius:4px; padding:3px 6px; white-space:nowrap; }
+    .tier-chip { border-color:var(--tier); color:var(--tier); font-weight:700; }
+    .secnav { position:sticky; top:0; z-index:12; background:var(--bg); margin:0 0 14px; padding:8px 0 6px;
+              border-bottom:1px solid var(--line-2); }
+    .secnav-in { display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    .navchip { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; min-height:44px;
+               border:1px solid var(--line-2); border-radius:999px; padding:0 13px;
+               font:500 12px/1 var(--mono); color:var(--text-2); text-decoration:none;
+               background:var(--surface); cursor:pointer; -webkit-tap-highlight-color:transparent; }
+    .navchip b { color:var(--text); font-weight:600; }
+    .navchip:hover { border-color:var(--act-bd); color:var(--act); }
+    .navchip:focus-visible { border-color:var(--act-bd); color:var(--act); outline:2px solid var(--act-bd); outline-offset:2px; }
+    /* REV 10 global chart controls: timeframe + grid density (secnav row 2) */
+    .secnav-ctl { margin-top:6px; gap:10px; }
+    .ctlgrp { flex:0 0 auto; display:inline-flex; border:1px solid var(--line-2);
+              border-radius:9px; overflow:hidden; background:var(--surface); }
+    .ctlbtn { min-height:34px; min-width:38px; border:0; background:transparent; cursor:pointer;
+              font:600 12px/1 var(--mono); color:var(--text-3); padding:0 10px;
+              -webkit-tap-highlight-color:transparent; }
+    .ctlbtn + .ctlbtn { border-left:1px solid var(--line-2); }
+    .ctlbtn:hover { color:var(--text); }
+    .ctlbtn.on { background:var(--tint-act); color:var(--act); }
+    .ctlbtn:focus-visible { outline:2px solid var(--act-bd); outline-offset:-2px; }
+    /* grid density — cards tile; dense modes shed everything but the chart so a
+       wall of charts stays readable (USER: "3x3 or 4x4 charts per screen") */
+    .cardlist.gcols { display:grid; gap:10px; }
+    .cardlist.gcols .card { margin:0; }
+    .cardlist.g2 { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .cardlist.g3 { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .cardlist.g4 { grid-template-columns:repeat(4,minmax(0,1fr)); }
+    .cardlist.gcols .fold, .cardlist.gcols .cardlines, .cardlist.gcols .card-flags { display:none; }
+    .cardlist.g3 .card-head .lp-sub, .cardlist.g4 .card-head .lp-sub { display:none; }
+    @media (max-width:640px) {
+      .cardlist.g3, .cardlist.g4 { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    }
+    .secv9 { scroll-margin-top:64px; }
+    .sec-n { font-family:var(--mono); color:var(--text-3); font-weight:600; margin-left:8px; font-size:var(--fs-caption); }
+    .cardlist { max-height:none !important; overflow:visible !important; background:transparent; border:none; padding:2px 0 6px; }
+    .card { background:var(--surface); border:1px solid var(--line-2); border-radius:14px;
+            padding:12px 12px 12px; margin:0 0 14px; content-visibility:auto; contain-intrinsic-size:auto 520px; }
+    .card-empty { color:var(--text-3); font-size:var(--fs-table); padding:16px; contain-intrinsic-size:auto 60px; }
+    .card-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+    .card-head .ticker { position:static; }
+    .card-head .ticker a { font-family:var(--mono); font-size:18px; font-weight:800; letter-spacing:.02em;
+                           color:var(--text); text-decoration:none; }
+    .card-head .ticker a:hover { color:var(--act); }
+    .card-head .ticker a:focus-visible { color:var(--act); outline:2px solid var(--act-bd); outline-offset:2px; }
+    .card-head .lp { font-size:var(--fs-table); border:1px solid var(--line-2); border-radius:5px; padding:2px 7px; }
+    .card-flags { margin-left:auto; display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+    .card .cchart { max-width:none; width:calc(100% + 24px); margin:4px -12px 0; }
+    .card .cchart:empty { height:262px; }
+    .cardlines { margin-top:8px; }
+    .fold { margin-top:10px; }
+    .fold > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px;
+                      border:1px solid var(--line); border-radius:9px; background:var(--raised);
+                      padding:0 12px; min-height:44px; font:600 10px/1 var(--mono); letter-spacing:.1em;
+                      text-transform:uppercase; color:var(--text-3);
+                      -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
+    .fold > summary::-webkit-details-marker { display:none; }
+    .fold .chev { margin-left:auto; transition:transform .15s ease; font-size:10px; }
+    .fold[open] > summary .chev { transform:rotate(90deg); }
+    @media (prefers-reduced-motion: reduce) { .fold .chev { transition:none; } }
+    .foldin { margin-top:10px; display:flex; flex-direction:column; gap:10px; }
+    .vplan { margin:0; }
+    .stat6 { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line-2);
+             border:1px solid var(--line-2); border-radius:9px; overflow:hidden; }
+    .stat6 .sc { background:var(--raised); padding:7px 9px; }
+    .stat6 .sl { display:block; font:600 9px/1 var(--mono); letter-spacing:.06em; text-transform:uppercase;
+                 color:var(--text-3); margin-bottom:4px; }
+    .stat6 .sv { font-family:var(--mono); font-size:12.5px; color:var(--text); font-variant-numeric:tabular-nums; }
+    .sv.up { color:var(--green); } .sv.dn { color:var(--red); }
+    .ctxline { font-family:var(--mono); font-size:11px; line-height:1.7; color:var(--text-3); }
+    .ctxline .up { color:var(--green); } .ctxline .dn { color:var(--red); } .ctxline .warn { color:var(--yellow); }
+    .chiprow { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+    .fundrow .sumhint { color:var(--text-3); font-size:var(--fs-micro); }
+    .vnote { border:1px solid var(--bd-accent); background:var(--tint-accent);
+             border-radius:0 8px 8px 0; padding:10px 14px; font-size:var(--fs-table); }
+    .vnote-green { border-color:var(--bd-up); background:var(--tint-up); }
+    .vnote-t { font-weight:700; color:var(--accent-2); margin-bottom:4px; letter-spacing:.04em; }
+    .vnote-green .vnote-t { color:var(--green); }
+    .vnote-b { color:var(--text-2); line-height:1.6; }
+    @media (min-width:520px) { .stat6 { grid-template-columns:repeat(6,1fr); } }
+
+    /* ---- the Foldable Desk (v9 wide mode; body.desk set by matchMedia JS:
+       list right, ONE big card left — the cards never move in the DOM) ---- */
+    body.desk #deskwrap { display:grid; grid-template-columns:minmax(0,1fr) 312px; gap:14px; align-items:start; }
+    body.desk #desklist { display:block; position:sticky; top:8px; max-height:calc(100vh - 16px);
+                          max-height:calc(100dvh - 16px); overflow-y:auto; background:var(--surface);
+                          border:1px solid var(--line-2); border-radius:12px; }
+    body.desk #deck > * { display:none; }
+    body.desk #deck .secv9.has-active, body.desk #deck details.has-active { display:block; }
+    body.desk #deck .secv9.has-active:not(.desk-full) .card { display:none; }
+    body.desk #deck .secv9.has-active .card.desk-active { display:block; }
+    body.desk #deck details.has-active .card { display:none; }
+    body.desk #deck details.has-active .card.desk-active { display:block; }
+    body.desk .card.desk-active { border-color:var(--act-bd); contain-intrinsic-size:auto 900px; }
+    .dl-pos { position:sticky; top:0; z-index:2; background:var(--raised); padding:9px 12px;
+              font:700 10px/1 var(--mono); letter-spacing:.1em; color:var(--act);
+              border-bottom:1px solid var(--line-2); }
+    .dl-h { padding:9px 10px 6px; font:700 10px/1 var(--mono); letter-spacing:.09em; text-transform:uppercase;
+            color:var(--text-3); background:var(--bg); border-bottom:1px solid var(--line); }
+    .dl-row { display:flex; gap:8px; align-items:center; min-height:44px; padding:6px 10px; text-decoration:none;
+              color:var(--text); border-bottom:1px solid var(--line);
+              font-family:var(--mono); font-size:12px; box-sizing:border-box; }
+    .dl-row b { font-size:13.5px; font-weight:800; letter-spacing:.02em; }
+    .dl-row .dlr { color:var(--text-3); font-size:10.5px; }
+    .dl-row .dls { margin-left:auto; color:var(--text-2); font-variant-numeric:tabular-nums; }
+    .dl-row:hover { background:var(--hover); }
+    .dl-row:focus-visible { outline:2px solid var(--act-bd); outline-offset:-2px; }
+    .dl-row.active { background:var(--tint-act); }
+    .dl-row.active b { color:var(--act); }
+    .dl-sec b { color:var(--accent-2); font-size:12px; letter-spacing:.06em; text-transform:uppercase; }
+
 """
 
 PAGE_JS = """
@@ -5235,16 +6437,46 @@ async function refreshPrices(btn) {
     // (e.g. the 3/4 Lesson Radar) — open those so hits are visible
     if (q) {
       document.querySelectorAll('details.funnel').forEach(function (d) {
-        if (d.querySelector('table.rowcards')) d.open = true;
+        if (d.querySelector('table.rowcards, .card')) d.open = true;
       });
     }
-    document.querySelectorAll('table tr').forEach(function (tr) {
-      if (tr.querySelector('th')) return;
+    // v9: the ticker units are .card articles; legacy: table rows. One pass.
+    document.querySelectorAll('table tr, article.card').forEach(function (tr) {
+      if (tr.tagName === 'TR' && tr.querySelector('th')) return;
       if (tr.closest('.fund-tbl')) return;   // never hide nested fundamentals mini-table rows
-      var tickerCell = tr.querySelector('.ticker a, .ep-ticker a');
-      var okQ = !q || (tickerCell && tickerCell.textContent.toUpperCase().indexOf(q) !== -1);
+      var tk = tr.getAttribute('data-tk');
+      var tickerCell = tk ? null : tr.querySelector('.ticker a, .ep-ticker a');
+      var okQ = !q || (tk ? tk.toUpperCase().indexOf(q) !== -1
+                          : (tickerCell && tickerCell.textContent.toUpperCase().indexOf(q) !== -1));
       var okT = !activeTheme || (tr.getAttribute('data-sector') === activeTheme);
       tr.style.display = (okQ && okT) ? '' : 'none';
+    });
+    // mirror onto the Desk list (rows + group headers with no visible rows)
+    document.querySelectorAll('#desklist .dl-row').forEach(function (a) {
+      var tk2 = (a.getAttribute('data-tk') || '').toUpperCase();
+      var okQ2 = !q || tk2.indexOf(q) !== -1;
+      var okT2 = !activeTheme || (a.getAttribute('data-sector') === activeTheme);
+      a.style.display = (okQ2 && okT2) ? '' : 'none';
+    });
+    document.querySelectorAll('#desklist .dl-h').forEach(function (h) {
+      var n = h.nextElementSibling, any = false;
+      while (n && !n.classList.contains('dl-h')) {
+        if (n.classList.contains('dl-row') && n.style.display !== 'none') { any = true; break; }
+        n = n.nextElementSibling;
+      }
+      h.style.display = any ? '' : 'none';
+    });
+    // whole card sections whose every card is filtered out: hide the title bar
+    // too so a search doesn't leave a column of empty section headers
+    var filtering = !!q || !!activeTheme;
+    document.querySelectorAll('.secv9').forEach(function (sec) {
+      if (!filtering) { sec.style.display = ''; return; }
+      var cardsIn = sec.querySelectorAll('article.card');
+      // non-card sections (top picks / tracking study) stay; a section whose
+      // only content is an empty-state card ("No HVE today") hides on filter.
+      if (!cardsIn.length && !sec.querySelector('.card-empty')) { sec.style.display = ''; return; }
+      var anyVis = Array.prototype.some.call(cardsIn, function (c) { return c.style.display !== 'none'; });
+      sec.style.display = anyVis ? '' : 'none';
     });
     document.querySelectorAll('.theme-chip').forEach(function (c) {
       if (c.id === 'themeClear') return;
@@ -5367,7 +6599,7 @@ async function refreshPrices(btn) {
   // tab bar; adversarial review 2026-07-07).
   (function () {
     var secs = {};
-    Array.prototype.forEach.call(document.querySelectorAll('table tr[data-sector]'), function (r) {
+    Array.prototype.forEach.call(document.querySelectorAll('table tr[data-sector], article.card[data-sector]'), function (r) {
       secs[r.getAttribute('data-sector')] = 1;
     });
     Array.prototype.forEach.call(document.querySelectorAll('.theme-chip[data-sector]'), function (ch) {
@@ -5380,6 +6612,7 @@ async function refreshPrices(btn) {
   // OFF (default): a tap sorts by one column, exactly as before. ON: each header tap
   // ADDS a tier (primary, then secondary…); tapping an active tier flips its arrow.
   (function () {
+    if (!document.querySelector('table.rowcards')) return;   // v9 card layout: no sortable stock tables
     var btn = document.createElement('button');
     btn.id = 'multiSortToggle';
     btn.type = 'button';
@@ -5643,6 +6876,220 @@ async function refreshPrices(btn) {
     t.parentNode.insertBefore(bar, t.parentNode.firstChild);
   });
 })();
+
+(function () {
+  // ---- v9: expand/collapse-all folds (default closed; no-teaser ruling) ----
+  var fa = document.getElementById('foldAll');
+  if (fa) {
+    fa.addEventListener('click', function () {
+      var open = fa.getAttribute('data-open') !== '1';
+      document.querySelectorAll('#deck details.fold').forEach(function (d) { d.open = open; });
+      fa.setAttribute('data-open', open ? '1' : '0');
+      fa.textContent = open ? 'collapse all ▾' : 'expand all ▸';
+    });
+  }
+
+  // ---- REV 10: global timeframe + grid-density controls (secnav row 2) ----
+  function mark(btn, attr) {
+    var grp = btn.parentNode;
+    grp.querySelectorAll('.ctlbtn').forEach(function (b) { b.classList.toggle('on', b === btn); });
+  }
+  document.querySelectorAll('.ctlbtn[data-tf]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      mark(b);
+      if (window.__candle && window.__candle.setTF) {
+        window.__candle.setTF(parseInt(b.getAttribute('data-tf'), 10) || 0);
+      }
+    });
+  });
+  document.querySelectorAll('.ctlbtn[data-cols]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      mark(b);
+      var n = parseInt(b.getAttribute('data-cols'), 10) || 1;
+      document.querySelectorAll('#deck .cardlist').forEach(function (cl) {
+        cl.classList.remove('gcols', 'g2', 'g3', 'g4');
+        if (n > 1) { cl.classList.add('gcols', 'g' + n); }
+      });
+      // cards changed width -> repaint so each SVG matches its new box
+      if (window.__candle && window.__candle.setTF) {
+        window.__candle.setTF(window.__candle.getTF());
+      }
+    });
+  });
+})();
+
+(function () {
+  // ---- v9 Foldable Desk: wide screens (unfolded 8-inch / desktop) become
+  // master-detail — ticker list right, ONE big card left. The cards never
+  // move; the Desk is a class-driven view over the #deck DOM. Narrow keeps
+  // the stacked card deck untouched. ----
+  var deck = document.getElementById('deck'), list = document.getElementById('desklist');
+  if (!deck || !list) return;
+  var mq = window.matchMedia('(min-width: 769px)');
+  var GROUPS = [['aplus', 'A+'], ['a', 'A'], ['aminus', 'A−'], ['radar', 'Lesson Radar'],
+                ['radar3', 'Radar 3/4'], ['min', 'Minervini'], ['tri', 'Trilogy'],
+                ['hve', 'HVE'], ['ur', 'U&R'], ['short', 'Short'], ['s4', 'Stage-4'],
+                ['nh', '52W New Highs'], ['pull', '52W Pullback'], ['wk', 'Weekly Review']];
+  var SECTIONS = [['sec-top', 'Top Picks'], ['sec-study', 'Tracking Study']];
+  var rows = [], built = false, activeId = null, pos = null;
+
+  function buildList() {
+    if (built) return;
+    built = true;
+    var frag = document.createDocumentFragment();
+    pos = document.createElement('div');
+    pos.className = 'dl-pos';
+    frag.appendChild(pos);
+    GROUPS.forEach(function (g) {
+      var cards = deck.querySelectorAll('article.card[data-grp="' + g[0] + '"]');
+      if (!cards.length) return;
+      var h = document.createElement('div');
+      h.className = 'dl-h';
+      h.textContent = g[1] + ' · ' + cards.length;
+      frag.appendChild(h);
+      cards.forEach(function (c) {
+        if (!c.id) return;
+        var a = document.createElement('a');
+        a.className = 'dl-row';
+        a.href = '#' + c.id;
+        a.setAttribute('data-tk', c.getAttribute('data-tk') || '');
+        a.setAttribute('data-sector', c.getAttribute('data-sector') || '');
+        var sc = c.getAttribute('data-score') || '', rk = c.getAttribute('data-risk');
+        a.innerHTML = '<b>' + (c.getAttribute('data-tk') || '') + '</b>'
+          + (rk ? '<span class="dlr">risk ' + rk + '%</span>' : '')
+          + '<span class="dls">' + sc + '</span>';
+        a.addEventListener('click', function (ev) { ev.preventDefault(); select(c.id, true); });
+        frag.appendChild(a);
+        rows.push(a);
+      });
+    });
+    SECTIONS.forEach(function (sdef) {
+      if (!document.getElementById(sdef[0])) return;
+      var a = document.createElement('a');
+      a.className = 'dl-row dl-sec';
+      a.href = '#' + sdef[0];
+      a.innerHTML = '<b>' + sdef[1] + '</b>';
+      a.addEventListener('click', function (ev) { ev.preventDefault(); select(sdef[0], true); });
+      frag.appendChild(a);
+    });
+    list.appendChild(frag);
+    list.hidden = false;
+  }
+
+  function clearActive() {
+    deck.querySelectorAll('.desk-active, .has-active, .desk-full').forEach(function (n) {
+      n.classList.remove('desk-active');
+      n.classList.remove('has-active');
+      n.classList.remove('desk-full');
+    });
+  }
+
+  function select(id, push) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    clearActive();
+    if (el.tagName === 'ARTICLE') {
+      el.classList.add('desk-active');
+      var p = el.parentElement;
+      while (p && p !== deck) {
+        if (p.classList && p.classList.contains('secv9')) p.classList.add('has-active');
+        if (p.tagName === 'DETAILS') { p.open = true; p.classList.add('has-active'); }
+        p = p.parentElement;
+      }
+      // the Desk stage: repaint this card's chart big (keyed render — the
+      // engine skips repeats at the same key)
+      var chart = el.querySelector('.cchart[data-c]');
+      if (chart && window.__candle) {
+        var w = Math.max(360, Math.min((deck.clientWidth || 700) - 28, 980));
+        window.__candle.renderInto(chart, { key: 'stage' + w, geom: window.__candle.geom(w, true) });
+      }
+    } else {
+      el.classList.add('has-active');
+      el.classList.add('desk-full');
+    }
+    activeId = id;
+    var vis = 0, at = 0;
+    rows.forEach(function (a) {
+      var on = a.getAttribute('href') === '#' + id;
+      a.classList.toggle('active', on);
+      if (a.style.display !== 'none') { vis++; if (on) at = vis; }
+    });
+    if (pos) pos.textContent = at ? (at + ' / ' + vis) : (vis + ' charts');
+    var act = list.querySelector('.dl-row.active');
+    if (push && act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest' });
+    if (push && window.history && history.replaceState) history.replaceState(null, '', '#' + id);
+    // Only scroll on an explicit user action (row click / j-k / deep link) —
+    // NEVER on the initial matchMedia apply(), or opening the report on a wide
+    // screen would yank the page past page-1 down to the deck.
+    if (push) {
+      var dw = document.getElementById('deskwrap');
+      if (dw) window.scrollTo(0, Math.max(0, dw.offsetTop - 6));
+    }
+  }
+
+  function firstVisibleRow() {
+    for (var i = 0; i < rows.length; i++) { if (rows[i].style.display !== 'none') return rows[i]; }
+    return null;
+  }
+
+  function apply(on) {
+    document.body.classList.toggle('desk', on);
+    if (on) {
+      buildList();
+      var id = null;
+      if (location.hash.indexOf('#card-') === 0 && document.getElementById(location.hash.slice(1))) {
+        id = location.hash.slice(1);
+      } else if (activeId && document.getElementById(activeId)) {
+        id = activeId;
+      } else {
+        var f = firstVisibleRow();
+        if (f) id = f.getAttribute('href').slice(1);
+      }
+      if (id) select(id, false);
+    } else {
+      // fold back to the deck: repaint EVERY chart that was drawn at a stage
+      // (Desk) size back to deck geometry — not just the last-active one, or
+      // previously-viewed cards stay oversized in the narrow deck.
+      if (window.__candle) {
+        deck.querySelectorAll('.cchart[data-c]').forEach(function (ch) {
+          if (ch.__cc && ch.__cc !== 'deck') window.__candle.renderInto(ch, { key: 'deck' });
+        });
+      }
+      clearActive();
+    }
+  }
+  if (mq.addEventListener) mq.addEventListener('change', function (e) { apply(e.matches); });
+  else if (mq.addListener) mq.addListener(function (e) { apply(e.matches); });
+  apply(mq.matches);
+
+  document.addEventListener('keydown', function (ev) {
+    if (!document.body.classList.contains('desk')) return;
+    if (/input|textarea|select/i.test(ev.target.tagName)) return;
+    var d = (ev.key === 'j' || ev.key === 'ArrowDown') ? 1 : ((ev.key === 'k' || ev.key === 'ArrowUp') ? -1 : 0);
+    if (!d) return;
+    ev.preventDefault();
+    var vis = rows.filter(function (a) { return a.style.display !== 'none'; });
+    if (!vis.length) return;
+    var i = -1;
+    for (var k = 0; k < vis.length; k++) { if (vis[k].classList.contains('active')) { i = k; break; } }
+    var nx = vis[Math.max(0, Math.min(vis.length - 1, i + d))];
+    if (nx) select(nx.getAttribute('href').slice(1), true);
+  });
+
+  function gotoHash() {
+    var id = location.hash.slice(1);
+    if (!id || id.indexOf('card-') !== 0) return;
+    var el = document.getElementById(id);
+    if (!el) return;
+    if (document.body.classList.contains('desk')) { select(id, true); return; }  // deep link → scroll
+    var p = el.parentElement;
+    while (p && p !== deck) { if (p.tagName === 'DETAILS') p.open = true; p = p.parentElement; }
+    el.scrollIntoView({ block: 'start' });
+  }
+  window.addEventListener('hashchange', gotoHash);
+  gotoHash();
+})();
+
 </script>
 """
 
@@ -5657,14 +7104,26 @@ CANDLE_JS = """
   'use strict';
   var css = getComputedStyle(document.documentElement);
   function tok(n, fb) { var v = css.getPropertyValue(n); return v ? v.trim() : fb; }
-  var UP = tok('--candle-up', '#b6bdc4'), DN = tok('--candle-down', '#e57373'),
+  var UP = tok('--candle-up', '#9aa7b3'), DN = tok('--candle-down', '#ff5c5c'),
       EN = tok('--up', '#54b87f'), ST = tok('--down', '#e06c6a'),
       GRID = tok('--chart-grid', '#232327'), AXIS = tok('--chart-axis', '#82827c'),
       VMA = tok('--vol-ma', '#9aa4ae'), ACC = tok('--accent', '#8cb4d6'),
-      WRN = tok('--warn', '#d3a04d'),
+      WRN = tok('--warn', '#d3a04d'), SURF = tok('--surface', '#161616'),
+      INK = tok('--text', '#e6e6ea'),
       MASPEC = [[10, tok('--ma-fast', '#8cb4d6')], [20, tok('--ma-mid', '#d3a04d')], [50, tok('--ma-slow', '#6b6b74')]];
-  var W = 340, H = 220, PT = 14, PB = 168, VT = 176, VB = 216, PL = 4, PR = 304;
-  var uid = 0, tip = null;
+  var uid = 0;
+  var MABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // Parameterized geometry (v9): deck charts render at the element's own width
+  // so text is 1:1 crisp; the Desk stage re-renders the same payload bigger via
+  // renderInto(). Height is width-independent: PT 28 (two-line readout band) +
+  // price pane + 8 gap + volume pane + 14 month axis.
+  function geom(w, big) {
+    var PT = 28, priceH = big ? 400 : 172, volH = big ? 70 : 40;
+    var PB = PT + priceH, VT = PB + 8, VB = VT + volH;
+    return { W: w, H: VB + 14, PT: PT, PB: PB, VT: VT, VB: VB,
+             PL: 4, PR: w - (big ? 46 : 36), fs: big ? 10 : 8, big: !!big };
+  }
 
   function sma(vals, p) {
     var out = [], s = 0, q = [];
@@ -5675,15 +7134,54 @@ CANDLE_JS = """
     }
     return out;
   }
-  function fmt(v) { return v >= 1000 ? v.toFixed(0) : (v >= 100 ? v.toFixed(1) : v.toFixed(2)); }
+  function fmt(v) { return v >= 1000 ? v.toFixed(0) : (v >= 100 ? v.toFixed(1) : (v >= 1 ? v.toFixed(2) : v.toFixed(4))); }
+  function vfmt(v) { return v >= 1000 ? (v / 1000).toFixed(1) + 'M' : v + 'K'; }
 
-  function render(el) {
-    if (el.__cc) return; el.__cc = 1;
+  // ---- timeframe window (USER 2026-07-18: "6 months to 1y history i can
+  // select"). Payloads ship ~1 trading year; TF slices the VISIBLE window and
+  // hands the dropped bars to the MA warm-up tail (d.p/d.pv) so the 10/20/50
+  // ladder stays valid at the left edge. ov levels are anchored at the last bar
+  // with a per-BAR slope, so the S/R zone and trendlines re-project themselves
+  // across whatever window is showing — no refit, still the engine's own read.
+  var TF = 130;                        // default ~6 months; 0 = everything
+  function sliceTF(d, tf) {
+    var n = d.c.length;
+    if (!tf || tf >= n) return d;
+    var s = n - tf, o = {}, k;
+    for (k in d) { if (Object.prototype.hasOwnProperty.call(d, k)) o[k] = d[k]; }
+    o.p  = (d.p  || []).concat(d.c.slice(0, s)).slice(-49);
+    o.pv = (d.pv || []).concat(d.v.slice(0, s)).slice(-49);
+    o.o = d.o.slice(s); o.h = d.h.slice(s); o.l = d.l.slice(s);
+    o.c = d.c.slice(s); o.v = d.v.slice(s);
+    var add = 0; for (var i = 0; i <= s; i++) add += (d.dt[i] || 0);
+    o.t0 = new Date(Date.parse(d.t0 + 'T00:00:00Z') + add * 86400000).toISOString().slice(0, 10);
+    o.dt = d.dt.slice(s); o.dt[0] = 0;
+    return o;
+  }
+
+  function render(el, opts) {
+    opts = opts || {};
+    var key = (opts.key || 'deck') + ':' + TF;   // TF is part of the paint key
+    if (el.__cc === key) return;      // keyed, not boolean: the Desk repaints at other sizes
+    el.__cc = key;
     var d; try { d = JSON.parse(el.getAttribute('data-c')); } catch (e) { return; }
     if (!d || !d.c || d.c.length < 2) return;
+    d = sliceTF(d, TF);
+    if (!d.c || d.c.length < 2) return;
+    var G = opts.geom;
+    if (!G) { var cw = el.clientWidth || 0; G = geom(cw >= 120 ? Math.min(Math.round(cw), 1000) : 340, false); }
+    var W = G.W, PT = G.PT, PB = G.PB, VT = G.VT, VB = G.VB, PL = G.PL, PR = G.PR, FS = G.fs;
     var n = d.c.length, ov = d.ov || {}, i, k;
     var dates = [], tms = Date.parse(d.t0 + 'T00:00:00Z');
     for (i = 0; i < n; i++) { tms += d.dt[i] * 86400000; dates.push(new Date(tms).toISOString().slice(0, 10)); }
+    // TRUE 4-state hollow candles: day COLOUR = close vs PREVIOUS close (bar 0
+    // compares to the pre-window tail d.p); body HOLLOW/FILLED = close vs open.
+    var dayUp = new Array(n);
+    for (i = 0; i < n; i++) {
+      var pc0 = i > 0 ? d.c[i - 1] : (d.p && d.p.length ? d.p[d.p.length - 1] : null);
+      dayUp[i] = (pc0 != null && d.c[i] != null) ? d.c[i] >= pc0
+               : (d.c[i] != null && d.o[i] != null ? d.c[i] >= d.o[i] : true);
+    }
     var lo = Infinity, hi = -Infinity;
     for (i = 0; i < n; i++) {
       if (d.l[i] != null && d.l[i] < lo) lo = d.l[i];
@@ -5694,8 +7192,9 @@ CANDLE_JS = """
     var mas = MASPEC.map(function (sp) { return { p: sp[0], col: sp[1], v: sma((d.p || []).concat(d.c), sp[0]).slice(-n) }; });
     mas.forEach(function (m) { m.v.forEach(function (v) { if (v != null) { if (v < lo) lo = v; if (v > hi) hi = v; } }); });
     // horizontal overlay levels join the y-scale only when near the bar range
-    ['e', 's', 'srl', 'srh', 'srs', 'pbt', 'pbs'].forEach(function (key) {
-      var v = ov[key];
+    // (v9: entry/stop lines are gone from the canvas, so 'e'/'s' left the join)
+    ['srl', 'srh'].forEach(function (key2) {
+      var v = ov[key2];
       if (v != null && v >= lo - 0.15 * R && v <= hi + 0.15 * R) { if (v < lo) lo = v; if (v > hi) hi = v; }
     });
     var pad = (hi - lo) * 0.03 || 0.5; lo -= pad; hi += pad;
@@ -5703,15 +7202,16 @@ CANDLE_JS = """
     function X(i2) { return PL + (i2 + 0.5) * step; }
     function Y(v) { return PT + (1 - (v - lo) / (hi - lo)) * (PB - PT); }
     function inP(y) { return y >= PT && y <= PB; }
+    function px(v) { return Math.round(v) + 0.5; }      // half-pixel snap for crisp hairlines
     var id = 'cc' + (++uid), s = [];
-    s.push('<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">');
+    s.push('<svg viewBox="0 0 ' + W + ' ' + G.H + '" xmlns="http://www.w3.org/2000/svg">');
     s.push('<defs><clipPath id="' + id + '"><rect x="' + PL + '" y="' + PT + '" width="' + (PR - PL) + '" height="' + (PB - PT) + '"/></clipPath></defs>');
 
     // ---- faint grid + right-gutter price scale (minimal: 4 hairlines) ----
     var gut = [];      // gutter texts; the last-price marker wins collisions
     for (k = 0; k <= 3; k++) {
       var gv = lo + (hi - lo) * k / 3, gy = Y(gv);
-      s.push('<line x1="' + PL + '" y1="' + gy.toFixed(1) + '" x2="' + PR + '" y2="' + gy.toFixed(1) + '" stroke="' + GRID + '" stroke-width="0.6" opacity="0.7"/>');
+      s.push('<line x1="' + PL + '" y1="' + px(gy) + '" x2="' + PR + '" y2="' + px(gy) + '" stroke="' + GRID + '" stroke-width="1" opacity="0.55" shape-rendering="crispEdges"/>');
       gut.push({ y: gy, t: fmt(gv), c: AXIS, w: 400 });
     }
 
@@ -5723,41 +7223,45 @@ CANDLE_JS = """
         s.push('<rect x="' + PL + '" y="' + zt.toFixed(1) + '" width="' + (PR - PL) + '" height="' + (zb - zt).toFixed(1) + '" fill="' + ACC + '" opacity="0.08"/>');
       }
     }
-    // ---- diagonals: channel rails, then trendlines (no text — the shapes read themselves) ----
+    // ---- diagonals: trendlines (no text — the shapes read themselves) ----
     var f = d.w ? 5 : 1;
     function dline(now, slope, col, dash) {
       if (now == null || slope == null) return;
       var y1 = Y(now - slope * (n - 1) * f), y2 = Y(now);
-      s.push('<line x1="' + X(0).toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + X(n - 1).toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke="' + col + '" stroke-width="1" opacity="0.65"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + ' clip-path="url(#' + id + ')"/>');
+      s.push('<line x1="' + X(0).toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + X(n - 1).toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke="' + col + '" stroke-width="1.2" opacity="0.7"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + ' clip-path="url(#' + id + ')"/>');
     }
-    dline(ov.tsn, ov.tsd, ACC, '');
-    dline(ov.trn, ov.trd, WRN, '');
+    // structural trendlines are DASHED so they read as levels, not as another
+    // MA line (they share the accent/warn hues with the MA ladder)
+    dline(ov.tsn, ov.tsd, ACC, '6 3');
+    dline(ov.trn, ov.trd, WRN, '6 3');
     // ---- moving averages: 10 / 20 / 50 — named by the fixed top legend ----
     mas.forEach(function (m) {
       var seg = [];
       for (i = 0; i < n; i++) {
-        if (m.v[i] == null) { if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.6"/>'); seg = []; continue; }
+        if (m.v[i] == null) { if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.55"/>'); seg = []; continue; }
         seg.push(X(i).toFixed(1) + ',' + Y(m.v[i]).toFixed(1));
       }
-      if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.6"/>');
+      if (seg.length > 1) s.push('<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + m.col + '" stroke-width="0.9" opacity="0.55"/>');
     });
-    // ---- candles: HOLLOW — light grey = up (close >= open), light red = down.
-    // Wicks are drawn ONLY outside the body (a single high→low line would show
-    // through the hollow interior); a near-zero body renders as a doji tick.
+    // ---- candles: TRUE HOLLOW, 4 states — colour from dayUp (close vs prev
+    // close), hollow/filled from close vs open. Hollow bodies are BACKED with
+    // the surface colour so MA lines never show through (rev-4 rule); a
+    // near-zero body renders as a doji tick.
     for (i = 0; i < n; i++) {
       if (d.o[i] == null || d.h[i] == null || d.l[i] == null || d.c[i] == null) continue;
-      var up = d.c[i] >= d.o[i], col = up ? UP : DN;
+      var col = dayUp[i] ? UP : DN, hollow = d.c[i] >= d.o[i];
       var x = X(i), yo = Y(d.o[i]), yc = Y(d.c[i]);
       var bt = Math.min(yo, yc), bb = Math.max(yo, yc), yh = Y(d.h[i]), yl = Y(d.l[i]);
-      if (yh < bt - 0.2) s.push('<line x1="' + x.toFixed(1) + '" y1="' + yh.toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + bt.toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>');
-      if (yl > bb + 0.2) s.push('<line x1="' + x.toFixed(1) + '" y1="' + bb.toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + yl.toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>');
+      var wx = px(x);
+      if (yh < bt - 0.2) s.push('<line x1="' + wx + '" y1="' + yh.toFixed(1) + '" x2="' + wx + '" y2="' + bt.toFixed(1) + '" stroke="' + col + '" stroke-width="1" shape-rendering="crispEdges"/>');
+      if (yl > bb + 0.2) s.push('<line x1="' + wx + '" y1="' + bb.toFixed(1) + '" x2="' + wx + '" y2="' + yl.toFixed(1) + '" stroke="' + col + '" stroke-width="1" shape-rendering="crispEdges"/>');
       if (bb - bt < 1.0) {
-        s.push('<line x1="' + (x - bw / 2).toFixed(1) + '" y1="' + bt.toFixed(1) + '" x2="' + (x + bw / 2).toFixed(1) + '" y2="' + bt.toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>');
+        s.push('<line x1="' + (x - bw / 2).toFixed(1) + '" y1="' + px(bt) + '" x2="' + (x + bw / 2).toFixed(1) + '" y2="' + px(bt) + '" stroke="' + col + '" stroke-width="1" shape-rendering="crispEdges"/>');
       } else {
-        s.push('<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + bt.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + (bb - bt).toFixed(1) + '" fill="none" stroke="' + col + '" stroke-width="0.9"/>');
+        s.push('<rect x="' + px(x - bw / 2) + '" y="' + px(bt) + '" width="' + bw.toFixed(1) + '" height="' + (bb - bt).toFixed(1) + '" fill="' + (hollow ? SURF : col) + '" stroke="' + col + '" stroke-width="1" shape-rendering="crispEdges"/>');
       }
     }
-    // ---- volume pane: hollow bars (same up/down colours) + 50-day volume MA.
+    // ---- volume pane: quiet filled bars in the day colour + 50-day volume MA.
     // The MA tail comes from d.pv (49 pre-window volumes), so it is valid at the
     // left edge; vmax includes the MA so a quiet window under a loud past stays
     // in-pane instead of clipping the line into the price pane.
@@ -5770,31 +7274,35 @@ CANDLE_JS = """
         if (d.o[i] == null || d.c[i] == null) continue;   // no OHLC, no bar
         var vh = d.v[i] / vmax * (VB - VT);
         if (vh < 0.8) continue;
-        var vcol = (d.c[i] >= d.o[i]) ? UP : DN;
-        s.push('<rect x="' + (X(i) - bw / 2).toFixed(1) + '" y="' + (VB - vh).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + vh.toFixed(1) + '" fill="none" stroke="' + vcol + '" stroke-width="0.7" opacity="0.75"/>');
+        var vcol = dayUp[i] ? UP : DN;
+        s.push('<rect x="' + (X(i) - bw / 2).toFixed(1) + '" y="' + (VB - vh).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + vh.toFixed(1) + '" fill="' + vcol + '" opacity="0.4"/>');
       }
       var vseg = [];
       for (i = 0; i < n; i++) {
         if (vma[i] == null) continue;
         vseg.push(X(i).toFixed(1) + ',' + (VB - vma[i] / vmax * (VB - VT)).toFixed(1));
       }
-      if (vseg.length > 1) s.push('<polyline points="' + vseg.join(' ') + '" fill="none" stroke="' + VMA + '" stroke-width="0.9" opacity="0.85"/>');
+      if (vseg.length > 1) s.push('<polyline points="' + vseg.join(' ') + '" fill="none" stroke="' + VMA + '" stroke-width="0.9" opacity="0.8"/>');
     }
-    // ---- plan / lesson horizontal lines (drawn only — no text tags) ----
-    function hline(v, col, dash) {
-      if (v == null) return;
-      var y = Y(v); if (!inP(y)) return;
-      s.push('<line x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + PR + '" y2="' + y.toFixed(1) + '" stroke="' + col + '" stroke-width="1.15" opacity="0.9"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
+    // ---- month axis strip under the volume pane ----
+    var lastLx = -99;
+    for (i = 1; i < n; i++) {
+      if (dates[i].slice(5, 7) === dates[i - 1].slice(5, 7)) continue;
+      var mx = X(i);
+      s.push('<line x1="' + px(mx) + '" y1="' + (VB + 1) + '" x2="' + px(mx) + '" y2="' + (VB + 4) + '" stroke="' + AXIS + '" stroke-width="1" opacity="0.6" shape-rendering="crispEdges"/>');
+      if (mx - lastLx < 26 || mx > PR - 20) continue;
+      var mm = +dates[i].slice(5, 7) - 1;
+      var mlbl = mm === 0 ? "'" + dates[i].slice(2, 4) : MABBR[mm];
+      s.push('<text x="' + (mx + 2).toFixed(1) + '" y="' + (VB + 11.5) + '" font-size="' + (G.big ? 9 : 7.5) + '" font-family="ui-monospace,monospace" fill="' + AXIS + '" opacity="0.9">' + mlbl + '</text>');
+      lastLx = mx;
     }
-    hline(ov.e, EN, '5 4');
-    hline(ov.s, ST, '5 4');
     // ---- last price: dotted hairline + the only bright number in the gutter ----
     var lp = d.c[n - 1];
     if (lp != null) {
       var lpy = Y(lp);
       if (inP(lpy)) {
-        s.push('<line x1="' + PL + '" y1="' + lpy.toFixed(1) + '" x2="' + PR + '" y2="' + lpy.toFixed(1) + '" stroke="' + AXIS + '" stroke-width="0.6" stroke-dasharray="1 3" opacity="0.8"/>');
-        gut.push({ y: lpy, t: fmt(lp), c: tok('--text', '#e6e6ea'), w: 600, last: 1 });
+        s.push('<line x1="' + PL + '" y1="' + px(lpy) + '" x2="' + PR + '" y2="' + px(lpy) + '" stroke="' + AXIS + '" stroke-width="1" stroke-dasharray="1 3" opacity="0.8" shape-rendering="crispEdges"/>');
+        gut.push({ y: lpy, t: fmt(lp), c: INK, w: 600, last: 1 });
       }
     }
     // ---- right-gutter price texts: the last-price marker wins collisions.
@@ -5806,49 +7314,101 @@ CANDLE_JS = """
     gut.forEach(function (g) { g.ry = Math.min(Math.max(g.y, PT + 4), PB); if (g.last) lpe = g; });
     gut.filter(function (g) { return g.last || !lpe || Math.abs(g.ry - lpe.ry) > 8; })
       .forEach(function (g) {
-        s.push('<text x="' + (PR + 3) + '" y="' + (g.ry + 2.5).toFixed(1) + '" font-size="8" font-weight="' + g.w + '" font-family="ui-monospace,monospace" fill="' + g.c + '">' + g.t + '</text>');
+        s.push('<text x="' + (PR + 3) + '" y="' + (g.ry + 2.5).toFixed(1) + '" font-size="' + FS + '" font-weight="' + g.w + '" font-family="ui-monospace,monospace" fill="' + g.c + '">' + g.t + '</text>');
       });
-    // ---- MA legend: reserved top band y in [0, PT) — cannot overlap candles
-    // by construction (USER 2026-07-07: end-of-line labels sat on the bars) ----
+    // ---- readout band line 1: MA legend + last close/volume — reserved band
+    // y in [0, PT), cannot overlap candles by construction ----
     var lx = PL + 2;
     MASPEC.forEach(function (sp) {
       var lt = 'MA' + sp[0];
-      s.push('<text x="' + lx + '" y="10.5" font-size="8" font-weight="700" font-family="ui-monospace,monospace" fill="' + sp[1] + '">' + lt + '</text>');
-      lx += lt.length * 4.9 + 9;
+      s.push('<text x="' + lx.toFixed(1) + '" y="11" font-size="' + FS + '" font-weight="700" font-family="ui-monospace,monospace" fill="' + sp[1] + '">' + lt + '</text>');
+      lx += lt.length * (FS * 0.62) + 9;
     });
+    if (lp != null) {
+      s.push('<text x="' + (lx + 4) + '" y="11" font-size="' + FS + '" font-family="ui-monospace,monospace" fill="' + AXIS + '">C ' + fmt(lp) + (d.v[n - 1] != null ? ' \\u00b7 V ' + vfmt(d.v[n - 1]) : '') + '</text>');
+    }
+    // ---- readout band line 2 (dynamic) + crosshair hairline: the floating
+    // tooltip is gone — the readout lives in the reserved band, updated via
+    // cached tspans (no re-render). Tap pins it; tap again unpins. ----
+    s.push('<line id="' + id + 'x" x1="-9" y1="' + PT + '" x2="-9" y2="' + VB + '" stroke="' + AXIS + '" stroke-width="0.7" stroke-dasharray="2 3" opacity="0" pointer-events="none"/>');
+    s.push('<text x="' + (PL + 2) + '" y="23" font-size="' + FS + '" font-family="ui-monospace,monospace" fill="' + INK + '"><tspan id="' + id + 'a"></tspan><tspan id="' + id + 'b" dx="6"></tspan><tspan id="' + id + 'c" dx="6" fill="' + AXIS + '"></tspan></text>');
     s.push('</svg>');
     el.innerHTML = s.join('');
-    // ---- shared tooltip ----
     var svg = el.firstChild;
-    svg.addEventListener('pointermove', function (ev) {
-      if (!tip) { tip = document.createElement('div'); tip.className = 'cc-tip'; document.body.appendChild(tip); }
-      var r = svg.getBoundingClientRect();
-      var xi = Math.max(0, Math.min(n - 1, Math.floor(((ev.clientX - r.left) / r.width * W - PL) / step)));
-      if (d.c[xi] == null) return;
+    var tA = document.getElementById(id + 'a'), tB = document.getElementById(id + 'b'),
+        tC = document.getElementById(id + 'c'), xh = document.getElementById(id + 'x');
+    var pinned = -1;
+    function mmd(ds) { return MABBR[+ds.slice(5, 7) - 1] + ' ' + (+ds.slice(8, 10)); }
+    function setReadout(xi, cross) {
+      if (!tA || d.o[xi] == null || d.h[xi] == null || d.l[xi] == null || d.c[xi] == null) return;
       // keep chg NUMERIC for the sign test — comparing the toFixed() string
       // coerces "-0.0" >= 0 to true and prints "+-0.0%" in green
-      var chg = (xi > 0 && d.c[xi - 1]) ? ((d.c[xi] / d.c[xi - 1] - 1) * 100) : null;
-      var vv = d.v[xi] >= 1000 ? (d.v[xi] / 1000).toFixed(1) + 'M' : d.v[xi] + 'K';
-      tip.innerHTML = '<b>' + dates[xi] + (d.w ? ' (wk)' : '') + '</b>  O ' + fmt(d.o[xi]) + '  H ' + fmt(d.h[xi]) + '  L ' + fmt(d.l[xi]) + '  C ' + fmt(d.c[xi])
-        + (chg != null ? ' <span style="color:' + (chg >= 0 ? EN : ST) + '">' + (chg >= 0 ? '+' : '') + chg.toFixed(1) + '%</span>' : '') + '  V ' + vv;
-      tip.style.display = 'block';
-      var tw = tip.offsetWidth || 200;
-      tip.style.left = Math.min(ev.clientX + 14, window.innerWidth - tw - 8) + 'px';
-      tip.style.top = (ev.clientY + 16) + 'px';
+      var pc2 = xi > 0 ? d.c[xi - 1] : (d.p && d.p.length ? d.p[d.p.length - 1] : null);
+      var chg = pc2 ? (d.c[xi] / pc2 - 1) * 100 : null;
+      tA.textContent = mmd(dates[xi]) + (d.w ? ' wk' : '') + ' \\u00b7 O ' + fmt(d.o[xi]) + ' H ' + fmt(d.h[xi]) + ' L ' + fmt(d.l[xi]) + ' C ' + fmt(d.c[xi]);
+      tB.textContent = chg == null ? '' : (chg >= 0 ? '+' : '') + chg.toFixed(1) + '%';
+      tB.setAttribute('fill', chg != null && chg < 0 ? ST : EN);
+      tC.textContent = d.v[xi] != null ? 'V ' + vfmt(d.v[xi]) : '';
+      if (cross) { var cx = X(xi).toFixed(1); xh.setAttribute('x1', cx); xh.setAttribute('x2', cx); xh.setAttribute('opacity', pinned >= 0 ? '0.9' : '0.55'); }
+      else { xh.setAttribute('opacity', '0'); }
+    }
+    setReadout(n - 1, false);
+    function barAt(ev) {
+      var r = svg.getBoundingClientRect();
+      return Math.max(0, Math.min(n - 1, Math.floor(((ev.clientX - r.left) / r.width * W - PL) / step)));
+    }
+    svg.addEventListener('pointermove', function (ev) { if (pinned < 0 && ev.pointerType === 'mouse') setReadout(barAt(ev), true); });
+    svg.addEventListener('pointerleave', function () { if (pinned < 0) setReadout(n - 1, false); });
+    svg.addEventListener('pointercancel', function () { if (pinned < 0) setReadout(n - 1, false); });
+    svg.addEventListener('click', function (ev) {
+      var xi = barAt(ev);
+      if (pinned === xi) { pinned = -1; setReadout(n - 1, false); return; }
+      pinned = xi; setReadout(xi, true);
     });
-    svg.addEventListener('pointerleave', function () { if (tip) tip.style.display = 'none'; });
   }
+  function renderInto(el, opts) { el.__cc = null; render(el, opts); }
+  window.__candle = { render: render, renderInto: renderInto, geom: geom,
+                      setTF: setTF, getTF: function () { return TF; } };
 
   var els = document.querySelectorAll('.cchart[data-c]');
+
+  // Switch every chart to a new window: drop the paint key, repaint what's on
+  // screen now, and let the existing debounced scroll pass repaint the rest as
+  // they come back into view. The Desk stage re-renders through renderInto().
+  function setTF(tf) {
+    TF = tf | 0;
+    for (var i = 0; i < els.length; i++) { els[i].__cc = null; }
+    if (typeof paintNear === 'function') paintNear();
+    var stage = document.querySelector('.desk-active .cchart[data-c]');
+    if (stage && window.__candle) window.__candle.renderInto(stage, { key: 'stage', geom: geom(stage.clientWidth || 900, true) });
+  }
+  // Paint any chart already within a screenful now, so the first view is never
+  // blank if the IntersectionObserver is slow to fire (or suspended, as it is
+  // in some embedded/hidden documents). IO + a debounced scroll pass then keep
+  // the rest lazy.
+  function paintNear() {
+    var vh = window.innerHeight || 800;
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.__cc) continue;
+      var r = el.getBoundingClientRect();
+      if (r.bottom > -600 && r.top < vh + 600) render(el);
+    }
+  }
   if ('IntersectionObserver' in window) {
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (en) { if (en.isIntersecting) { render(en.target); io.unobserve(en.target); } });
     }, { rootMargin: '500px' });
     els.forEach(function (el) { io.observe(el); });
+    var st = null;
+    window.addEventListener('scroll', function () {
+      if (st) return; st = setTimeout(function () { st = null; paintNear(); }, 120);
+    }, { passive: true });
+    paintNear();
   } else {
-    els.forEach(render);
+    els.forEach(function (el) { render(el); });
   }
-  window.addEventListener('beforeprint', function () { els.forEach(render); });
+  window.addEventListener('beforeprint', function () { els.forEach(function (el) { render(el); }); });
 })();
 </script>
 """
@@ -6308,7 +7868,9 @@ def generate_coil_table(matches: List[dict], title: str, bg_class: str,
                 </div>
                 {pb_html}
                 {_edge_details(m, [_lessons_line(m), _mtf_line(m), _lbw_line(m), _support_line(m),
-                                   _sr_line(m), _pb2_line(m), _tl_line(m), _ch_line(m)])}
+                                   _sr_line(m), _pb2_line(m), _tl_line(m), _ch_line(m),
+                                   _stage_line(m), _mans_line(m), _oh_line(m),
+                                   _pba_line(m), _tc_line(m), _group_line(m)])}
             </td>
             {_narr_cell(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}
             <td class="num c-stat" data-label="ADR" data-sort="{m['adr']}">{m['adr']}%</td>
@@ -6429,6 +7991,10 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
         dist_52w = (hi52 - close) / hi52 * 100.0 if hi52 > 0 else 0.0
         v50 = float(df["Volume"].iloc[-50:].mean())
         vol_pct = float(df["Volume"].iloc[-20:].mean() / v50 * 100.0) if v50 > 0 else 100.0
+        # v9 cards: surface the two stat-strip values the external tables never
+        # printed (Off-52W + dry-up Vol%) — additive keys, legacy tables ignore
+        r.setdefault("dist_52w", round(dist_52w, 1))
+        r.setdefault("vol_pct", round(vol_pct))
         meta_input = {
             "perf_1m": _perf(21), "perf_3m": _perf(63), "adr": adr, "close": close,
             "sma10": ema9, "sma20": ema21, "vol_pct": vol_pct,
@@ -6459,7 +8025,8 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
                 plan["entry"] = entry
             if stop is not None:
                 plan["stop"] = stop
-            r["_spark"] = make_candle_chart(df, plan, max(spark_n, 60) if not weekly_spark else spark_n,
+            r["_spark"] = make_candle_chart(df, _chart_plan(plan, df),
+                                            max(spark_n, CHART_WINDOW) if not weekly_spark else spark_n,
                                             weekly=weekly_spark)
         except Exception:  # noqa: BLE001
             pass
@@ -6567,6 +8134,781 @@ def _read_json_retry(path: str, attempts: int = 4, delay: float = 0.8):
             if i < attempts - 1:
                 time.sleep(delay)
     raise last  # type: ignore[misc]
+
+
+# =============================================================================
+# v9 CHART-FIRST CARDS (LAYOUT_V9) — one unified <article class='card'> per
+# ticker, used by EVERY section (coil tiers, Minervini, Trilogy, HVE, U&R,
+# shorts, 52W highs, pullback monitor, Weekly Review). Anatomy per the
+# user-ratified 62-field pick: header (ticker · live price · N/4 badge · tier
+# + flag chips) → candle chart (clean: no entry/stop drawn) → TF + gold
+# LESSONS lines → one collapsed "Details" fold (plan · stat strip · fundamentals
+# · META · context/extras · edges · trendline block). Every block self-omits on
+# missing data, so sparse sections (HVE/U&R/shorts/monitor) degrade gracefully.
+# Legacy table generators stay untouched for LAYOUT_V9=False rollback.
+# =============================================================================
+
+def _v9_chip(label: str, *, color: str = "", border: str = "", title: str = "",
+             strong: bool = False) -> str:
+    """Bordered uppercase text chip (v9 chip system — no emoji)."""
+    st = ""
+    if color:
+        st += f"color:{color};"
+    if border or color:
+        st += f"border-color:{border or color};"
+    t = f" title='{esc(title)}'" if title else ""
+    w = "font-weight:700;" if strong else ""
+    return f"<span class='vchip' style='{st}{w}'{t}>{esc(label)}</span>"
+
+
+def _card_flags_v9(m: dict, tier: str) -> str:
+    """Header chip row: tier + the kept identity flags (HTF / LINE / 52W★ /
+    persist / RS▲). Warn + footprint tokens live in the fold, not here."""
+    chips = []
+    if tier:
+        chips.append(f"<span class='vchip tier-chip'>{esc(tier)}</span>")
+    for lbl in m.get("status_labels", []) or []:
+        if lbl.startswith("🚩"):
+            chips.append(_v9_chip("HTF", color="var(--red)",
+                                  title=_strip_lead_emoji(lbl), strong=True))
+    if m.get("lbw_state") == "break":
+        chips.append(_v9_chip("LINE", color="var(--yellow)",
+                              title="closed above the resistance line (line-break)"))
+    if m.get("at_high"):
+        chips.append(_v9_chip("52W HIGH", color="var(--green)"))
+    if m.get("persist_tier"):
+        star = "★★" if m.get("persist_tier") == "R" else "★"
+        chips.append(_v9_chip(f"{star} {m.get('persist_label', 'PERSIST')}",
+                              color="var(--yellow)",
+                              title=f"{m.get('nh_3m', 0)} NH/3M ({m.get('weeks_3m', 0)}w)"))
+    if m.get("rs_ok") and m.get("rs_nh_before_price"):
+        chips.append(_v9_chip("RS▲ ‹ PX", color="var(--accent-2)",
+                              title="RS line near a 1-year high while price has not broken out"))
+    elif m.get("rs_ok") and m.get("rs_new_high"):
+        chips.append(_v9_chip("RS▲", color="var(--accent-2)",
+                              title="RS line at/near its 1-year high"))
+    return f"<span class='card-flags'>{''.join(chips)}</span>" if chips else ""
+
+
+def _fwd_yoy_chip(ticker: str) -> str:
+    """Fwd-YoY as a fold chip (reads the same fundamentals cache as the cell)."""
+    y, lbl = None, ""
+    if _fund is not None and ticker not in _ETF_TICKERS:
+        try:
+            rec = _fund.get(ticker)
+            if rec:
+                for r in rec.get("rev", []):
+                    if r.get("est"):
+                        y, lbl = r.get("yoy"), r.get("lbl", "")
+                        break
+        except Exception:  # noqa: BLE001
+            y = None
+    if y is None:
+        return ""
+    pct = y * 100.0
+    col = "var(--green)" if pct > 0.5 else ("var(--red)" if pct < -0.5 else "var(--text-3)")
+    return _v9_chip(f"FWD {'+' if pct >= 0 else ''}{pct:.0f}%", color=col,
+                    title=f"next forward quarter ({lbl}) consensus revenue YoY")
+
+
+def _eps_accel_chip(ticker: str) -> str:
+    """EPS-acceleration verdict as a fold chip (same cache as the cell)."""
+    a = None
+    if _fund is not None and ticker not in _ETF_TICKERS:
+        try:
+            rec = _fund.get(ticker)
+            a = rec.get("eps_accel") if rec else None
+        except Exception:  # noqa: BLE001
+            a = None
+    score, verdict = (a.get("accel_score"), a.get("verdict")) if a else (None, None)
+    if score is None or verdict is None:
+        return ""
+    if verdict == "accel":
+        arrow, col = ("▲▲" if score >= 20 else "▲"), "var(--green)"
+    elif verdict == "decel":
+        arrow, col = ("▼▼" if score <= -20 else "▼"), "var(--red)"
+    else:
+        arrow, col = "→", "var(--text-3)"
+    qs = [q for q in (a.get("quarters") or []) if q.get("yoy") is not None]
+    latest = f" {'+' if qs[-1]['yoy'] >= 0 else ''}{qs[-1]['yoy'] * 100:.0f}%" if qs else ""
+    ttm = " ✦TTM" if a.get("ttm_new_high") else ""
+    return _v9_chip(f"EPS {arrow}{latest}{ttm}", color=col,
+                    title="O'Neil earnings acceleration: trend in quarterly EPS YoY growth"
+                          + (" · TTM EPS at a new high" if a.get("ttm_new_high") else ""))
+
+
+def _stat_strip_v9(m: dict) -> str:
+    """6-cell stat strip: ADR · RS · ANTS 3M · Vol% · Off 52W · Risk%.
+    (User ruling: NO vs-MA cells, NO dist-to-EMA, NO RS-1M, NO ANTS-today.)
+    Each cell self-omits; '' when nothing is available."""
+    cells = []
+
+    def cell(lab, val, title="", cls=""):
+        t = (" title='" + esc(title) + "'") if title else ""
+        sv = f"sv {cls}" if cls else "sv"
+        cells.append(f"<div class='sc'><span class='sl'{t}>{lab}</span>"
+                     f"<span class='{sv}'>{val}</span></div>")
+
+    adr = m.get("adr", m.get("_adr20"))
+    if adr is not None:
+        cell("ADR", f"{adr}%", "Average Daily Range — 20-day avg of (High/Low−1)")
+    rs_val = m.get("rs_rating", m.get("rs"))
+    if rs_val not in (None, "N/A", ""):
+        mark = "*" if m.get("rs_asof") else ""
+        cell("RS", f"{esc(rs_val)}{mark}",
+             "Fred6725 relative-strength percentile" + (f" · carried from {m.get('rs_asof')}" if m.get("rs_asof") else ""))
+    if m.get("ants_ok") and (m.get("ants_3m_peak") or 0) >= 1:
+        cell("ANTS 3M", f"{esc(_ANTS_LABELS.get(m.get('ants_3m_peak', 0), ''))}·{m.get('ants_3m_days', 0)}d",
+             "peak David-Ryan accumulation level in the last ~3 months")
+    if m.get("vol_pct") is not None:
+        v = m["vol_pct"]
+        cell("VOL", f"{v}%", "20-day avg volume as % of the 50-day (dry-up read)",
+             "up" if v <= 55 else ("" if v <= 75 else "dn"))
+    d52 = m.get("dist_52w")
+    if d52 is not None:
+        cell("OFF 52W", f"−{d52}%", "% below the 52-week high",
+             "up" if d52 <= 25 else "dn")
+    risk = m.get("risk_pct", m.get("_risk_pct"))
+    if risk is not None:
+        cell("RISK", f"{risk}%", "entry → stop distance",
+             {"risk-lo": "up", "risk-hi": "dn"}.get(_risk_cls(risk), ""))
+    if not cells:
+        return ""
+    return f"<div class='stat6'>{''.join(cells)}</div>"
+
+
+def _fund_block_v9(tk: str) -> str:
+    """Fundamentals: Fwd-YoY + EPS-accel chips as the tap-target, expanding to
+    the full fundamentals panel (forward Rev/EPS table, acceleration table,
+    margin line, revisions) via the existing _fund.details_html wrapper."""
+    chips = _fwd_yoy_chip(tk) + _eps_accel_chip(tk)
+    if not chips:
+        return ""
+    inner = f"<div class='chiprow'>{chips}<span class='sumhint'>earnings ▸</span></div>"
+    return f"<div class='fundrow'>{_narrative(tk, inner)}</div>"
+
+
+def _meta_block_v9(m: dict) -> str:
+    """META score chip + momentum badge + expandable component breakdown.
+    Keys off key-PRESENCE (never the 0-default) so sparse rows show nothing."""
+    if "_meta_score" not in m and "meta_score" not in m:
+        return ""
+    score = m.get("_meta_score", m.get("meta_score"))
+    if not score:
+        return ""
+    cls = "meta-hi" if score >= 70 else ("meta-md" if score >= 50 else "meta-lo")
+    parts = [f"<span class='meta-pill {cls}'>META {score}</span>"]
+    if score >= 80:
+        parts.append(_v9_chip("SUPER MOMENTUM", color="var(--green)"))
+    elif score >= 60:
+        parts.append(_v9_chip("STRONG MOMENTUM", color="var(--yellow)"))
+    details = m.get("_meta_details", m.get("meta_details", []))
+    return (f"<div class='chiprow'>{''.join(parts)}</div>"
+            + _meta_details_block(details))
+
+
+# ---- per-section PLAN renderers (all return '' when the plan is absent) ----
+def _plan_wrap(kicker_html: str, body: str, *, accent: bool = False) -> str:
+    cls = "entry-box vplan" + (" vplan-acc" if accent else "")
+    return f"<div class='{cls}'>{kicker_html}{body}</div>"
+
+
+def _plan_coil_v9(m: dict) -> str:
+    if m.get("entry") is None:
+        return ""
+    geo = _geo_line(m)
+    body = (f"<span class='entry-text'>Buy: ${m['entry']}</span><br>"
+            f"<span class='stop-text'>Stop: ${m['stop']} <span class='stop-reason'>({esc(m.get('stop_reason', ''))})</span></span><br>"
+            f"<span class='{_risk_cls(m.get('risk_pct'))}'>Risk: {m.get('risk_pct')}%</span>{geo}"
+            f"{_plan_jump(m['ticker'])}")
+    out = _plan_wrap(_plan_kicker(m), body)
+    pb_risk = m.get("pb_risk")
+    if pb_risk is not None:
+        out += ("<div class='entry-box vplan' style='border-color:var(--bd-accent);background:var(--tint-accent);margin-top:6px;'>"
+                "<span class='kicker'>PULLBACK</span>"
+                f"<span class='entry-text' style='color:var(--accent-2);'>Buy ≈ ${m.get('pb_entry', m['entry'])}</span> <span class='stop-reason'>(to {esc(m.get('hugging', ''))})</span><br>"
+                f"<span class='stop-text'>Stop: ${m.get('pb_stop')} <span class='stop-reason'>(~3% under 9EMA)</span></span><br>"
+                f"<span class='{_risk_cls(pb_risk)}'>Risk: {pb_risk}%</span></div>")
+    return out
+
+
+def _plan_vcp_v9(m: dict) -> str:
+    pivot, stop = m.get("pivot"), m.get("stop")
+    if pivot is None:
+        return ""
+    risk = round((m.get("stop_frac") or 0.0) * 100, 1)
+    body = (f"<span class='entry-text'>Buy: ${pivot}</span><br>"
+            f"<span class='stop-text'>Stop: ${stop}</span><br>"
+            f"<span class='{_risk_cls(risk, 4.0, 8.0)}'>Risk: {risk}%</span>")
+    return _plan_wrap("<span class='kicker'>VCP PIVOT</span>", body)
+
+
+def _plan_buystop_v9(c: dict) -> str:
+    ideal, pivot, top = c.get("ideal_buy"), c.get("pivot"), c.get("buy_range_top")
+    if ideal is None:
+        return ""
+    stop = round(pivot * 0.92, 2) if isinstance(pivot, (int, float)) else None
+    risk = (round((ideal - stop) / ideal * 100, 1)
+            if isinstance(ideal, (int, float)) and isinstance(stop, (int, float)) and ideal else 0.0)
+    rng = f" <span class='stop-reason'>(top ${top})</span>" if top is not None else ""
+    body = (f"<span class='entry-text'>Buy: ${ideal}</span>{rng}<br>"
+            f"<span class='stop-text'>Stop: ${stop} <span class='stop-reason'>(pivot −8%)</span></span><br>"
+            f"<span class='{_risk_cls(risk, 8.0, 12.0)}'>Risk: {risk}%</span>")
+    return _plan_wrap("<span class='kicker'>BUY-STOP</span>", body)
+
+
+def _plan_hve_v9(m: dict) -> str:
+    if m.get("entry") is None:
+        return ""
+    rc = "var(--green)" if m.get("risk_pct", 9) <= 4.0 else ("var(--yellow)" if m.get("risk_pct", 9) <= 6.0 else "var(--red)")
+    body = (f"<span class='sub'>✓ close range {m.get('close_range', '—')}%</span><br>"
+            f"<span class='entry-text'>Buy-Stop: ${m['entry']}</span><br>"
+            f"<span class='stop-text'>Stop: ${m.get('stop')} <span class='stop-reason'>({esc(m.get('stop_reason', ''))})</span></span><br>"
+            f"<span style='color:{rc};'>Risk: {m.get('risk_pct')}%</span>")
+    return _plan_wrap("<span class='kicker'>QM EPISODIC PIVOT</span>", body)
+
+
+def _plan_ur_v9(m: dict) -> str:
+    if m.get("entry") is None:
+        return ""
+    rc = "var(--green)" if m.get("risk_pct", 9) <= 3.5 else ("var(--yellow)" if m.get("risk_pct", 9) <= 5.0 else "var(--red)")
+    body = (f"<span class='sub'>U&amp;R: undercut D{max((m.get('days_since_hve') or 1) - 1, 1)} low, then reclaim</span><br>"
+            f"<span class='entry-text' style='color:var(--accent-2);'>Buy: ${m['entry']}</span><br>"
+            f"<span class='stop-text'>Stop: ${m.get('stop')} <span class='stop-reason'>({esc(m.get('stop_reason', ''))})</span></span><br>"
+            f"<span style='color:{rc};'>Risk: {m.get('risk_pct')}%</span>")
+    return _plan_wrap("<span class='kicker'>POST-HVE U&amp;R</span>", body, accent=True)
+
+
+def _plan_short_para_v9(m: dict) -> str:
+    if m.get("entry") is None:
+        return ""
+    risk = m.get("risk_pct")
+    tt = m.get("to_target")
+    body = (f"<span class='stop-text'>Trigger: break of ORL / AVWAP retest</span><br>"
+            f"<span class='stop-reason'>daily proxy entry ${m['entry']} · stop &gt; day-high ${m.get('stop')}"
+            f"{f' ({risk}%)' if risk is not None else ''}</span><br>"
+            f"<span style='color:var(--green);'>Cover → 21EMA ${m.get('target')}"
+            f"{f' (+{tt}% away)' if tt is not None else ''}</span>"
+            "<div class='sub' style='margin-top:4px;'>intraday stop is far tighter (above ORH, ~0.4–2%). "
+            "Best on a gap UP (exhaustion); stand aside if it reclaims AVWAP.</div>")
+    return _plan_wrap("<span class='kicker' style='color:var(--red);'>SHORT SETUP</span>", body)
+
+
+def _plan_short_s4_v9(m: dict) -> str:
+    if m.get("entry") is None:
+        return ""
+    tgt = m.get("target_swing")
+    tgt_txt = (f"Cover ½ near ${tgt} <span class='stop-reason'>(swing rule, −{m.get('to_target_pct')}%)</span>"
+               if tgt else "<span class='stop-reason'>measured move exceeds price — deep-target flag</span>")
+    body = (f"<span class='entry-text' style='color:var(--red);'>Short &lt; ${m['entry']}</span><br>"
+            f"<span class='stop-text'>Buy-stop ${m.get('stop')} <span class='stop-reason'>"
+            f"({esc(m.get('buy_stop_basis') or '')}, {m.get('risk_pct')}%)</span></span><br>"
+            f"<span style='color:var(--green);'>{tgt_txt}</span>")
+    return _plan_wrap("<span class='kicker' style='color:var(--red);'>STAGE-4 BREAKDOWN</span>", body)
+
+
+def _plan_nh_v9(m: dict) -> str:
+    if m.get("entry") is None:
+        return ""
+    risk = m.get("risk_pct")
+    rc = "var(--green)" if (risk or 9) <= 4 else ("var(--yellow)" if (risk or 9) <= 6 else "var(--red)")
+    kick = _plan_kicker(m) if m.get("plan_src") else "<span class='kicker'>CONTINUATION</span>"
+    body = (f"<span class='entry-text'>Buy &gt; ${m['entry']}</span><br>"
+            f"<span class='stop-text'>Stop: ${m.get('stop')} <span class='stop-reason'>"
+            f"({esc(m.get('stop_reason') or '21EMA / −1.5×ADR')})</span></span><br>"
+            f"<span style='color:{rc};'>Risk: {f'{risk}%' if risk is not None else 'n/a'}</span>")
+    return _plan_wrap(kick, body)
+
+
+# ---- per-section EXTRAS (context chips/lines unique to the engine) ----
+def _x_coil_v9(m: dict) -> str:
+    toks = []
+    for lbl in m.get("status_labels", []) or []:
+        if lbl.startswith("🚩"):
+            continue                       # HTF already a header chip
+        if lbl.startswith("⚠️"):
+            toks.append(f"<span class='warn-flag'>{esc(_strip_lead_emoji(lbl))}</span>")
+        else:
+            toks.append(esc(_strip_lead_emoji(lbl)))
+    for b in m.get("footprint", {}).get("badges", []):
+        if b.startswith("⚠️"):
+            toks.append(f"<span class='warn-flag'>{esc(_strip_lead_emoji(b))}</span>")
+        else:
+            toks.append(esc(_strip_lead_emoji(b)))
+    out = f"<div class='edge-line'>{' · '.join(toks)}</div>" if toks else ""
+    dist = m.get("dist_pct")
+    if dist is not None and m.get("hugging"):
+        c = "up" if dist <= 4.0 else ("" if dist <= 8.0 else "dn")
+        out += f"<div class='sub ctxline'><span class='{c}'>dist to {esc(m['hugging'])}: {dist}%</span></div>"
+    return out
+
+
+def _x_min_v9(m: dict) -> str:
+    status = (m.get("status") or "").replace("_", " ")
+    trig = "TRIGGER" in status
+    vcp = m.get("vcp_score", 0) or 0
+    vc = "var(--red)" if vcp >= 85 else ("var(--yellow)" if vcp >= 75 else "var(--text-3)")
+    bits = [_v9_chip(status or "—", color="var(--green)" if trig else "var(--yellow)"),
+            _v9_chip(f"VCP {vcp}", color=vc, title="Minervini VCP score")]
+    ptp = m.get("pct_to_pivot")
+    line = ""
+    if ptp is not None:
+        line = ("<span class='up'>▲ triggered / through pivot</span>" if ptp <= 0
+                else f"<span class='warn'>{ptp:.1f}% to pivot</span>")
+    offhi = m.get("pct_from_high")
+    if isinstance(offhi, (int, float)):
+        line += f" · off high {offhi:.1f}%"
+    perf6 = m.get("perf6m")
+    if isinstance(perf6, (int, float)):
+        line += f" · 6M {perf6:+.0f}%"
+    return f"<div class='chiprow'>{''.join(bits)}</div>" + (f"<div class='sub ctxline'>{line}</div>" if line else "") + _ext_fp_badges(m)
+
+
+def _x_tri_v9(c: dict) -> str:
+    gcol = {"A": "var(--green)", "B": "var(--accent-2)", "C": "var(--yellow)",
+            "D": "var(--red)", "F": "var(--red)"}.get(c.get("grade", ""), "var(--text-3)")
+    bits = [_v9_chip(f"GRADE {c.get('grade') or '—'}", color=gcol, strong=True)]
+    win20 = c.get("win20_rate")
+    if isinstance(win20, (int, float)):
+        bits.append(_v9_chip(f"WIN20 {win20 * 100:.0f}%", title="20-day win rate of the reference class"))
+    if c.get("monster_tail"):
+        bits.append(_v9_chip(f"MONSTER-TAIL d{c.get('monster_tail_decile')}", color="var(--yellow)"))
+    status = c.get("status", "")
+    if status:
+        stc = "var(--red)" if c.get("gated") else ("var(--green)" if "BUYING RANGE" in status else "var(--text-3)")
+        bits.append(_v9_chip(status, color=stc))
+    line = " · ".join(x for x in [
+        (c.get("pattern") or "").replace("_", " "), c.get("family", ""),
+        (f"Stage {c.get('stage')}" if c.get("stage") is not None else ""),
+        (c.get("rs_line") or "").replace("_", " "),
+        (f"likeness Q{c.get('likeness_q')}" if c.get("likeness_q") is not None else ""),
+        esc(c.get("checklist") or "")] if x)
+    return (f"<div class='chiprow'>{''.join(bits)}</div>"
+            + (f"<div class='sub ctxline'>{line}</div>" if line else "") + _ext_fp_badges(c))
+
+
+def _x_hve_v9(m: dict) -> str:
+    bits = [_v9_chip(f"{m.get('rel_vol')}× AVG VOL", color="var(--red)", strong=True)]
+    flt = f"{m.get('float_shares')}M" if m.get("float_shares") else "n/a"
+    line = f"+{m.get('change')}% today · gap {m.get('gap')}% · float {flt}"
+    return f"<div class='chiprow'>{''.join(bits)}</div><div class='sub ctxline'>{line}</div>"
+
+
+def _x_ur_v9(m: dict) -> str:
+    vc = m.get("vol_contraction")
+    vcol = "up" if (vc or 99) <= 40 else ("" if (vc or 99) <= 60 else "dn")
+    hold = m.get("holding_above_low")
+    return ("<div class='sub ctxline'>"
+            f"day {m.get('days_since_hve')} since HVE · <span class='{vcol}'>vol {vc:.0f}% of day 1</span> · "
+            f"<span class='{'up' if hold else 'dn'}'>above D1 low: {'yes' if hold else 'NO'}</span> · "
+            f"D1 high ${m.get('day1_high')}</div>")
+
+
+def _x_short_para_v9(m: dict) -> str:
+    return ("<div class='sub ctxline'>"
+            f"<span class='dn'>+{m.get('dist9')}% vs 9EMA</span> · +{m.get('dist21')}% vs 21EMA · "
+            f"vol {m.get('vol_ratio')}× · {m.get('gap_ups')} gap-ups · accel +{m.get('accel')}% · "
+            f"1M +{m.get('perf_1m')}%</div>")
+
+
+def _x_short_s4_v9(m: dict) -> str:
+    rs_bits = []
+    if m.get("rs_pct") is not None:
+        rs_bits.append(f"RS {m['rs_pct']}")
+    if m.get("rs_line_down"):
+        rs_bits.append("RS line ↘")
+    return ("<div class='sub ctxline'>"
+            f"<span class='dn'>{esc(m.get('wk_stage') or 'S4')}</span> · 30wk MA {(m.get('wk_ma_slope') or 0.0):+.1f}%/5wk · "
+            f"{esc(' · '.join(rs_bits))} · {esc(m.get('ind_name') or '')} ind-RS {m.get('ind_rs')}<br>"
+            f"shelf ${m.get('support_low')} · peak ${m.get('peak')} · "
+            f"1M {m.get('perf_1m')}% · 6M {m.get('perf_6m')}%</div>")
+
+
+def _x_nh_v9(m: dict) -> str:
+    _tag_col = {"GRN": "var(--green)", "YEL": "var(--yellow)", "RED": "var(--red)"}
+    bits = [_v9_chip(m.get("label", ""), color=_tag_col.get(m.get("tag"), "var(--green)"))]
+    for b in m.get("fp_badges", []) or []:
+        bits.append(_v9_chip(b))
+    base = (f"{m['base_weeks']:.0f}w / {m['base_depth']:.0f}% deep"
+            if m.get("base_depth") is not None else f"{m.get('base_weeks', 0):.0f}w base")
+    ext9 = f"{m['ext9']:.0f}%" if m.get("ext9") is not None else "–"
+    ext50 = f"{m['ext50']:.0f}%" if m.get("ext50") is not None else "–"
+    e50c = "up" if (m.get("ext50") or 0) <= 15 else ("" if (m.get("ext50") or 0) <= 25 else "dn")
+    return (f"<div class='chiprow'>{''.join(bits)}</div>"
+            f"<div class='sub ctxline'>{esc(base)} · {m.get('higher_lows', 0)} HL · "
+            f"<span class='up'>+{ext9} vs 9EMA</span> · <span class='{e50c}'>+{ext50} vs 50EMA</span></div>")
+
+
+def _x_pull_v9(m: dict) -> str:
+    _tag_col = {"GRN": "var(--green)", "RED": "var(--red)", "HOLD": "var(--text-3)"}
+    vs50, vsprev, vr = m.get("vs_50"), m.get("vs_prev"), m.get("vol_ratio")
+    line = " · ".join(x for x in [
+        (f"vs 50MA {vs50:+.1f}%" if vs50 is not None else ""),
+        (f"vs prev {vsprev:+.1f}%" if vsprev is not None else ""),
+        (f"vol {vr:.2f}× 30d avg" if vr is not None else ""),
+        f"{m.get('days_since_high')}d since high",
+        f"{m.get('high_count')}× NH"] if x)
+    return (f"<div class='chiprow'>{_v9_chip(m.get('status', ''), color=_tag_col.get(m.get('tag'), 'var(--text-3)'))}</div>"
+            f"<div class='sub ctxline'>{line}</div>" + _pb2_line(m))
+
+
+def _x_weekly_v9(m: dict) -> str:
+    wk = m.get("perf_w", 0.0)
+    note = f"up {wk:+.1f}% this week"
+    if m.get("wk_vol_x"):
+        note += f" on {m['wk_vol_x']:.1f}× avg weekly volume"
+    note += f" · {m.get('off_high', 0):.0f}% off the 52-wk high"
+    if m.get("perf_1m") is not None:
+        note += f" · 1M {m.get('perf_1m'):+.1f}%"
+    return f"<div class='chiprow'>{_v9_chip(f'WEEK {wk:+.1f}%', color='var(--green)')}</div><div class='sub ctxline'>{esc(note)}</div>"
+
+
+# ---- section specs: what differs in KIND per section; availability is data ----
+def _edges_coil_v9(m):
+    return [_lbw_line(m), _support_line(m), _sr_line(m), _pb2_line(m), _tl_line(m),
+            _ch_line(m), _stage_line(m), _mans_line(m), _oh_line(m),
+            _pba_line(m), _tc_line(m), _group_line(m)]
+
+
+def _edges_nh_v9(m):
+    # TC + GRP added 2026-07-18: NH rows DO carry these keys (attach_weinstein
+    # runs inside scan_new_highs; attach_industry_rs covers nh green rows), so
+    # omitting them was a silent gap. _pba_line is deliberately NOT here —
+    # pba_pct is computed in scan_coil only, so it would be dead code.
+    return [_sr_line(m), _pb2_line(m), _tl_line(m), _ch_line(m),
+            _stage_line(m), _mans_line(m), _oh_line(m),
+            _tc_line(m), _group_line(m)]
+
+
+def _edges_short_v9(m):
+    # _group_line added 2026-07-18: attach_industry_rs stamps grp_* on stage4
+    # rows (all 10 in the last run) but there was no render site — dead compute.
+    # It self-suppresses on parabolic rows, which carry no ind_name.
+    return [_dtc_line(m), _group_line(m), _sr_line(m),
+            _tl_line(m, short=True), _ch_line(m, short=True)]
+
+
+def _edges_ctx_v9(m):
+    """Context-only edges for sections that receive industry/group data but had
+    no edges entry (HVE, U&R). Added 2026-07-18: attach_industry_rs stamps
+    grp_* on these rows, so the group read was computed and discarded."""
+    return [_group_line(m)]
+
+
+SECTION_SPECS_V9 = {
+    "coil":   dict(plan=_plan_coil_v9, extras=_x_coil_v9, edges=_edges_coil_v9,
+                   prices=lambda m: (m.get("close"), m.get("entry"), m.get("stop")),
+                   score=lambda m: m.get("meta_score"), risk=lambda m: m.get("risk_pct")),
+    "min":    dict(plan=_plan_vcp_v9, extras=_x_min_v9, edges=None,
+                   prices=lambda m: (m.get("last_close"), m.get("pivot"), m.get("stop")),
+                   score=lambda m: m.get("_meta_score"),
+                   risk=lambda m: round((m.get("stop_frac") or 0.0) * 100, 1)),
+    "tri":    dict(plan=_plan_buystop_v9, extras=_x_tri_v9, edges=None,
+                   prices=lambda m: (m.get("last_close"), m.get("ideal_buy"),
+                                     round(m["pivot"] * 0.92, 2) if isinstance(m.get("pivot"), (int, float)) else None),
+                   score=lambda m: m.get("grade"), risk=lambda m: m.get("_risk_pct")),
+    "hve":    dict(plan=_plan_hve_v9, extras=_x_hve_v9, edges=_edges_ctx_v9,
+                   prices=lambda m: (m.get("close"), m.get("entry"), m.get("stop")),
+                   score=lambda m: f"{m.get('rel_vol')}×", risk=lambda m: m.get("risk_pct")),
+    "ur":     dict(plan=_plan_ur_v9, extras=_x_ur_v9, edges=_edges_ctx_v9,
+                   prices=lambda m: (m.get("close"), m.get("entry"), m.get("stop")),
+                   score=lambda m: f"D{m.get('days_since_hve')}", risk=lambda m: m.get("risk_pct")),
+    "short":  dict(plan=_plan_short_para_v9, extras=_x_short_para_v9, edges=_edges_short_v9,
+                   prices=lambda m: (m.get("close"), None, None),
+                   score=lambda m: f"+{m.get('dist9')}%", risk=lambda m: m.get("risk_pct")),
+    "s4":     dict(plan=_plan_short_s4_v9, extras=_x_short_s4_v9, edges=_edges_short_v9,
+                   prices=lambda m: (m.get("close"), None, None),
+                   score=lambda m: m.get("wk_stage") or "S4", risk=lambda m: m.get("risk_pct")),
+    "nh":     dict(plan=_plan_nh_v9, extras=_x_nh_v9, edges=_edges_nh_v9,
+                   prices=lambda m: (m.get("close"), m.get("entry"), m.get("stop")),
+                   score=lambda m: m.get("meta_score", m.get("_meta_score")),
+                   risk=lambda m: m.get("risk_pct")),
+    "pull":   dict(plan=None, extras=_x_pull_v9, edges=None,
+                   prices=lambda m: (m.get("close"), None, None),
+                   score=lambda m: m.get("rs_rating"), risk=lambda m: None),
+    "wk":     dict(plan=None, extras=_x_weekly_v9, edges=None,
+                   prices=lambda m: (m.get("close"), None, None),
+                   score=lambda m: m.get("rs"), risk=lambda m: None),
+}
+
+
+def _card_v9(m: dict, spec: dict, *, tier: str = "", grp: str = "", seen=None) -> str:
+    """One chart-first card. Never raises; every block self-omits on missing data."""
+    tk = str(m.get("ticker", "") or "")
+    if not tk:
+        return ""
+    cid = f"card-{grp}-{tk}"
+    if seen is not None:
+        if cid in seen:
+            k = 2
+            while f"{cid}-{k}" in seen:
+                k += 1
+            cid = f"{cid}-{k}"
+        seen.add(cid)
+    close, entry, stop = spec["prices"](m)
+    lp = _lp(tk, close, entry=entry, stop=stop) if close is not None else ""
+    score = spec["score"](m)
+    risk = spec["risk"](m)
+    head = (f"<div class='card-head'>"
+            f"<span class='ticker'><a href='https://www.tradingview.com/chart/?symbol={esc(tk)}' target='_blank'>{esc(tk)}</a></span>"
+            + lp + _lesson_badge(m) + _card_flags_v9(m, tier) + "</div>")
+    chart = m.get("spark") or m.get("_spark") or ""
+    above = _mtf_line(m) + _lessons_line(m)
+    if above:
+        above = f"<div class='cardlines'>{above}</div>"
+    theme_bits = " · ".join(x for x in [esc(m.get("theme") or ""), esc(m.get("sector") or "")] if x)
+    ctx_head = ""
+    if theme_bits or _ind_badge(m):
+        ctx_head = f"<div class='sub ctxline'>{theme_bits}{_ind_badge(m)}</div>"
+    # Each fold block is independently guarded (2026-07-18 review): the
+    # docstring promises "every block self-omits on missing data", but an
+    # unguarded None reaching a format string in ANY spec function used to
+    # abort the whole report. Now one bad block drops out; the card survives.
+    def _blk(fn, *a):
+        try:
+            return fn(*a) or ""
+        except Exception:  # noqa: BLE001
+            log.warning("v9 card block %s failed for %s", getattr(fn, "__name__", fn), tk)
+            return ""
+
+    fold_parts = [
+        # REV 10 (USER 2026-07-18: "i dont need this boxes 'BREAKOUT · SR STOP /
+        # Buy / Stop / Risk / PULLBACK …'"): the per-section plan box is no
+        # longer rendered on ANY card. The numbers survive where they are read
+        # from the chart instead: entry/stop ride the .lp span (data-entry/
+        # data-stop) in the head and risk% stays a cell in the stat strip. The
+        # _plan_*_v9 builders + SECTION_SPECS_V9['plan'] are kept for rollback.
+        _blk(_stat_strip_v9, m),
+        _blk(_fund_block_v9, tk),
+        _blk(_meta_block_v9, m),
+        ctx_head,
+        _blk(spec.get("extras") or (lambda _m: ""), m),
+        _blk(lambda _m: _edge_details(_m, spec["edges"](_m)) if spec.get("edges") else "", m),
+        _blk(_trendline_block, m),
+    ]
+    inner = "".join(x for x in fold_parts if x)
+    fold = (f"<details class='fold'><summary><span>Details</span><span class='chev'>▸</span></summary>"
+            f"<div class='foldin'>{inner}</div></details>") if inner else ""
+    attrs = (f" data-tk='{esc(tk)}' data-grp='{esc(grp)}' data-sector='{esc(m.get('sector', '') or '')}'"
+             + (f" data-score='{esc(score)}'" if score not in (None, "") else "")
+             + (f" data-risk='{risk}'" if risk not in (None, "") else ""))
+    return (f"<article class='card' id='{cid}'{attrs}>"
+            + head + chart + above + fold + "</article>")
+
+
+def _section_v9(key: str, title: str, rows, spec: dict, *, subtitle: str = "",
+                bg: str = "", tier: str = "", grp: str = "", lead: str = "",
+                tail: str = "", empty: str = "") -> str:
+    """A stacked v9 section: title bar + card list. Keeps the .section-title +
+    .table-container adjacency so the existing collapse JS/CSS still work."""
+    grp = grp or key
+    seen: set = set()
+    cards = "".join(_card_v9(m, spec, tier=tier, grp=grp, seen=seen) for m in rows)
+    if not cards and not empty and not lead:
+        return ""
+    if not cards and empty:
+        cards = f"<div class='card card-empty'>{esc(empty)}</div>"
+    sub_html = f"<span class='section-sub'>{esc(subtitle)}</span>" if subtitle else ""
+    return (f"<section class='secv9' id='sec-{key}'>"
+            f"<div class='section-title {bg}'><span class='tdot'></span>{esc(title)}"
+            f"<span class='sec-n'>{len(rows)}</span>{sub_html}</div>"
+            f"<div class='table-container cardlist'>{lead}{cards}{tail}</div></section>")
+
+
+def _secnav_v9(entries) -> str:
+    """Sticky anchor-chip nav (the one nav contract — replaces the 8-tab bar)
+    + the expand/collapse-all-folds control."""
+    chips = []
+    for key, label, count in entries:
+        n = f"<b>{count}</b>" if count not in (None, 0) else ""
+        chips.append(f"<a class='navchip' href='#sec-{key}'>{esc(label)}{n}</a>")
+    # REV 10 (USER 2026-07-18: "make the chart has 6 months to 1y history 'i can
+    # select'" + "make another grid … have a button for me to choose as well").
+    # Both controls are global: they retint every chart / the whole deck at once.
+    tf = ("<span class='ctlgrp' role='group' aria-label='Chart timeframe'>"
+          "<button class='ctlbtn' data-tf='63' type='button'>3M</button>"
+          "<button class='ctlbtn on' data-tf='130' type='button'>6M</button>"
+          "<button class='ctlbtn' data-tf='0' type='button'>1Y</button></span>")
+    gr = ("<span class='ctlgrp' role='group' aria-label='Chart grid'>"
+          "<button class='ctlbtn on' data-cols='1' type='button' title='One per row'>&#9776;</button>"
+          "<button class='ctlbtn' data-cols='2' type='button' title='2 per row'>2</button>"
+          "<button class='ctlbtn' data-cols='3' type='button' title='3 per row'>3</button>"
+          "<button class='ctlbtn' data-cols='4' type='button' title='4 per row'>4</button></span>")
+    return ("<div class='secnav' id='secnav'><div class='secnav-in'>"
+            + "".join(chips)
+            + "<button class='navchip' id='foldAll' type='button' data-open='0'>expand all ▸</button>"
+            + "</div><div class='secnav-in secnav-ctl'>" + tf + gr + "</div></div>")
+
+
+# ---- v9 section generators (card versions of the tabbed tables). Each does
+# its OWN data prep (copied from the legacy generator) because exactly one
+# path runs per report — legacy generators stay untouched for rollback. ----
+
+_UR_NOTE_V9 = (
+    "<div class='vnote'>"
+    "<div class='vnote-t'>POST-HVE U&amp;R STRATEGY (like MXL Apr 28)</div>"
+    "<div class='vnote-b'><b>Setup:</b> day 2–5 after a massive HVE breakout; volume dries to &lt;50% of day 1 "
+    "(institutional holding). <b>Trigger:</b> price undercuts the previous day low, flushes stops, then violently "
+    "reclaims. <b>Entry:</b> on the reclaim with volume expansion. <b>Stop:</b> 1% below the undercut-day wick low "
+    "(typically 2–4% risk).</div></div>")
+
+_S4_SUB_V9 = ("below a flat/declining 30-week MA · RS ≤25 or falling RS line · industry RS ≤25 · "
+              "at/just breaking the shelf · DTC ≥10× excluded · informational — never drafted")
+
+
+def generate_minervini_cards(market_modifier: float = 1.0) -> Tuple[str, int]:
+    """v9 card version of the Minervini buy list (own data prep; runs INSTEAD
+    of generate_minervini_table when LAYOUT_V9)."""
+    try:
+        files = [f for f in os.listdir(MINERVINI_DIR)
+                 if f.startswith("buy_list_") and f.endswith(".json")]
+    except OSError:
+        files = []
+    if not files:
+        return _section_v9("min", "MINERVINI — VCP / SEPA BUY LIST", [],
+                           SECTION_SPECS_V9["min"],
+                           empty="Minervini engine: no buy_list file found."), 0
+    latest = sorted(files)[-1]
+    asof = latest[len("buy_list_"):-len(".json")]
+    try:
+        rows = _read_json_retry(os.path.join(MINERVINI_DIR, latest))
+    except (OSError, ValueError) as exc:
+        log.error("Minervini feed unreadable (%s): %r", latest, exc)
+        return _section_v9("min", "MINERVINI — VCP / SEPA BUY LIST", [],
+                           SECTION_SPECS_V9["min"],
+                           empty=f"Minervini engine: could not read {latest}."), 0
+    if not rows:
+        return _section_v9("min", "MINERVINI — VCP / SEPA BUY LIST", [],
+                           SECTION_SPECS_V9["min"],
+                           empty=f"Minervini engine: 0 picks on {asof}."), 0
+    for m in rows:
+        m["_risk_pct"] = round((m.get("stop_frac") or 0.0) * 100, 1)
+    _enrich_external_rows(rows, weekly_spark=False, spark_field="Close", spark_n=60,
+                          market_modifier=market_modifier, spark_ma_spec=_MA_SPEC_DARK)
+    rows = [m for m in rows if not m.get("_drop_adr")]
+    _prefetch_fundamentals([m.get("ticker") for m in rows], budget_s=30.0)
+    return _section_v9("min", "MINERVINI — VCP / SEPA BUY LIST", rows,
+                       SECTION_SPECS_V9["min"],
+                       subtitle=f"as of {asof} · trade plan from minervini_engine · "
+                                f"META/ANTS/chart computed by MADRRY"), len(rows)
+
+
+def generate_trilogy_cards(limit=None, market_modifier: float = 1.0) -> Tuple[str, int]:
+    """v9 card version of the Trilogy buy-stop list (weekly charts)."""
+    try:
+        data, _rtb_src = _read_trilogy_rtb()
+        log.info("Trilogy feed source: %s", _rtb_src)
+    except (OSError, ValueError) as exc:
+        log.error("Trilogy feed unreadable (tried %s): %r", TRILOGY_RTB_PATHS, exc)
+        return _section_v9("tri", "TRILOGY — O'NEIL BUY-STOP LIST", [],
+                           SECTION_SPECS_V9["tri"],
+                           empty="Trilogy: ready_to_buy.json not found / unreadable."), 0
+    cands = data.get("candidates", []) or []
+    asof = data.get("asof", "")
+    total = len(cands)
+    if not cands:
+        return _section_v9("tri", "TRILOGY — O'NEIL BUY-STOP LIST", [],
+                           SECTION_SPECS_V9["tri"],
+                           empty=f"Trilogy: 0 candidates on {asof}."), 0
+    shown = cands if limit is None else cands[:limit]
+    for c in shown:
+        _piv = c.get("pivot")
+        _stp = round(_piv * 0.92, 2) if isinstance(_piv, (int, float)) else None
+        _ib = c.get("ideal_buy")
+        c["_risk_pct"] = (round((_ib - _stp) / _ib * 100, 1)
+                          if isinstance(_ib, (int, float)) and isinstance(_stp, (int, float)) and _ib else 10.0)
+    _enrich_external_rows(shown, weekly_spark=True, market_modifier=market_modifier,
+                          spark_ma_spec=_MA_SPEC_10W)
+    shown = [c for c in shown if not c.get("_drop_adr")]
+    _prefetch_fundamentals([c.get("ticker") for c in shown], budget_s=30.0)
+    return _section_v9("tri", "TRILOGY — O'NEIL BUY-STOP LIST", shown,
+                       SECTION_SPECS_V9["tri"],
+                       subtitle=f"as of {asof} · weekly charts · trade plan from trilogy webapp · "
+                                f"META/ANTS computed by MADRRY"), total
+
+
+def build_lesson_radar_v9(radar: List[dict]) -> str:
+    """v9 card version of the Lesson Radar (4/4 open, 3/4 collapsed).
+    Keeps the legacy status-label mutation (the radar tag is data)."""
+    if not radar:
+        return ""
+    for m in radar:
+        missed = m.get("radar_missed_tier", "none")
+        why = str(m.get("radar_reason", "")) or "tightness / vol dry-up"
+        tag = ("🛰 Radar: no tier (" + why + ")" if missed in (None, "none")
+               else "🛰 Radar: no tier (missed " + str(missed) + " — " + why + ")")
+        if tag not in m.get("status_labels", []):
+            m.setdefault("status_labels", []).append(tag)
+    four = [m for m in radar if len(m.get("lesson_confluence") or []) >= 4]
+    three = [m for m in radar if len(m.get("lesson_confluence") or []) == 3]
+    out = _section_v9("radar", "LESSON RADAR — 4/4 LESSONS, NO TIER", four,
+                      SECTION_SPECS_V9["coil"], bg="bg-a", grp="radar",
+                      subtitle="all four tutorial lessons agree, but the tightness/vol filters "
+                               "rejected it · informational only")
+    if three:
+        seen: set = set()
+        cards3 = "".join(_card_v9(m, SECTION_SPECS_V9["coil"], grp="radar3", seen=seen)
+                         for m in three)
+        out += ("<details class='funnel'><summary class='fn-cap'>Lesson Radar — 3/4 lessons, no tier "
+                + f"<span class='fn-sub'>{len(three)} names</span></summary>"
+                + f"<div class='table-container cardlist'>{cards3}</div></details>")
+    return out
+
+
+def generate_new_highs_cards(nh: dict) -> str:
+    """v9 card version of the 52-week-high leadership section."""
+    green = nh.get("green", [])
+    clusters = nh.get("clusters", [])
+    total = nh.get("total", 0)
+    if total == 0:
+        return ""
+    n_persist = sum(1 for m in green if m.get("persist_tier"))
+    lead = ""
+    if clusters:
+        chips = "".join(
+            f"<span class='theme-chip' data-sector='{esc(s)}' style='border-color:var(--green);'>"
+            f"{esc(s)} <b style='color:var(--green);'>×{n}</b></span>" for s, n in clusters)
+        lead = (f"<div class='vnote vnote-green'><div class='vnote-t'>Sectors making COLLECTIVE new highs "
+                f"({total} total · ≥3 = cluster)</div>"
+                f"<div class='hot-themes' style='margin:6px 0 0;'>{chips}</div></div>")
+    elif total:
+        lead = (f"<div class='sub' style='margin:0 0 10px;'>{total} new 52-wk highs today · "
+                "no single sector reached a ≥3 cluster.</div>")
+    return _section_v9("nh", f"NEW 52-WEEK HIGHS — LEADERSHIP", green,
+                       SECTION_SPECS_V9["nh"], bg="bg-aplus", lead=lead,
+                       subtitle=f"{total} new highs · {n_persist}★ persistent · "
+                                f"{len(clusters)} sector clusters · constructive + persistent names carded",
+                       empty="No constructive or persistent names today — the rest of the new highs "
+                             "are extended or still developing.")
+
+
+def generate_nh52_monitor_cards(pullbacks: List[dict], monitored: List[dict]) -> str:
+    """v9 card version of the 52wk-high pullback monitor."""
+    n_pull = len(pullbacks)
+    n_break = sum(1 for m in monitored if m.get("tag") == "RED")
+    lead = ""
+    if pullbacks:
+        lead = ("<div class='vnote vnote-green'><div class='vnote-t'>Low-volume pullback</div>"
+                "<div class='vnote-b'>price slipped below its 50-day MA or the prior close while volume "
+                "dried up below its 30-day average — supply exhausting, a constructive continuation watch."
+                "</div></div>")
+    return _section_v9("pull", "52-WEEK-HIGH PULLBACK MONITOR", monitored,
+                       SECTION_SPECS_V9["pull"], lead=lead,
+                       subtitle=f"new highs from the last {NH52_WATCH_DAYS} sessions, re-checked each run · "
+                                f"{n_pull} low-vol pullbacks · {n_break} high-vol breakdowns",
+                       empty="No names on the 52wk-high monitor yet — they accumulate as the daily scan "
+                             "prints fresh new highs.")
+
+
+def generate_weekly_review_cards(data: dict) -> str:
+    """v9 card version of the IBD-style Weekly Review."""
+    rows = (data or {}).get("rows", [])
+    ok = (data or {}).get("ok", True)
+    empty = ("No leader gained 5%+ this week — a quiet tape for the strongest names." if ok
+             else "Weekly Review unavailable — screener or RS data did not load this run.")
+    return _section_v9("wk", "YOUR WEEKLY REVIEW", rows, SECTION_SPECS_V9["wk"],
+                       subtitle="leaders up ≥5% this week · RS≥80 · above 200-day · "
+                                "within 25% of 52-wk high", empty=empty)
 
 
 def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
@@ -6985,7 +9327,7 @@ def generate_ur_table(ur_matches: List[dict]) -> str:
             </tr>""")
     out.append("</table></div>")
     out.append("""
-    <div style="background-color:var(--tint-accent);border-left:4px solid #aecfe8;padding:15px;margin:20px 0;border-radius:0 8px 8px 0;">
+    <div style="background-color:var(--tint-accent);padding:15px;margin:20px 0;border-radius:8px;">
         <div style="color:#aecfe8;font-weight:bold;margin-bottom:8px;">📖 Post-HVE U&amp;R Strategy (Like MXL Apr 28)</div>
         <div style="font-size:var(--fs-table);color:#ececea;line-height:1.6;">
             <strong>Setup:</strong> Day 2-5 after massive HVE breakout. Volume dries to &lt;50% of Day 1 (institutional holding).<br>
@@ -7194,6 +9536,221 @@ def breadth_day_over_day(br50: float, br200: float) -> Tuple[Optional[float], Op
     return d50, d200
 
 
+# ---- Weinstein ch.8 market internals (2026-07-17): A-D line, weekly common-
+# stock NH-NL, Momentum Index (200d MA of net advances). Display-only card;
+# history backfilled from the survivor-only local dump (shape/sign reads, not
+# levels). Any future use as a FILTER needs its own §2.7 era-rule backtest.
+_INTERNALS_BASE_FILTER = [
+    {"left": "type", "operation": "in_range", "right": ["stock"]},
+    {"left": "typespecs", "operation": "has", "right": ["common"]},
+    {"left": "exchange", "operation": "in_range", "right": ["NYSE", "NASDAQ", "AMEX"]},
+    {"left": "close", "operation": "egreater", "right": 2},
+]
+
+
+def fetch_market_internals(diag: Optional[Diagnostics] = None) -> Optional[dict]:
+    """Five cheap TradingView COUNT queries (range [0,1] -> totalCount only):
+    universe / advancers / decliners / new 52w highs / new 52w lows over
+    NYSE+NASDAQ+AMEX common stocks >= $2 (probed working 2026-07-17). Never
+    fatal: any failure -> diag.warn -> None (the card just doesn't update)."""
+    try:
+        def _count(extra, label):
+            payload = {"filter": _INTERNALS_BASE_FILTER + extra,
+                       "columns": ["name"], "range": [0, 1]}
+            # NO diag= here (2026-07-18 review, BLOCKER): _request_json records
+            # diag.error() BEFORE raising, so passing diag would put an entry in
+            # diag.errors and trip the errors=0 publish gate — even though this
+            # card is optional and our own except-handler downgrades to warn.
+            d = tv_post(payload, label=f"internals:{label}")
+            n = d.get("totalCount")
+            if n is None:
+                raise ValueError(f"{label}: no totalCount")
+            return int(n)
+        issues = _count([], "universe")
+        adv = _count([{"left": "change", "operation": "greater", "right": 0}], "adv")
+        dec = _count([{"left": "change", "operation": "less", "right": 0}], "dec")
+        nh = _count([{"left": "high", "operation": "egreater", "right": "price_52_week_high"}], "nh")
+        nl = _count([{"left": "low", "operation": "eless", "right": "price_52_week_low"}], "nl")
+        if not issues or adv + dec > issues:
+            raise ValueError(f"implausible counts: issues={issues} adv={adv} dec={dec}")
+        return {"issues": issues, "adv": adv, "dec": dec, "nh": nh, "nl": nl}
+    except Exception as exc:  # noqa: BLE001
+        if diag:
+            diag.warn(f"Market internals fetch skipped: {exc}")
+        return None
+
+
+def _load_market_internals() -> Optional[dict]:
+    """Read market_internals.json ({} -> None). Never raises."""
+    try:
+        with open(MARKET_INTERNALS_PATH) as fh:
+            d = json.load(fh)
+        return d if d.get("daily") else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _persist_market_internals(counts: Optional[dict], data_date: Optional[str]) -> None:
+    """Append today's counts keyed by data_date (same-day re-run overwrites),
+    derive net_adv / ad_line / mi / mi_pct from the stored series, cap at 600
+    rows. Non-fatal, atomic."""
+    try:
+        if not counts or not data_date:
+            return
+        # Never overwrite an accumulated history we failed to READ (2026-07-18
+        # review): a transient unreadable/corrupt file would otherwise be
+        # replaced by a one-row file, destroying the series. Absent file =
+        # legitimate fresh start; present-but-unreadable = bail out.
+        d = _load_market_internals()
+        if d is None and os.path.exists(MARKET_INTERNALS_PATH):
+            log.warning("market_internals.json unreadable — skipping append to "
+                        "avoid destroying the accumulated series")
+            return
+        d = d or {"_meta": {"spec": "live TV counts"}, "daily": {}}
+        daily = d.setdefault("daily", {})
+        rows = sorted(k for k in daily if k < data_date)
+        prev_ad = daily[rows[-1]].get("ad_line", 0) if rows else 0
+        net = counts["adv"] - counts["dec"]
+        rec = dict(counts)
+        rec.update({"net_adv": net, "ad_line": prev_ad + net, "src": "live"})
+        daily[data_date] = rec
+        keep = sorted(daily)[-600:]
+        d["daily"] = {k: daily[k] for k in keep}
+        # MI over the last <=200 stored rows (tolerates gaps; sign is the read)
+        tail = [d["daily"][k] for k in sorted(d["daily"])[-200:]]
+        nets = [r.get("net_adv", 0) for r in tail]
+        isss = [max(1, r.get("issues", 1)) for r in tail]
+        rec["mi"] = round(sum(nets) / len(nets), 1)
+        rec["mi_pct"] = round(sum(n / i for n, i in zip(nets, isss)) / len(nets) * 100.0, 2)
+        _atomic_write(MARKET_INTERNALS_PATH, json.dumps(d))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _internals_card(internals: Optional[dict], market_data: Optional[List[dict]]) -> str:
+    """One compact Market Overview card: A-D + divergence state, weekly NH-NL
+    + sign streak, Momentum Index + confirmed/unconfirmed zero-cross. ''
+    when data is missing or >5 sessions stale. Display-only. Never raises."""
+    try:
+        if not internals:
+            return ""
+        daily = internals.get("daily") or {}
+        keys = sorted(daily)
+        if len(keys) < 30:
+            return ""
+        last = daily[keys[-1]]
+        # stale guard: newest row must be recent (>5 stored sessions gap = off)
+        try:
+            from datetime import date as _date
+            newest = datetime.strptime(keys[-1], "%Y-%m-%d").date()
+            if (_date.today() - newest).days > 9:
+                return ""
+        except Exception:  # noqa: BLE001
+            pass
+        rows = [daily[k] for k in keys]
+        # --- A-D line state / divergence vs SPX ---
+        ads = [r.get("ad_line", 0) for r in rows]
+        tail252 = ads[-252:]
+        ad_stale = (len(tail252) - 1) - max(range(len(tail252)), key=lambda i: tail252[i])
+        spx = next((m for m in (market_data or []) if m.get("ticker") == "^GSPC"), None)
+        spx_off = (spx or {}).get("pct_off_52wk")
+        if spx_off is not None and spx_off >= -0.5 and ad_stale >= 20:
+            l1 = ("<span class='val-warn'>⚠️ SPX near its 52w high UNCONFIRMED — "
+                  "A-D line stale %d sess (~%.1f mo) · backfill is survivor-biased, read "
+                  "shape not level</span>" % (ad_stale, ad_stale / 21.0))
+        else:
+            state = ("at its 252d high" if ad_stale == 0
+                     else "%d sess off its 252d high" % ad_stale)
+            l1 = ("%s▲ / %s▼ · net %+d · line %s"
+                  % (last.get("adv", "?"), last.get("dec", "?"), last.get("net_adv", 0), state))
+        # --- weekly NH-NL + streak (W-FRI buckets) ---
+        import collections
+        wk = collections.OrderedDict()
+        for k in keys[-400:]:
+            dt = datetime.strptime(k, "%Y-%m-%d").date()
+            fri = dt + timedelta(days=(4 - dt.weekday()) % 7)
+            wk.setdefault(fri.isoformat(), 0)
+            wk[fri.isoformat()] += (daily[k].get("nh", 0) - daily[k].get("nl", 0))
+        wvals = list(wk.values())
+        streak = 0
+        for v in reversed(wvals):
+            if (v > 0) == (wvals[-1] > 0) and (v != 0 or wvals[-1] == 0):
+                streak += 1
+            else:
+                break
+        l2 = ("weekly NH-NL %+d · %d wk %s"
+              % (wvals[-1], streak, "positive" if wvals[-1] > 0 else "negative"))
+        # --- Momentum Index + zero-cross confirmation (>=10 sessions held) ---
+        mis = [(r.get("net_adv", 0) / max(1, r.get("issues", 1))) for r in rows]
+        mi_series = []
+        for i in range(len(mis)):
+            w = mis[max(0, i - 199):i + 1]
+            mi_series.append(sum(w) / len(w))
+        cur = mi_series[-1] * 100.0
+        sign = cur > 0
+        held = 0
+        for v in reversed(mi_series):
+            if (v > 0) == sign:
+                held += 1
+            else:
+                break
+        cross_date = keys[-held] if held < len(keys) else keys[0]
+        conf = ("positive" if sign else "negative")
+        conf += " since %s (%s)" % (cross_date,
+                                    "confirmed" if held >= 10 else "unconfirmed flip %d/10" % held)
+        l3 = "MI %+.2f%% · %s" % (cur, conf)
+        tip = ("Weinstein ch.8 internals. Common stocks >=$2, NYSE+NASDAQ+AMEX (~4.4k live / "
+               "5.9k backfill). History backfilled from a survivor-only dump - decliner/new-low "
+               "counts understated historically; read shape and sign, not levels. MI = 200d MA "
+               "of daily net advances as % of issues; a zero-cross is 'confirmed' after the sign "
+               "holds 10 sessions. A-D divergence rule: index near its 52w high while the A-D "
+               "line is >=20 sessions past its own high. Display-only - no gate.")
+        return (f"""<div class="market-card" title="{esc(tip)}">
+                <h3>Internals (A-D · NH-NL · MI)</h3>
+                <div style="font-size:var(--fs-table);color:#82827c;">
+                    {l1}<br>
+                    {l2}<br>
+                    {l3}<br>
+                    <span style="font-size:var(--fs-caption);">Weinstein ch.8 · common stocks · display-only</span>
+                </div>
+            </div>""")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _persist_headline_meter(data_date: Optional[str], market_data: Optional[List[dict]] = None) -> None:
+    """Append today's headline-meter reading to headline_meter_history.json
+    (this history is what makes a future §2.7 era-gated study possible — the
+    meter itself stays display-only until then). Non-fatal; 400-row cap."""
+    try:
+        if not data_date or not HEADLINE_METER:
+            return
+        rec = dict(HEADLINE_METER)
+        try:
+            spx = next((m for m in (market_data or []) if m.get("ticker") == "^GSPC"), None)
+            rec["spx_off_hi"] = (spx or {}).get("pct_off_52wk")
+        except Exception:  # noqa: BLE001
+            rec["spx_off_hi"] = None
+        hist = {}
+        if os.path.exists(HEADLINE_METER_HISTORY_PATH):
+            try:
+                with open(HEADLINE_METER_HISTORY_PATH) as fh:
+                    hist = json.load(fh)
+                if not isinstance(hist, dict):
+                    raise ValueError("not a dict")
+            except Exception:  # noqa: BLE001
+                # Present but unreadable -> preserve on disk, skip this append
+                # (2026-07-18 review: the old fallback wrote a 1-row file over
+                # the accumulated series).
+                log.warning("headline_meter_history.json unreadable — skipping append")
+                return
+        hist[data_date] = rec
+        keep = sorted(hist)[-400:]
+        _atomic_write(HEADLINE_METER_HISTORY_PATH, json.dumps({k: hist[k] for k in keep}))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _persist_breadth_history(breadth: dict, data_date: Optional[str]) -> None:
     """Append the session's S&P breadth to breadth_history.json keyed by the
     US-session DATA DATE (never wall-clock). This is the durable regime feed for
@@ -7252,9 +9809,54 @@ def _index_display(tk: str) -> str:
 
 
 def build_market_section(market_data: List[dict], breadth: dict,
-                         regime: str = "GREEN", allow_breakouts: bool = True) -> Tuple[str, str]:
+                         regime: str = "GREEN", allow_breakouts: bool = True,
+                         internals: Optional[dict] = None,
+                         sector_waves: Optional[List[dict]] = None) -> Tuple[str, str]:
     """Returns (html, overall_trend)."""
-    out = ['<div class="market-panel"><div class="market-title">MARKET OVERVIEW — The Bibles + QM</div><div class="market-grid">']
+    # Weinstein index-stage banner (2026-07-16, ch.8): presentation-level only —
+    # never gates scans, tiers or drafts. Red styling + the ch.8 Stage-4 protocol
+    # text when any tracked index reads Stage 4; amber on Stage-3 risk.
+    stage_banner = ""
+    try:
+        stages = [(md["ticker"], md["wk_stage"]) for md in market_data if md.get("wk_stage")]
+        if stages:
+            any_s4 = any(s.startswith("S4") for _, s in stages)
+            any_s3 = any(s.startswith("S3") for _, s in stages)
+            toks = " · ".join(f"{esc(_index_display(t))} <b>{esc(s)}</b>" for t, s in stages)
+            note = ""
+            if any_s4:
+                note = (" — <b>Stage-4 tape (Weinstein ch.8): no new buys, sell weak-RS "
+                        "holdings, tighten stops, favor the SHORT section</b>")
+            elif any_s3:
+                note = " — Stage-3 caution: 30wk MA flattening, tighten stops"
+            col = "var(--red)" if any_s4 else ("var(--yellow)" if any_s3 else "var(--text-2)")
+            tip = ("Weinstein stage read per index (30-week ~ 150d MA): slope over ~5wk "
+                   "(rising > +0.5%, falling < -0.5%), price vs MA, churn = >=3 MA crossings "
+                   "in 50 sessions. Informational banner only - no gate.")
+            stage_banner = ("<div style='font-size:var(--fs-caption);margin:2px 0 10px;"
+                            f"color:{col};' title='{esc(tip)}'>WEINSTEIN STAGE · {toks}{note}</div>")
+    except Exception:  # noqa: BLE001
+        stage_banner = ""
+    # Sector-wave banner (Weinstein ch.3 group-ignition tally; informational).
+    waves_banner = ""
+    try:
+        if sector_waves:
+            toks = " · ".join(
+                ("%s%s %d/%s" % ("<b>NEW</b> " if w.get("is_new") else "",
+                                 esc(w["industry"]), w["n"], w.get("size") or "?"))
+                for w in sector_waves[:5])
+            wtip = ("Distinct 5-day breakout WINNERS per industry group (breakout_log, "
+                    "non-ETF). Fires at >=3 winners covering >=20% of the group, or >=10 "
+                    "absolute. Weinstein ch.3: clustered group ignition marked the casino "
+                    "'78 / motor-home '82 / oil '86 waves. Thresholds cadence-calibrated on 28 days "
+                    "of live log - no forward-return claim tested. Informational only - no gate.")
+            waves_banner = ("<div style='font-size:var(--fs-caption);margin:2px 0 8px;"
+                            "color:var(--text-2);' title='" + esc(wtip) + "'>"
+                            "SECTOR WAVES · " + toks + "</div>")
+    except Exception:  # noqa: BLE001
+        waves_banner = ""
+    out = ['<div class="market-panel"><div class="market-title">MARKET OVERVIEW</div>'
+           + stage_banner + waves_banner + '<div class="market-grid">']
     overall_trend = "GREEN"
     for md in market_data:
         tk = md["ticker"]
@@ -7308,6 +9910,7 @@ def build_market_section(market_data: List[dict], breadth: dict,
 
     out.append(f"""
             {breadth_html}
+            {_internals_card(internals, market_data)}
         </div>
     </div>""")
     return "".join(out), overall_trend
@@ -7434,6 +10037,103 @@ def _news_tokens(title: str) -> frozenset:
                      if len(t) >= 3 and t not in _NEWS_STOPWORDS)
 
 
+# ---- Weinstein ch.8 contrary-opinion headline meter (2026-07-17) ------------
+# Deterministic lexicon score over the day's MARKET-SCOPED headlines. INFO-ONLY
+# soft line on the Big Picture card — no gate, no score input, no timing claim
+# (no historical headline archive exists, so no backtest is possible until
+# headline_meter_history.json accrues >=2 eras). Probe-earned rules: scope
+# words are SUBJECT-only (never sentiment words) and foreign-market stories are
+# excluded — see the F5 probe (2026-07-17).
+_HM_SCOPE_PHRASES = ("wall street", "s&p 500", "s&p500", "sp 500", "stock market",
+                     "bull market", "bear market", "risk assets")
+_HM_SCOPE_WORDS = frozenset(
+    "stocks market markets nasdaq dow s&p equities investors traders bulls "
+    "bears futures indexes indices fed".split())
+_HM_FOREIGN_WORDS = frozenset(
+    "india indian korea korean china chinese japan japanese europe european "
+    "nikkei kospi sensex nifty dax ftse cac hang seng shanghai shenzhen "
+    "taiwan taiex asx".split())
+_HM_EUPHORIA_PHRASES = (
+    "record high", "record highs", "all-time high", "all-time highs",
+    "record close", "record closes", "new high", "new highs", "fresh high",
+    "fresh highs", "fresh record", "notches record", "best day", "best week",
+    "best month", "best quarter", "best year", "winning streak", "bull run",
+    "bull market", "melt-up", "melt up", "risk-on", "buying frenzy",
+    "no stopping", "cant lose", "can't lose", "to the moon", "goldilocks",
+    "soft landing", "fear of missing out")
+_HM_EUPHORIA_WORDS = frozenset(
+    "soar soars soared soaring surge surges surged surging rally rallies "
+    "rallied rallying boom booms booming skyrocket skyrockets skyrocketed "
+    "rocket rockets rocketed euphoria euphoric mania frenzy fomo unstoppable "
+    "bullish upbeat buoyant optimism optimistic cheer cheers cheered roaring "
+    "milestone blockbuster".split())
+_HM_DOOM_PHRASES = (
+    "bear market", "hard landing", "worst day", "worst week", "worst month",
+    "worst quarter", "worst year", "losing streak", "free fall", "freefall",
+    "wiped out", "wipe out", "black monday", "flash crash", "credit crunch",
+    "death cross", "on edge", "brace for", "braces for", "no way out",
+    "recession fears", "recession risk", "recession warning")
+_HM_DOOM_WORDS = frozenset(
+    "crash crashes crashed crashing plunge plunges plunged plunging plummet "
+    "plummets plummeted tumble tumbles tumbled slump slumps slumped sink "
+    "sinks sank rout routed meltdown collapse collapses collapsed panic "
+    "fear fears fearful turmoil crisis recession bearish gloom doom "
+    "bloodbath carnage contagion default defaults bankruptcy bankruptcies "
+    "layoffs stagflation selloff sell-off capitulation jitters dread tank "
+    "tanks tanked crater craters cratered dive dives nosedive nosedived "
+    "spiral spirals warns warning warnings".split())
+_HM_TOKEN_RE = re.compile(r"[a-z0-9&$%.'\-]+")
+
+HEADLINE_METER: dict = {}   # filled by fetch_top10_news; read by build_big_picture
+
+
+def _hm_side_hits(t: str, phrases, words) -> int:
+    hits, masked = 0, t
+    for p in phrases:
+        if p in masked:
+            hits += 1
+            masked = masked.replace(p, " ")   # mask: "record high" != "record"+"high"
+    return hits + sum(1 for w in masked.split() if w in words)
+
+
+def _headline_meter(pool: List[dict]) -> dict:
+    """Score the day's unique market-scoped headlines. Returns {} when the
+    pool is empty. Shrunk index (add-2 pseudo-count per side) kills small-n
+    false precision; word buckets, never decimals, in the display."""
+    seen, n_e, n_d, n_neu = set(), 0, 0, 0
+    for it in pool:
+        t = " ".join(_HM_TOKEN_RE.findall((it.get("title") or "").lower()))
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        toks = set(t.split())
+        if toks & _HM_FOREIGN_WORDS:
+            continue
+        if not (any(p in t for p in _HM_SCOPE_PHRASES) or (toks & _HM_SCOPE_WORDS)):
+            continue
+        e = _hm_side_hits(t, _HM_EUPHORIA_PHRASES, _HM_EUPHORIA_WORDS)
+        d = _hm_side_hits(t, _HM_DOOM_PHRASES, _HM_DOOM_WORDS)
+        if e > d:
+            n_e += 1
+        elif d > e:
+            n_d += 1
+        else:
+            n_neu += 1
+    n_cls = n_e + n_d
+    idx_raw = (n_e - n_d) / n_cls if n_cls else None
+    idx = (n_e - n_d) / (n_cls + 4) if n_cls else None
+    bucket = None
+    if idx is not None:
+        bucket = ("one-sided cheer" if idx >= 0.45 else
+                  "leaning upbeat" if idx >= 0.20 else
+                  "uniform gloom" if idx <= -0.45 else
+                  "leaning fearful" if idx <= -0.20 else "mixed")
+    return {"n_scoped": n_e + n_d + n_neu, "n_euphoria": n_e, "n_doom": n_d,
+            "idx_raw": (round(idx_raw, 3) if idx_raw is not None else None),
+            "idx": (round(idx, 3) if idx is not None else None),
+            "bucket": bucket, "printable": n_cls >= 8}
+
+
 def fetch_top10_news(diag: Optional[Diagnostics] = None, deadline_s: float = 50.0) -> List[dict]:
     """The day's ten most important market/business stories, ranked WITHOUT an
     LLM: substantive summaries come from the yfinance index/ETF news pool (the
@@ -7511,6 +10211,12 @@ def fetch_top10_news(diag: Optional[Diagnostics] = None, deadline_s: float = 50.
             if diag:
                 diag.warn("Top 10 news: every source came back empty")
             return []
+
+        # Weinstein headline meter — side product of the pool, never fatal.
+        try:
+            HEADLINE_METER.update(_headline_meter(pool))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("headline meter skipped: %s", exc)
 
         # -- cluster near-duplicate stories across outlets by title tokens.
         # Match against the SEED item's fixed token set (never a growing union):
@@ -7681,7 +10387,7 @@ def build_top10_news(stories: List[dict]) -> str:
     return (
         "<details class='collapsis' open><summary class='section-title' "
         "style='background-color:var(--surface);color:var(--accent);border-bottom:3px solid var(--accent);'>"
-        "MADRRY TOP 10<span class='section-sub'>當日十大要聞（繁體中文）· ranked by "
+        "MADRRY TOP 10<span class='section-sub'>當日十大要聞 · ranked by "
         "cross-outlet corroboration, no LLM</span></summary>"
         f"<div class='t10-grid'>{''.join(cards)}</div></details>")
 
@@ -7762,9 +10468,37 @@ def _vol_phrase(v: Optional[float]) -> str:
     return "volume about even"
 
 
+def _hm_soft_line(meter: Optional[dict], spx: Optional[dict]) -> str:
+    """Weinstein ch.8 headline-meter soft line for the Big Picture card. ''
+    unless printable (>=8 classified headlines). Complacency flag: index down
+    >=8% from its 52w high while headlines stay cheerful = historically
+    bearish; mirrored gloom-at-lows note. Display-only. Never raises."""
+    try:
+        m = meter or {}
+        if not m.get("printable"):
+            return ""
+        off = (spx or {}).get("pct_off_52wk")
+        idx = m.get("idx") or 0.0
+        pre = ""
+        if off is not None and off <= -8.0 and idx >= 0.30:
+            pre = ("⚠ Complacency: S&amp;P %.0f%% off its high yet headlines stay "
+                   "cheerful — historically bearish (Weinstein ch.8). " % abs(off))
+        elif off is not None and off <= -15.0 and idx <= -0.5:
+            pre = ("Uniform gloom deep in a decline — crowd capitulation is how "
+                   "bottoms form (Weinstein ch.8). ")
+        return ("<p class='sub'>%sHeadline meter: <b>%s</b> — %d cheer / %d fear of %d "
+                "market headlines. Psychological potential only — act only when the "
+                "technical indicators agree.</p>"
+                % (pre, esc(m.get("bucket") or "mixed"), m.get("n_euphoria", 0),
+                   m.get("n_doom", 0), m.get("n_scoped", 0)))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def build_big_picture(market_data: List[dict], breadth: dict, t2108: dict,
                       regime: str, allow_breakouts: bool,
-                      leader_stats: dict, movers: dict) -> str:
+                      leader_stats: dict, movers: dict,
+                      headline_meter: Optional[dict] = None) -> str:
     """IBD 'The Big Picture' column: a short data-composed narrative of the
     day's action + the Market Pulse box (outlook state, IBD dist-day counts,
     leaders up/down in volume). Pure formatter — no network I/O."""
@@ -7877,7 +10611,7 @@ def build_big_picture(market_data: List[dict], breadth: dict, t2108: dict,
             + " — tap for the story</span></summary>"
             "<div class='market-panel bigpic'>"
             "<div class='bigpic-wrap'>"
-            f"<div class='bigpic-text'><p>{p3}</p><p>{p1}</p><p>{p2}</p></div>"
+            f"<div class='bigpic-text'><p>{p3}</p><p>{p1}</p><p>{p2}</p>{_hm_soft_line(headline_meter, spx)}</div>"
             f"<div class='market-card pulse-box'><h3>Market Pulse</h3>{''.join(pulse_rows)}</div>"
             "</div></div></details>")
     except Exception as exc:  # noqa: BLE001
@@ -7947,7 +10681,7 @@ def fetch_weekly_review(rs_map: Dict[str, Any], diag: Optional[Diagnostics] = No
         hmap = fetch_histories_batch([c["ticker"] for c in cands], period="1y", min_rows=60)
         for c in cands:
             hist = hmap.get(c["ticker"])
-            c["spark"] = make_candle_chart(hist, None, 60)
+            c["spark"] = make_candle_chart(hist, _chart_plan(c, hist), CHART_WINDOW)
             c["wk_vol_x"] = None
             try:
                 if hist is not None and len(hist) >= 55:
@@ -8021,13 +10755,14 @@ def build_runbar(counts: Dict[str, int], market_modifier: float, runtime: float,
           else "<span style='color:var(--red);'>Breakouts OFF</span>")
     # GLOBAL chips only (2026-07-10 USER: per-section counts were mixed into the
     # global bar — tier counts now render inside their own tabs via build_tab_counts).
+    # REV 10 (USER 2026-07-18: "the [runbar] at the top is very not useful"):
+    # collapsed to ONE compact chip. Dropped: Mkt Mod, Run time, the 🔄 Refresh
+    # Prices button and the "prices frozen at scan" stamp. refreshPrices() is
+    # only ever invoked by that button and null-guards #liveStamp, so removing
+    # both is safe; the live-quote helper stays in PAGE_JS for future use.
     return f"""
     <div class="runbar">
-        <span class="chip {cls}"><b>{regime}</b> Regime · {bo}</span>
-        <span class="chip">Mkt Mod <b>{market_modifier}x</b></span>
-        <span class="chip">Run <b>{runtime:.1f}s</b></span>
-        <button class="chip livebtn" onclick="refreshPrices(this)">🔄 Refresh Prices</button>
-        <span class="chip" id="liveStamp" style="color:#82827c;">prices frozen at scan — tap 🔄 for live</span>
+        <span class="chip {cls}"><b>{regime}</b> · {bo} · {market_modifier}×</span>
     </div>"""
 
 
@@ -8703,7 +11438,7 @@ def build_hot_themes(pool: List[dict]) -> str:
         )
     chips.append("<span class='theme-chip' id='themeClear' style='border-color:#82827c;display:none;'>✕ Show all</span>")
     return (f"<div class='section-title' style='background-color:var(--surface);color:#d3a04d;border-bottom:3px solid #d3a04d;'>"
-            f"HOT SECTORS — 今日強勢板塊 (top 3 · scroll → for more · tap to filter)</div>"
+            f"HOT SECTORS — 今日強勢板塊 · tap to filter</div>"
             f"<div class='hot-themes scroll'>{''.join(chips)}</div>")
 
 
@@ -8729,7 +11464,7 @@ def generate_new_highs_section(nh: dict) -> str:
             chips.append(f"<span class='theme-chip' data-sector='{esc(s)}' style='border-color:#54b87f;'>"
                          f"{esc(s)} <b style='color:#54b87f;'>×{n}</b></span>")
         out.append(
-            "<div style='background:var(--tint-green);border-left:4px solid #54b87f;padding:10px 14px;margin:0 0 14px;border-radius:0 8px 8px 0;'>"
+            "<div style='background:var(--tint-green);padding:10px 14px;margin:0 0 14px;border-radius:8px;'>"
             "<div style='color:#54b87f;font-weight:bold;font-size:var(--fs-body);margin-bottom:6px;'>"
             f"Sectors making COLLECTIVE new highs today ({total} new highs total · ≥3 = cluster)</div>"
             f"<div class='hot-themes' style='margin:0;'>{''.join(chips)}</div></div>")
@@ -8786,7 +11521,9 @@ def generate_new_highs_section(nh: dict) -> str:
                     <span style="color:{rc};font-size:var(--fs-body);">Risk: {risk_txt}</span>
                 </div>
                 {_edge_details(m, [_lessons_line(m), _sr_line(m), _pb2_line(m),
-                                   _tl_line(m), _ch_line(m)])}
+                                   _tl_line(m), _ch_line(m),
+                                   _stage_line(m), _mans_line(m), _oh_line(m),
+                                   _tc_line(m), _group_line(m)])}
             </td>
             {_narr_cell(m['ticker'], f'''<span class="theme-tag">{esc(m['theme'])}</span><br><span class="tag">{esc(m['sector'])}</span>{_ind_badge(m)}''')}
             <td class="num c-stat" data-label="ADR" data-sort="{m['adr']}">{m['adr']}%</td>
@@ -8825,7 +11562,7 @@ def generate_nh52_monitor_section(pullbacks: List[dict], monitored: List[dict]) 
 
     out = [head]
     if pullbacks:
-        out.append("<div style='background:var(--tint-green);border-left:4px solid #54b87f;"
+        out.append("<div style='background:var(--tint-green);"
                    "padding:10px 14px;margin:0 0 14px;border-radius:0 8px 8px 0;color:#54b87f;"
                    "font-size:var(--fs-table);'><b>Low-volume pullback</b> = price slipped below "
                    "its 50-day MA or the prior close while volume dried up below its 30-day average "
@@ -8894,6 +11631,60 @@ def generate_short_table(shorts: List[dict]) -> str:
                         <span style="color:#54b87f;">Cover → 21EMA ${m['target']} <span class="stop-reason">({tt_txt})</span></span>
                     </div>
                     <div style="font-size:var(--fs-micro);color:#82827c;margin-top:4px;">⚠️ Intraday stop is far tighter (above ORH, ~0.4–2%). Best when it gaps UP (exhaustion). Stand aside if it reclaims AVWAP.</div>
+                    {_sr_line(m)}
+                    {_tl_line(m, short=True)}
+                    {_ch_line(m, short=True)}
+                </td>
+            </tr>""")
+    out.append("</table></div>")
+    return "".join(out)
+
+
+def generate_stage4_short_table(shorts: List[dict]) -> str:
+    """Weinstein ch.7 Stage-4 breakdown table (second table in the Short tab)."""
+    out = [
+        '<div class="section-title bg-short"><span class="tdot"></span>STAGE-4 BREAKDOWN — WEINSTEIN CH.7 '
+        '(跌破支撐 · 空頭第四階段)</div>',
+        "<div style='font-size:var(--fs-caption);color:#82827c;margin:0 0 8px;'>"
+        "Below a flat/declining 30-week MA · RS ≤25 or falling RS line · industry RS ≤25 · "
+        "at/just breaking the shelf · DTC ≥10x excluded. Volume NOT required on breakdowns "
+        "(Weinstein ch.2/7 asymmetry). Informational leg — never drafted, learning loops skip shorts.</div>",
+        '<div class="table-container rowcards-container"><table class="rowcards">',
+        "<thead><tr><th>Ticker</th><th>Stage &amp; RS</th><th>Structure</th>"
+        "<th>Short Plan (Weinstein)</th></tr></thead>",
+    ]
+    if not shorts:
+        out.append("<tr><td colspan='4' style='color:#82827c;'>No Stage-4 breakdown candidates "
+                   "— no weak-group name is at its shelf right now.</td></tr>")
+    else:
+        for m in shorts:
+            tgt = m.get("target_swing")
+            tgt_txt = (f"Cover ½ near ${tgt} <span class='stop-reason'>(swing rule, −{m.get('to_target_pct')}%)</span>"
+                       if tgt else "<span class='stop-reason'>measured move exceeds price — deep-target flag</span>")
+            rs_bits = []
+            if m.get("rs_pct") is not None:
+                rs_bits.append(f"RS {m['rs_pct']}")
+            if m.get("rs_line_down"):
+                rs_bits.append("RS line ↘ swing-over-swing")
+            out.append(f"""<tr data-sector="{esc(m.get('sector',''))}">
+                <td class="ep-ticker" data-sort="{esc(m['ticker'])}"><a href="https://www.tradingview.com/chart/?symbol={esc(m['ticker'])}" target="_blank">{esc(m['ticker'])}</a></td>
+                <td data-sort="{m.get('ind_rs') or 99}">{_lp(m['ticker'], m['close'])}<br>
+                    <span class="bad">{esc(m.get('wk_stage') or 'S4')}</span> <span style="font-size:var(--fs-caption);color:#82827c;">30wk MA {m.get('wk_ma_slope', 0):+.1f}%/5wk</span><br>
+                    <span style="font-size:var(--fs-caption);color:#82827c;">{esc(' · '.join(rs_bits))}</span><br>
+                    <span style="font-size:var(--fs-caption);color:#e06c6a;">{esc(m.get('ind_name') or '')} · industry RS {m.get('ind_rs')}</span><br>
+                    {_narrative(m['ticker'], f'''<span class="theme-tag">{esc(m.get('theme') or '')}</span>''')}</td>
+                <td style="font-size:var(--fs-table);text-align:left;">
+                    shelf ${m.get('support_low')}<br>
+                    <span style="color:#82827c;">top peak ${m.get('peak')}</span><br>
+                    <span style="color:#82827c;">1M {m.get('perf_1m')}% · 6M {m.get('perf_6m')}%</span>
+                </td>
+                <td data-sort="{m.get('risk_pct') or 999}">
+                    <div class="entry-box" style="border-color:#8a4341;background:rgba(224,108,106,.08);">
+                        <span style="color:#e06c6a;font-weight:bold;font-size:var(--fs-table);">SHORT &lt; ${m['entry']}</span><br>
+                        <span class="stop-text">Buy-stop ${m['stop']} <span class="stop-reason">({esc(m.get('buy_stop_basis') or '')}, {m.get('risk_pct')}%)</span></span><br>
+                        <span style="color:#54b87f;">{tgt_txt}</span>
+                    </div>
+                    {_dtc_line(m)}
                     {_sr_line(m)}
                     {_tl_line(m, short=True)}
                     {_ch_line(m, short=True)}
@@ -9036,7 +11827,7 @@ def build_intraday_action_plan(setups_pool: List[dict], diag: Diagnostics,
         <thead><tr><th>Ticker</th><th>Live (Price / VWAP / ORB)</th><th>Execution Protocol</th><th>Trigger / Stop / Size</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>
     </table></div>
-    <div style="background:#10243a;border-left:4px solid #8cb4d6;padding:12px 15px;margin:0 0 20px;border-radius:0 8px 8px 0;font-size:var(--fs-table);color:#ececea;line-height:1.6;">
+    <div style="background:#10243a;padding:12px 15px;margin:0 0 20px;border-radius:8px;font-size:var(--fs-table);color:#ececea;line-height:1.6;">
         <b style="color:#aecfe8;">紀律：</b> 開盤前 15–30 分鐘別急；等 5m/30m <b>收盤</b>確認、量過均，再進。價在 VWAP 下一律不做多。<br>
         賣在強勢、沿 9/21 EMA 移動停損；風險每筆固定 ${risk_dollar:.0f}（部位是緊停損的副產品）。
     </div>
@@ -9174,6 +11965,8 @@ def run_scanners_and_generate_html() -> str:
     # Persist S&P breadth to the durable regime feed (keyed by data_date). The
     # writer had been orphaned since ~2026-06-08; re-wired here. Non-fatal.
     _persist_breadth_history(breadth, data_date)
+    _persist_headline_meter(data_date, market_data)
+    _persist_market_internals(fetch_market_internals(diag), data_date)
 
     with timed(diag, "scan_coil"):
         tier_a_plus, tier_a, tier_a_minus, tier_a_minus_full, lesson_radar, coil_funnel = scan_coil(
@@ -9202,6 +11995,9 @@ def run_scanners_and_generate_html() -> str:
         ur_matches = scan_ur(hve_history, ep_matches, diag)
     with timed(diag, "scan_short"):
         short_matches = scan_parabolic_short(diag)
+        for _s in short_matches:
+            _s["short_style"] = "parabolic"   # new-key tag, no rename (2026-07-17)
+        stage4_matches = scan_stage4_short(diag, rs_map, industry_rs.get("by_ticker") or {})
     with timed(diag, "scan_new_highs"):
         nh_data = scan_new_highs(rs_map, market_modifier, diag)
 
@@ -9222,6 +12018,7 @@ def run_scanners_and_generate_html() -> str:
         ep_matches = _drop(ep_matches)
         ur_matches = _drop(ur_matches)
         short_matches = _drop(short_matches)
+        stage4_matches = _drop(stage4_matches)
         nh_data["green"] = _drop(nh_data.get("green", []))
         nh_data["confirmed"] = [t for t in nh_data.get("confirmed", [])
                                 if (t or "").upper() not in EXCLUDED_TICKERS]
@@ -9252,9 +12049,14 @@ def run_scanners_and_generate_html() -> str:
     # so the display column + Top-Picks boost see them. Does NOT affect IBKR drafts.
     with timed(diag, "ants"):
         attach_ants(tier_a_plus + tier_a + tier_a_minus_full, diag)
+        # Lesson Radar rows render through the same coil table but skip
+        # attach_ants — give them the Weinstein chips too (2026-07-17 review).
+        attach_weinstein(lesson_radar, diag)
     # Industry-group RS (Fred6725 rs_industries) — display-only leadership tag.
-    attach_industry_rs(tier_a_plus + tier_a + tier_a_minus_full
-                       + nh_data.get("green", []) + ep_matches + ur_matches, industry_rs["by_ticker"])
+    sector_waves = compute_sector_waves(industry_rs.get("by_ticker") or {})
+    attach_industry_rs(tier_a_plus + tier_a + tier_a_minus_full + lesson_radar
+                       + nh_data.get("green", []) + ep_matches + ur_matches
+                       + stage4_matches, industry_rs["by_ticker"])
 
     # IBD-style extras: Weekly Review rows (own screener POST + chart batch) and
     # the Market Pulse leader movers. Both fetchers are fail-safe (sentinel on
@@ -9289,14 +12091,18 @@ def run_scanners_and_generate_html() -> str:
     }
     regime_html, regime, allow_breakouts = build_regime(
         market_data, breadth, t2108, vix, sector_rs, leader_stats, winrate)
-    market_html, overall_trend = build_market_section(market_data, breadth, regime, allow_breakouts)
+    market_html, overall_trend = build_market_section(
+        market_data, breadth, regime, allow_breakouts,
+        internals=_load_market_internals(), sector_waves=sector_waves)
     # IBD-style page-1 sections: The Big Picture (narrative + Market Pulse) and
     # the Top-10 briefs. Builders are pure formatters that return "" on empty /
     # broken input, so they can never take the report down.
     big_picture_html = build_big_picture(market_data, breadth, t2108, regime,
-                                         allow_breakouts, leader_stats, pulse_movers)
+                                         allow_breakouts, leader_stats, pulse_movers,
+                                         headline_meter=HEADLINE_METER)
     top10_html = build_top10_news(top10_stories)
-    weekly_review_html = generate_weekly_review_table(weekly_data)
+    weekly_review_html = (generate_weekly_review_cards(weekly_data) if LAYOUT_V9
+                          else generate_weekly_review_table(weekly_data))
     # Deterministic IBKR draft-order INTENT (top_picks_orders.json) FIRST, so the
     # dashboard cards can show which picks were actually drafted. No orders, no
     # account data — the staging step alone touches IBKR (drafts only).
@@ -9326,17 +12132,26 @@ def run_scanners_and_generate_html() -> str:
                          _rank_top_picks(tier_a_plus, tier_a, tier_a_minus_full)[:REVISIONS_TOP_N]
                          if not s.get("is_etf")])
 
-    new_highs_html = generate_new_highs_section(nh_data)
-    nh52_monitor_html = generate_nh52_monitor_section(nh52_pullbacks, nh52_monitored)
+    if LAYOUT_V9:
+        new_highs_html = generate_new_highs_cards(nh_data)
+        nh52_monitor_html = generate_nh52_monitor_cards(nh52_pullbacks, nh52_monitored)
+    else:
+        new_highs_html = generate_new_highs_section(nh_data)
+        nh52_monitor_html = generate_nh52_monitor_section(nh52_pullbacks, nh52_monitored)
     counts = {
         "a_plus": len(tier_a_plus), "a": len(tier_a), "a_minus": len(tier_a_minus_full),
         "hve": len(ep_matches), "ur": len(ur_matches), "short": len(short_matches),
     }
     runtime = time.time() - t0
 
-    # External-engine tabs (own trade plans; MADRRY-style price/narrative columns)
-    minervini_html, minervini_n = generate_minervini_table(market_modifier)
-    trilogy_html, trilogy_n = generate_trilogy_table(market_modifier=market_modifier)
+    # External engines (own trade plans). Exactly ONE path runs per report —
+    # the prep is side-effectful (feed read + enrichment fetch + prefetch).
+    if LAYOUT_V9:
+        minervini_html, minervini_n = generate_minervini_cards(market_modifier)
+        trilogy_html, trilogy_n = generate_trilogy_cards(market_modifier=market_modifier)
+    else:
+        minervini_html, minervini_n = generate_minervini_table(market_modifier)
+        trilogy_html, trilogy_n = generate_trilogy_table(market_modifier=market_modifier)
     tier_a_study_html, tier_a_study_n = generate_tier_a_study_tab()
     tabs_bar = (
         "<div class='tabs' role='tablist'>"
@@ -9344,25 +12159,128 @@ def run_scanners_and_generate_html() -> str:
         f"<button class='tab-btn' data-tab='minervini'>Minervini<span class='tab-count'>{minervini_n}</span></button>"
         f"<button class='tab-btn' data-tab='trilogy'>Trilogy<span class='tab-count'>{trilogy_n}</span></button>"
         f"<button class='tab-btn' data-tab='pivots'>Pivots &amp; U&amp;R<span class='tab-count'>{len(ep_matches) + len(ur_matches)}</span></button>"
-        f"<button class='tab-btn' data-tab='short'>Short<span class='tab-count'>{len(short_matches)}</span></button>"
+        f"<button class='tab-btn' data-tab='short'>Short<span class='tab-count'>{len(short_matches) + len(stage4_matches)}</span></button>"
         f"<button class='tab-btn' data-tab='hi52'>52-Week High<span class='tab-count'>{nh_data.get('total', 0)}</span></button>"
         f"<button class='tab-btn' data-tab='weekly'>Weekly Review<span class='tab-count'>{len(weekly_rows)}</span></button>"
         f"<button class='tab-btn' data-tab='tracking'>Tracking<span class='tab-count'>{tier_a_study_n}</span></button>"
         "</div>"
     )
 
+    if LAYOUT_V9:
+        # ---- v9: stacked chart-first sections + anchor-chip nav; the Desk
+        # (wide screens) is a client-side view over the same #deck DOM ----
+        _nav_entries = [("top", "Picks", None)]
+        if lesson_radar:
+            _nav_entries.append(("radar", "Radar", len(lesson_radar)))
+        _nav_entries += [
+            ("aplus", "A+", counts["a_plus"]), ("a", "A", counts["a"]),
+            ("aminus", "A−", counts["a_minus"]),
+            ("min", "Minervini", minervini_n), ("tri", "Trilogy", trilogy_n),
+            ("hve", "HVE", counts["hve"]), ("ur", "U&R", counts["ur"]),
+            ("short", "Short", len(short_matches)), ("s4", "Stage-4", len(stage4_matches)),
+        ]
+        if nh_data.get("total", 0):
+            _nav_entries.append(("nh", "52W High", nh_data.get("total", 0)))
+        _nav_entries += [("pull", "Pullback", len(nh52_pullbacks)),
+                         ("wk", "Weekly", len(weekly_rows)),
+                         ("study", "Tracking", tier_a_study_n)]
+        section_parts = [
+            "<div id='deskwrap'><div id='deck'>",
+            _secnav_v9(_nav_entries),
+            f"<div id='sec-top' class='secv9'>{top_picks_html}</div>",
+            tracking_html,
+            build_filter_funnel(coil_funnel, len(tier_a_plus), len(tier_a), len(tier_a_minus_full)),
+            build_lesson_radar_v9(lesson_radar),
+            _section_v9("aplus", "TIER A+ — TRIGGER READY", tier_a_plus, SECTION_SPECS_V9["coil"],
+                        bg="bg-aplus", tier="A+", grp="aplus",
+                        subtitle="strict 3-day flag · ≤1% from EMA · 3-day vol ≤50% of prev-day or 50-day avg · incl. HTF",
+                        empty="No A+ trigger-ready coils today."),
+            _section_v9("a", "TIER A — DEVELOPING", tier_a, SECTION_SPECS_V9["coil"],
+                        bg="bg-a", tier="A", grp="a",
+                        subtitle="2-day tight candle · ≤1% from EMA · 2-day vol ≤55% of prev-day or 50-day avg",
+                        empty="No developing A coils today."),
+            _section_v9("aminus", "TIER A− — EXTENDED / MESSY", tier_a_minus_full, SECTION_SPECS_V9["coil"],
+                        bg="bg-aminus", tier="A−", grp="aminus",
+                        subtitle="1-day tight candle · ≤2% from EMA · 1-day vol ≤ prev-day or 50-day avg",
+                        empty="No A− coils today."),
+            minervini_html,
+            trilogy_html,
+            _section_v9("hve", "EPISODIC PIVOTS (HVE) — LOW FLOAT ≤200M", ep_matches,
+                        SECTION_SPECS_V9["hve"], bg="bg-hve",
+                        empty="No HVE events detected today."),
+            _section_v9("ur", "POST-HVE U&R (PULLBACK & UNDERCUT)", ur_matches,
+                        SECTION_SPECS_V9["ur"], tail=_UR_NOTE_V9,
+                        empty="No Post-HVE U&R candidates. Waiting for HVE stocks to consolidate…"),
+            _section_v9("short", "PARABOLIC SHORT — 乖離過大 · 拋物線見頂", short_matches,
+                        SECTION_SPECS_V9["short"], bg="bg-short",
+                        empty="No parabolic-short candidates — nothing is climactically extended."),
+            _section_v9("s4", "STAGE-4 BREAKDOWN — WEINSTEIN CH.7", stage4_matches,
+                        SECTION_SPECS_V9["s4"], bg="bg-short", subtitle=_S4_SUB_V9,
+                        empty="No Stage-4 breakdown candidates — no weak-group name is at its shelf."),
+            new_highs_html,
+            nh52_monitor_html,
+            weekly_review_html,
+            "<section class='secv9' id='sec-study'>"
+            "<div class='section-title'><span class='tdot'></span>TRACKING — TIER-A FORWARD WIN/LOSS STUDY</div>"
+            f"<div class='table-container'>{tier_a_study_html}</div></section>",
+            "</div><nav id='desklist' hidden></nav></div>",
+        ]
+    else:
+        section_parts = [
+            tabs_bar,
+            "<div class='tab-panel active' id='tab-madrry'>",
+            build_tab_counts([("A+", counts["a_plus"], ""), ("A", counts["a"], ""),
+                              ("A−", counts["a_minus"], "")]),
+            top_picks_html,
+            tracking_html,
+            build_filter_funnel(coil_funnel, len(tier_a_plus), len(tier_a), len(tier_a_minus_full)),
+            build_lesson_radar(lesson_radar),
+            generate_coil_table(tier_a_plus, "Tier A+ — trigger ready", "bg-aplus",
+                                subtitle="strict 3-day flag · ≤1% from EMA · 3-day vol ≤50% of prev-day or 50-day avg · incl. HTF"),
+            generate_coil_table(tier_a, "Tier A — developing", "bg-a",
+                                subtitle="2-day tight candle · ≤1% from EMA · 2-day vol ≤55% of prev-day or 50-day avg"),
+            generate_coil_table(tier_a_minus_full, "Tier A− — extended / messy", "bg-aminus",
+                                subtitle="1-day tight candle · ≤2% from EMA · 1-day vol ≤ prev-day or 50-day avg"),
+            "</div>",  # /tab-madrry
+            f"<div class='tab-panel' id='tab-minervini'>{minervini_html}</div>",
+            f"<div class='tab-panel' id='tab-trilogy'>{trilogy_html}</div>",
+            # ---- Episodic Pivots (HVE) + Post-HVE U&R — own tab ----
+            "<div class='tab-panel' id='tab-pivots'>",
+            build_tab_counts([("HVE", counts["hve"], ""), ("U&R", counts["ur"], "")]),
+            generate_hve_table(ep_matches),
+            generate_ur_table(ur_matches),
+            "</div>",
+            # ---- Parabolic Short — own tab ----
+            f"<div class='tab-panel' id='tab-short'>"
+            f"{build_tab_counts([('Short', counts.get('short', 0), 'red')])}"
+            f"{generate_short_table(short_matches)}"
+            f"{generate_stage4_short_table(stage4_matches)}</div>",
+            # ---- 52-Week High — New Highs + Pullback as two sub-tabs ----
+            "<div class='tab-panel' id='tab-hi52'>",
+            "<div class='subtabs' role='tablist'>",
+            f"<button class='subtab-btn active' data-subtab='nh'>New 52wk Highs<span class='tab-count'>{nh_data.get('total', 0)}</span></button>",
+            f"<button class='subtab-btn' data-subtab='pull'>52wk Pullback<span class='tab-count'>{len(nh52_pullbacks)}</span></button>",
+            "</div>",
+            f"<div class='subtab-panel active' id='subtab-nh'>{new_highs_html}</div>",
+            f"<div class='subtab-panel' id='subtab-pull'>{nh52_monitor_html}</div>",
+            "</div>",
+            # ---- Your Weekly Review (IBD-style weekly leaders) — own tab ----
+            f"<div class='tab-panel' id='tab-weekly'>{weekly_review_html}</div>",
+            f"<div class='tab-panel' id='tab-tracking'>{tier_a_study_html}</div>",
+        ]
+
     parts = [
         "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>",
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>",
         "<title>MADRRY Ultimate Scanner Report</title>",
-        f"<style>{PAGE_CSS}</style></head><body>",
+        f"<style>{PAGE_CSS}</style></head><body class='{'v9' if LAYOUT_V9 else ''}'>" ,
         "<h1>MADRRY Watchlist</h1>",
         f"<p class='header-sub'>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>",
         build_runbar(counts, market_modifier, runtime, regime, allow_breakouts),
         stale_banner,
         # 2026-07-06 USER layout: market overview FIRST, regime second, then the
-        # hot sector/industry chips + the global search ABOVE the tab bar (they
-        # act on every tab, so they live outside the panels).
+        # hot sector/industry chips + the global search ABOVE the sections (they
+        # act on every section, so they live outside the deck).
         market_html,
         regime_html,
         # IBD-style page 1 (2026-07-08): The Big Picture narrative + Market Pulse
@@ -9372,46 +12290,7 @@ def run_scanners_and_generate_html() -> str:
         hot_themes_html,
         hot_industries_html,
         "<input id='search' type='search' placeholder='🔎 Search the whole report — ticker (e.g. NVDA)…' autocomplete='off'>",
-        # ---- engine tabs: switch between MADRRY watchlist, Minervini, Trilogy ----
-        tabs_bar,
-        "<div class='tab-panel active' id='tab-madrry'>",
-        build_tab_counts([("A+", counts["a_plus"], ""), ("A", counts["a"], ""),
-                          ("A−", counts["a_minus"], "")]),
-        top_picks_html,
-        tracking_html,
-        build_filter_funnel(coil_funnel, len(tier_a_plus), len(tier_a), len(tier_a_minus_full)),
-        build_lesson_radar(lesson_radar),
-        generate_coil_table(tier_a_plus, "Tier A+ — trigger ready", "bg-aplus",
-                            subtitle="strict 3-day flag · ≤1% from EMA · 3-day vol ≤50% of prev-day or 50-day avg · incl. HTF"),
-        generate_coil_table(tier_a, "Tier A — developing", "bg-a",
-                            subtitle="2-day tight candle · ≤1% from EMA · 2-day vol ≤55% of prev-day or 50-day avg"),
-        generate_coil_table(tier_a_minus_full, "Tier A− — extended / messy", "bg-aminus",
-                            subtitle="1-day tight candle · ≤2% from EMA · 1-day vol ≤ prev-day or 50-day avg"),
-        "</div>",  # /tab-madrry
-        f"<div class='tab-panel' id='tab-minervini'>{minervini_html}</div>",
-        f"<div class='tab-panel' id='tab-trilogy'>{trilogy_html}</div>",
-        # ---- Episodic Pivots (HVE) + Post-HVE U&R — own tab ----
-        "<div class='tab-panel' id='tab-pivots'>",
-        build_tab_counts([("HVE", counts["hve"], ""), ("U&R", counts["ur"], "")]),
-        generate_hve_table(ep_matches),
-        generate_ur_table(ur_matches),
-        "</div>",
-        # ---- Parabolic Short — own tab ----
-        f"<div class='tab-panel' id='tab-short'>"
-        f"{build_tab_counts([('Short', counts.get('short', 0), 'red')])}"
-        f"{generate_short_table(short_matches)}</div>",
-        # ---- 52-Week High — New Highs + Pullback as two sub-tabs ----
-        "<div class='tab-panel' id='tab-hi52'>",
-        "<div class='subtabs' role='tablist'>",
-        f"<button class='subtab-btn active' data-subtab='nh'>New 52wk Highs<span class='tab-count'>{nh_data.get('total', 0)}</span></button>",
-        f"<button class='subtab-btn' data-subtab='pull'>52wk Pullback<span class='tab-count'>{len(nh52_pullbacks)}</span></button>",
-        "</div>",
-        f"<div class='subtab-panel active' id='subtab-nh'>{new_highs_html}</div>",
-        f"<div class='subtab-panel' id='subtab-pull'>{nh52_monitor_html}</div>",
-        "</div>",
-        # ---- Your Weekly Review (IBD-style weekly leaders) — own tab ----
-        f"<div class='tab-panel' id='tab-weekly'>{weekly_review_html}</div>",
-        f"<div class='tab-panel' id='tab-tracking'>{tier_a_study_html}</div>",
+        *section_parts,
         build_mindset_panel(),
         build_diag_panel(diag),
         PAGE_JS.replace("__LIVE_PRICE_PROXY__", LIVE_PRICE_PROXY),
@@ -9422,6 +12301,12 @@ def run_scanners_and_generate_html() -> str:
     # strip f-string indentation runs — pure whitespace minify (~3% of the file);
     # a lone \n renders identically, and JS line comments stay intact.
     html = re.sub(r"\n[ \t]+", "\n", html)
+
+    # v9 contract guard: the new HVE/U&R/Short/Stage-4 chart payloads are for
+    # the HTML only — pop them so latest_setups.json stays byte-compatible
+    # with every downstream consumer (coil rows keep spark exactly as before).
+    for s in ep_matches + ur_matches + short_matches + (stage4_matches or []):
+        s.pop("spark", None)
 
     # ---- persist outputs (atomic) ----
     for s in tier_a_plus:
@@ -9457,6 +12342,9 @@ def run_scanners_and_generate_html() -> str:
             s.setdefault("section", "coil")
         _short_rows = []
         for s in (short_matches or []):
+            r = dict(s); r["tier"] = "SHORT"; r["section"] = "short"; r["direction"] = "short"
+            _short_rows.append(r)
+        for s in (stage4_matches or []):
             r = dict(s); r["tier"] = "SHORT"; r["section"] = "short"; r["direction"] = "short"
             _short_rows.append(r)
         _nh_rows = []
@@ -9506,7 +12394,7 @@ def run_scanners_and_generate_html() -> str:
     md_path = MD_REPORT_PATH
     md_content = build_markdown_report(
         tier_a_plus, tier_a, tier_a_minus, ep_matches, ur_matches, short_matches,
-        market_data, breadth, overall_trend, market_modifier, runtime, diag
+        stage4_matches, market_data, breadth, overall_trend, market_modifier, runtime, diag
     )
     _atomic_write(md_path, md_content)
 
@@ -9521,7 +12409,7 @@ def run_scanners_and_generate_html() -> str:
 # ----------------------------------------------------------------------------
 def build_markdown_report(
     tier_a_plus, tier_a, tier_a_minus, ep_matches, ur_matches, short_matches,
-    market_data, breadth, overall_trend, market_modifier, runtime, diag
+    stage4_matches, market_data, breadth, overall_trend, market_modifier, runtime, diag
 ) -> str:
     """Generate a plain-text Markdown report for cron delivery."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -9549,6 +12437,7 @@ def build_markdown_report(
     lines.append(f"- **HVE (Episodic Pivot):** {len(ep_matches)}")
     lines.append(f"- **U&R (Undercut & Rally):** {len(ur_matches)}")
     lines.append(f"- **Short (Parabolic):** {len(short_matches)}")
+    lines.append(f"- **Short (Stage-4 breakdown):** {len(stage4_matches)}")
     lines.append(f"- **Runtime:** {runtime:.1f}s")
 
     def _tier_section(title, setups):
@@ -9586,6 +12475,9 @@ def build_markdown_report(
     lines.extend(_tier_section("HVE — Episodic Pivot", ep_matches))
     lines.extend(_tier_section("U&R — Undercut & Rally", ur_matches))
     lines.extend(_tier_section("Short — Parabolic", short_matches))
+    # The count line above advertises the Stage-4 leg; emit its body too
+    # (2026-07-18 review: markdown/cron delivery listed the count but no names).
+    lines.extend(_tier_section("Short — Stage-4 Breakdown", stage4_matches))
 
     if diag.errors:
         lines.extend(["", "## Errors", ""])
