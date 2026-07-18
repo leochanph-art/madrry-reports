@@ -5405,6 +5405,17 @@ def scan_nh52_pullbacks(history: dict, rs_map: dict, diag: Diagnostics,
             "rs_rating": rs if isinstance(rs, int) else "N/A",
             "status": status, "tag": tag,
             "spark": "",
+            # REV 10b: sortable numbers for the Screener. df is already in
+            # memory here, so this is arithmetic only — no extra fetches.
+            "perf_1m": (round((close / float(cl.iloc[-22]) - 1) * 100, 1)
+                        if len(cl) > 22 and float(cl.iloc[-22]) > 0 else None),
+            "perf_6m": (round((close / float(cl.iloc[-127]) - 1) * 100, 1)
+                        if len(cl) > 127 and float(cl.iloc[-127]) > 0 else None),
+            "adr": round(_adr20(df), 2),
+            "dist_52w": (round((float(df["High"].iloc[-252:].max()) - close)
+                               / float(df["High"].iloc[-252:].max()) * 100, 1)
+                         if float(df["High"].iloc[-252:].max()) > 0 else None),
+            "vol_pct": (round(vol_today / avg_vol30 * 100) if avg_vol30 > 0 else None),
             **_pb2_quality(df),
         })
         monitored[-1]["spark"] = make_candle_chart(df, _chart_plan(monitored[-1], df), CHART_WINDOW)
@@ -6250,6 +6261,29 @@ PAGE_CSS = """
     .navchip b { color:var(--text); font-weight:600; }
     .navchip:hover { border-color:var(--act-bd); color:var(--act); }
     .navchip:focus-visible { border-color:var(--act-bd); color:var(--act); outline:2px solid var(--act-bd); outline-offset:2px; }
+    /* REV 10b: top-level Charts / Screener tabs */
+    .v9tabs { display:flex; gap:4px; margin:0 0 10px; border-bottom:1px solid var(--line-2); }
+    .v9tab { appearance:none; border:0; background:none; cursor:pointer; min-height:44px;
+             padding:0 18px; font:600 13px/1 var(--mono); color:var(--text-3);
+             border-bottom:2px solid transparent; margin-bottom:-1px;
+             -webkit-tap-highlight-color:transparent; }
+    .v9tab:hover { color:var(--text-2); }
+    .v9tab.on { color:var(--act); border-bottom-color:var(--act); }
+    .v9tab:focus-visible { outline:2px solid var(--act-bd); outline-offset:-2px; }
+    .v9pane[hidden] { display:none; }
+    /* screener table */
+    .scr-head { color:var(--text-3); font-size:var(--fs-caption); margin:0 0 8px; }
+    .scr-head b { color:var(--text); }
+    .scr-wrap { max-height:none; }
+    table.screener { min-width:760px; width:100%; }
+    table.screener th { position:sticky; top:0; background:var(--raised); z-index:2;
+                        white-space:nowrap; font-size:var(--fs-micro); }
+    table.screener td { padding:7px 9px; white-space:nowrap; font-size:var(--fs-caption); }
+    table.screener td.tl, table.screener th.tl { text-align:left; }
+    table.screener tbody tr:hover td { background:var(--hover); }
+    .scr-tk { font-weight:700; color:var(--text); text-decoration:none; font-family:var(--mono); }
+    .scr-tk:hover { color:var(--act); }
+    .scr-sec { color:var(--text-3); font-size:var(--fs-micro); }
     /* REV 10 global chart controls: timeframe + grid density (secnav row 2) */
     .secnav-ctl { margin-top:6px; gap:10px; }
     .ctlgrp { flex:0 0 auto; display:inline-flex; border:1px solid var(--line-2);
@@ -6519,6 +6553,10 @@ async function refreshPrices(btn) {
     // tier while keeping the existing ones, so you can do e.g. primary Fwd YoY ↓
     // then secondary "closest to 10MA" ↑. Single-column behaviour is unchanged when
     // you never hold Shift.
+    // REV 10b: the Screener opts into descending-first via data-sort-desc.
+    // On a value column "sort by RS" should lead with RS 99, not with the rows
+    // that have no RS (they carry a very negative data-sort so they park last).
+    var descFirst = table.hasAttribute('data-sort-desc');
     var keys = [];
     function keyIndex(th) {
       for (var i = 0; i < keys.length; i++) { if (keys[i].th === th) return i; }
@@ -6568,13 +6606,13 @@ async function refreshPrices(btn) {
         var rank = keyIndex(th);
         if (ev.shiftKey || multiSortMode) {
           // Add a new tier, or flip this tier's direction if it's already active.
-          if (rank < 0) keys.push({ th: th, asc: true });
+          if (rank < 0) keys.push({ th: th, asc: !descFirst });
           else keys[rank].asc = !keys[rank].asc;
         } else {
           // Plain click: collapse to a single-column sort. Re-clicking the lone
           // active column toggles its direction (original single-sort behaviour).
           if (keys.length === 1 && rank === 0) keys[0].asc = !keys[0].asc;
-          else keys = [{ th: th, asc: true }];
+          else keys = [{ th: th, asc: !descFirst }];
         }
         resort();
       });
@@ -6888,6 +6926,40 @@ async function refreshPrices(btn) {
       fa.textContent = open ? 'collapse all ▾' : 'expand all ▸';
     });
   }
+
+  // ---- REV 10b: Charts / Screener tabs ----
+  function showPane(name) {
+    document.querySelectorAll('.v9tab').forEach(function (t) {
+      t.classList.toggle('on', t.getAttribute('data-pane') === name);
+    });
+    document.querySelectorAll('.v9pane').forEach(function (p) {
+      p.hidden = (p.id !== 'pane-' + name);
+    });
+    // charts in a pane that was hidden measured 0 wide — repaint on return
+    if (name === 'charts' && window.__candle && window.__candle.setTF) {
+      window.__candle.setTF(window.__candle.getTF());
+    }
+  }
+  document.querySelectorAll('.v9tab').forEach(function (t) {
+    t.addEventListener('click', function () { showPane(t.getAttribute('data-pane')); });
+  });
+  // a screener ticker jumps back to its chart card
+  document.addEventListener('click', function (ev) {
+    var a = ev.target.closest && ev.target.closest('.scr-tk');
+    if (!a) return;
+    ev.preventDefault();
+    showPane('charts');
+    var id = (a.getAttribute('href') || '').slice(1);
+    setTimeout(function () {
+      var card = document.getElementById(id);
+      if (!card) return;
+      var open = card.closest('details');
+      if (open) open.open = true;
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      card.style.outline = '2px solid var(--act)';
+      setTimeout(function () { card.style.outline = ''; }, 1600);
+    }, 60);
+  });
 
   // ---- REV 10: global timeframe + grid-density controls (secnav row 2) ----
   function mark(btn, attr) {
@@ -7995,6 +8067,13 @@ def _enrich_external_rows(rows: List[dict], *, weekly_spark: bool = False,
         # printed (Off-52W + dry-up Vol%) — additive keys, legacy tables ignore
         r.setdefault("dist_52w", round(dist_52w, 1))
         r.setdefault("vol_pct", round(vol_pct))
+        # REV 10b: the Screener needs these as sortable numbers on the ROW.
+        # _perf()/adr were only ever fed into meta_input, so external-engine
+        # rows (Minervini/Trilogy) showed "—" for 1M/6M/ADR. setdefault keeps
+        # any value the source feed already supplied.
+        r.setdefault("perf_1m", round(_perf(21), 1))
+        r.setdefault("perf_6m", round(_perf(126), 1))
+        r.setdefault("adr", round(adr, 2))
         meta_input = {
             "perf_1m": _perf(21), "perf_3m": _perf(63), "adr": adr, "close": close,
             "sma10": ema9, "sma20": ema21, "vol_pct": vol_pct,
@@ -8696,12 +8775,28 @@ def _card_v9(m: dict, spec: dict, *, tier: str = "", grp: str = "", seen=None) -
             + head + chart + above + fold + "</article>")
 
 
+# Short per-section labels for the Screener's "Sec" column + the row register
+# that _section_v9 fills as it renders (REV 10b).
+_SCR_LABELS = {
+    "aplus": "A+", "a": "A", "aminus": "A−", "radar": "Radar", "radar3": "Radar",
+    "min": "Minervini", "tri": "Trilogy", "hve": "HVE", "ur": "U&R",
+    "short": "Short", "s4": "Stage-4", "nh": "52W High", "pull": "Pullback",
+    "wk": "Weekly",
+}
+_V9_SECTION_ROWS: List[Tuple[str, str, list]] = []
+
+
 def _section_v9(key: str, title: str, rows, spec: dict, *, subtitle: str = "",
                 bg: str = "", tier: str = "", grp: str = "", lead: str = "",
                 tail: str = "", empty: str = "") -> str:
     """A stacked v9 section: title bar + card list. Keeps the .section-title +
     .table-container adjacency so the existing collapse JS/CSS still work."""
     grp = grp or key
+    # REV 10b: every card section funnels through here, so this is the one place
+    # that sees ALL rows (incl. Minervini/Trilogy, whose generators only hand
+    # back HTML). The Screener tab is built from this register.
+    if rows:
+        _V9_SECTION_ROWS.append((grp, _SCR_LABELS.get(key, key.upper()), list(rows)))
     seen: set = set()
     cards = "".join(_card_v9(m, spec, tier=tier, grp=grp, seen=seen) for m in rows)
     if not cards and not empty and not lead:
@@ -8713,6 +8808,107 @@ def _section_v9(key: str, title: str, rows, spec: dict, *, subtitle: str = "",
             f"<div class='section-title {bg}'><span class='tdot'></span>{esc(title)}"
             f"<span class='sec-n'>{len(rows)}</span>{sub_html}</div>"
             f"<div class='table-container cardlist'>{lead}{cards}{tail}</div></section>")
+
+
+def _eps_yoy_num(ticker: str) -> Optional[float]:
+    """Latest reported-quarter EPS YoY % as a sortable NUMBER for the screener
+    (_eps_accel_cell returns a whole <td>, no good here).
+
+    STRICTLY CACHE-ONLY. madrry_fundamentals.get() does a synchronous per-ticker
+    TradingView POST + Yahoo scrape + cache flush on a miss (see the note by the
+    import); the screener asks for ~700 tickers, and routing that through get()
+    added ~190s to the run. Read the prefetch-warmed cache directly instead and
+    show '—' for anything the prefetch budget didn't reach."""
+    if _fund is None or ticker in _ETF_TICKERS:
+        return None
+    try:
+        rec = _fund._load_cache().get(str(ticker).strip().upper())
+        if not rec or not rec.get("ok"):
+            return None
+        qs = [q for q in ((rec.get("eps_accel") or {}).get("quarters") or [])
+              if q.get("yoy") is not None]
+        return qs[-1]["yoy"] * 100.0 if qs else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# REV 10b (USER 2026-07-18: "your list of stock is so hard to see, a list of 600
+# stocks … at least let me sort by rs/ meta score/eps etc." + "i cant believe
+# that you make a whole 6xx row of scrolling … at least make different tabs").
+# ONE flat, sortable table over every ticker in the report. Rendered server-side
+# as a plain <table> so the existing click-to-sort engine binds to it for free
+# (it walks every table, reads td[data-sort], and supports shift/multi-sort);
+# data-tk + data-sector make the existing global search filter it too.
+_SCR_COLS = [
+    ("Ticker", "tl"), ("Sec", "tl"), ("Last", "num"), ("1M %", "num"),
+    ("6M %", "num"), ("RS", "num"), ("META", "num"), ("EPS YoY", "num"),
+    ("ADR", "num"), ("Vol %", "num"), ("Off 52W", "num"), ("Sector", "tl"),
+]
+
+
+def _scr_num(m: dict, *keys):
+    """First numeric value among `keys` (sections name the same idea differently:
+    close/last_close, meta_score/_meta_score, rs_rating/rs, dist_52w/off_high)."""
+    for k in keys:
+        v = m.get(k)
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)):
+            return float(v)
+    return None
+
+
+def _scr_cell(v, *, pct=False, dp=1, colour=False) -> str:
+    if v is None:
+        return "<td class='num' data-sort='-99999'>—</td>"
+    cls = "num"
+    if colour:
+        cls += " val-green" if v > 0 else (" val-red" if v < 0 else "")
+    txt = f"{v:+.{dp}f}%" if (pct and colour) else (f"{v:.{dp}f}%" if pct else f"{v:,.{dp}f}")
+    return f"<td class='{cls}' data-sort='{v:.4f}'>{txt}</td>"
+
+
+def build_screener_v9(groups=None) -> str:
+    """Flat sortable table over every card row rendered this run. `groups`
+    defaults to the register `_section_v9` filled while building the sections."""
+    body, n = [], 0
+    seen_tk: set = set()
+    # Flatten first so the table can OPEN on something useful (META desc, blanks
+    # last) instead of section order — a header click still replaces this freely.
+    flat = [(grp, label, m)
+            for grp, label, rows in (groups if groups is not None else _V9_SECTION_ROWS)
+            for m in (rows or [])]
+    def _meta_of(t):
+        return _scr_num(t[2], "meta_score", "_meta_score")
+    flat.sort(key=lambda t: (_meta_of(t) is None, -(_meta_of(t) or 0.0)))
+    for grp, label, m in flat:
+        tk = str(m.get("ticker", "") or "")
+        if not tk or (grp, tk) in seen_tk:
+            continue
+        seen_tk.add((grp, tk))
+        n += 1
+        sec = esc(m.get("sector") or "")
+        body.append(
+            f"<tr data-tk='{esc(tk)}' data-sector='{sec}'>"
+            f"<td class='tl'><a href='#card-{esc(grp)}-{esc(tk)}' class='scr-tk'>{esc(tk)}</a></td>"
+            f"<td class='tl'><span class='scr-sec'>{esc(label)}</span></td>"
+            + _scr_cell(_scr_num(m, "close", "last_close"), dp=2)
+            + _scr_cell(_scr_num(m, "perf_1m"), pct=True, colour=True)
+            + _scr_cell(_scr_num(m, "perf_6m"), pct=True, colour=True, dp=0)
+            + _scr_cell(_scr_num(m, "rs_rating", "rs"), dp=0)
+            + _scr_cell(_meta_of((grp, label, m)), dp=0)
+            + _scr_cell(_eps_yoy_num(tk), pct=True, colour=True, dp=0)
+            + _scr_cell(_scr_num(m, "adr", "_adr20"), pct=True)
+            + _scr_cell(_scr_num(m, "vol_pct", "rel_vol"), pct=True, colour=True, dp=0)
+            + _scr_cell(_scr_num(m, "dist_52w", "off_high"), pct=True, dp=1)
+            + f"<td class='tl'>{sec or '—'}</td></tr>")
+    if not body:
+        return "<div class='sub'>No rows to screen.</div>"
+    head = "".join(f"<th class='{c}'>{esc(t)}</th>" for t, c in _SCR_COLS)
+    return (f"<div class='scr-head'><b>{n}</b> tickers · tap any column to sort "
+            f"(shift-click or the Multi-sort toggle adds a tier) · tap a ticker to jump to its chart</div>"
+            f"<div class='table-container scr-wrap'><table class='screener' data-sort-desc>"
+            f"<thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
 
 
 def _secnav_v9(entries) -> str:
@@ -12185,6 +12381,15 @@ def run_scanners_and_generate_html() -> str:
                          ("wk", "Weekly", len(weekly_rows)),
                          ("study", "Tracking", tier_a_study_n)]
         section_parts = [
+            # REV 10b: two top-level panes. Charts = the card deck (unchanged
+            # structure, so the Foldable Desk keeps working on #deskwrap/#deck/
+            # #desklist); Screener = one flat sortable table over every ticker,
+            # replacing the ~600-card scroll as the way to compare names.
+            "<div class='v9tabs' role='tablist'>"
+            "<button class='v9tab on' data-pane='charts' role='tab'>Charts</button>"
+            "<button class='v9tab' data-pane='screener' role='tab'>Screener</button>"
+            "</div>",
+            "<div class='v9pane' id='pane-charts'>",
             "<div id='deskwrap'><div id='deck'>",
             _secnav_v9(_nav_entries),
             f"<div id='sec-top' class='secv9'>{top_picks_html}</div>",
@@ -12224,6 +12429,11 @@ def run_scanners_and_generate_html() -> str:
             "<div class='section-title'><span class='tdot'></span>TRACKING — TIER-A FORWARD WIN/LOSS STUDY</div>"
             f"<div class='table-container'>{tier_a_study_html}</div></section>",
             "</div><nav id='desklist' hidden></nav></div>",
+            "</div>",                                   # /#pane-charts
+            # built LAST so _section_v9 has registered every section's rows
+            "<div class='v9pane' id='pane-screener' hidden>",
+            build_screener_v9(),
+            "</div>",
         ]
     else:
         section_parts = [
