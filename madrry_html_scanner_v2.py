@@ -6261,6 +6261,30 @@ PAGE_CSS = """
     .navchip b { color:var(--text); font-weight:600; }
     .navchip:hover { border-color:var(--act-bd); color:var(--act); }
     .navchip:focus-visible { border-color:var(--act-bd); color:var(--act); outline:2px solid var(--act-bd); outline-offset:2px; }
+    /* REV 10c: chart control bar — outside #deck so desk mode can't hide it */
+    .chartctl { position:sticky; top:0; z-index:13; background:var(--bg);
+                padding:8px 0 8px; margin:0 0 10px; border-bottom:1px solid var(--line-2); }
+    .ctl-row { display:flex; align-items:center; gap:8px; overflow-x:auto;
+               -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+    .ctl-row::-webkit-scrollbar { display:none; }
+    .ctl-row + .ctl-row { margin-top:7px; }
+    .ctl-lbl { flex:0 0 auto; font:600 10px/1 var(--mono); letter-spacing:.08em;
+               color:var(--text-3); text-transform:uppercase; }
+    .fchip { flex:0 0 auto; min-height:34px; cursor:pointer; border:1px solid var(--line-2);
+             border-radius:999px; padding:0 12px; background:var(--surface);
+             font:600 12px/1 var(--mono); color:var(--text-2);
+             display:inline-flex; align-items:center; gap:5px;
+             -webkit-tap-highlight-color:transparent; }
+    .fchip b { color:var(--text-3); font-weight:600; font-size:10px; }
+    .fchip:hover { color:var(--text); border-color:var(--act-bd); }
+    .fchip.on { background:var(--tint-act); border-color:var(--act-bd); color:var(--act); }
+    .fchip.on b { color:var(--act); }
+    .ctlsel { flex:0 0 auto; min-height:34px; background:var(--surface); color:var(--text);
+              border:1px solid var(--line-2); border-radius:9px; padding:0 8px;
+              font:600 12px/1 var(--mono); cursor:pointer; }
+    /* filter states: hide non-matching cards, their now-empty sections, desk rows */
+    #deck article.card.grp-off, #deck .secv9.grp-empty,
+    #desklist .dl-row.grp-off, #desklist .dl-h.grp-off { display:none !important; }
     /* REV 10b: top-level Charts / Screener tabs */
     .v9tabs { display:flex; gap:4px; margin:0 0 10px; border-bottom:1px solid var(--line-2); }
     .v9tab { appearance:none; border:0; background:none; cursor:pointer; min-height:44px;
@@ -6961,11 +6985,95 @@ async function refreshPrices(btn) {
     }, 60);
   });
 
-  // ---- REV 10: global timeframe + grid-density controls (secnav row 2) ----
-  function mark(btn, attr) {
-    var grp = btn.parentNode;
-    grp.querySelectorAll('.ctlbtn').forEach(function (b) { b.classList.toggle('on', b === btn); });
+  // ---- REV 10c: the chart control bar (filter · timeframe · layout · sort) ----
+  // Lives outside #deck so desk mode can't hide it. Every control drives BOTH
+  // the card deck and the Desk ticker list.
+  function mark(btn) {
+    btn.parentNode.querySelectorAll('.ctlbtn, .fchip').forEach(function (b) {
+      b.classList.toggle('on', b === btn);
+    });
   }
+  function repaint() {
+    if (window.__candle && window.__candle.setTF) window.__candle.setTF(window.__candle.getTF());
+  }
+
+  var curGrp = 'all', curView = 'list', curCols = 2;
+
+  // --- section filter: cards, their sections, and the Desk list rows ---
+  function applyGroup() {
+    document.querySelectorAll('#deck article.card').forEach(function (c) {
+      c.classList.toggle('grp-off', curGrp !== 'all' && c.getAttribute('data-grp') !== curGrp);
+    });
+    document.querySelectorAll('#deck .secv9').forEach(function (sec) {
+      var any = sec.querySelector('article.card:not(.grp-off)');
+      sec.classList.toggle('grp-empty', !any);
+    });
+    document.querySelectorAll('#desklist .dl-row[data-grp], #desklist .dl-h[data-grp]')
+      .forEach(function (el) {
+        var off = curGrp !== 'all' && el.getAttribute('data-grp') !== curGrp;
+        el.classList.toggle('grp-off', off);
+      });
+    if (window.__desk && window.__desk.reselectVisible) window.__desk.reselectVisible();
+    repaint();
+  }
+  document.querySelectorAll('#fchips .fchip').forEach(function (b) {
+    b.addEventListener('click', function () {
+      mark(b); curGrp = b.getAttribute('data-grp'); applyGroup();
+    });
+  });
+
+  // --- sort: reorder cards inside each section, then rebuild the Desk list ---
+  function applySort(key) {
+    document.querySelectorAll('#deck .cardlist').forEach(function (cl) {
+      var cards = Array.prototype.slice.call(cl.querySelectorAll(':scope > article.card'));
+      if (cards.length < 2) return;
+      if (key === 'doc') {
+        cards.sort(function (a, b) {
+          return (+a.getAttribute('data-ord') || 0) - (+b.getAttribute('data-ord') || 0);
+        });
+      } else {
+        cards.sort(function (a, b) {
+          var va = a.getAttribute('data-' + key), vb = b.getAttribute('data-' + key);
+          if (va === null && vb === null) return 0;
+          if (va === null) return 1;            // missing always parks last
+          if (vb === null) return -1;
+          return parseFloat(vb) - parseFloat(va);   // best first
+        });
+      }
+      cards.forEach(function (c) { cl.appendChild(c); });
+    });
+    if (window.__desk && window.__desk.rebuild) window.__desk.rebuild();
+    applyGroup();
+  }
+  // remember the original order so "section order" can restore it
+  document.querySelectorAll('#deck .cardlist').forEach(function (cl) {
+    Array.prototype.slice.call(cl.querySelectorAll(':scope > article.card'))
+      .forEach(function (c, i) { c.setAttribute('data-ord', i); });
+  });
+  var sortSel = document.getElementById('cardsort');
+  if (sortSel) sortSel.addEventListener('change', function () { applySort(sortSel.value); });
+
+  // --- layout: Desk / List / Grid (overrides the automatic width switch) ---
+  function applyView() {
+    var dens = document.getElementById('densgrp');
+    if (dens) dens.style.display = (curView === 'grid') ? 'inline-flex' : 'none';
+    if (window.__desk && window.__desk.setDesk) window.__desk.setDesk(curView === 'desk');
+    document.querySelectorAll('#deck .cardlist').forEach(function (cl) {
+      cl.classList.remove('gcols', 'g2', 'g3', 'g4');
+      if (curView === 'grid' && curCols > 1) cl.classList.add('gcols', 'g' + curCols);
+    });
+    repaint();
+  }
+  document.querySelectorAll('.ctlbtn[data-view]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      mark(b); curView = b.getAttribute('data-view'); window.__deskManual = true; applyView();
+    });
+  });
+  document.querySelectorAll('.ctlbtn[data-cols]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      mark(b); curCols = parseInt(b.getAttribute('data-cols'), 10) || 2; applyView();
+    });
+  });
   document.querySelectorAll('.ctlbtn[data-tf]').forEach(function (b) {
     b.addEventListener('click', function () {
       mark(b);
@@ -6974,20 +7082,34 @@ async function refreshPrices(btn) {
       }
     });
   });
-  document.querySelectorAll('.ctlbtn[data-cols]').forEach(function (b) {
-    b.addEventListener('click', function () {
-      mark(b);
-      var n = parseInt(b.getAttribute('data-cols'), 10) || 1;
-      document.querySelectorAll('#deck .cardlist').forEach(function (cl) {
-        cl.classList.remove('gcols', 'g2', 'g3', 'g4');
-        if (n > 1) { cl.classList.add('gcols', 'g' + n); }
-      });
-      // cards changed width -> repaint so each SVG matches its new box
-      if (window.__candle && window.__candle.setTF) {
-        window.__candle.setTF(window.__candle.getTF());
-      }
+  // Recount every filter chip from the DOM. The server builds them from the
+  // nav entries, which also count non-card sections (Picks, Tracking) and are
+  // taken before late drops — so "All" read 1106 against 666 real cards. The
+  // rendered cards are the only truth; chips with none left hide themselves.
+  (function () {
+    var tot = 0;
+    document.querySelectorAll('#fchips .fchip').forEach(function (b) {
+      var g = b.getAttribute('data-grp');
+      if (g === 'all') return;
+      var n = document.querySelectorAll('#deck article.card[data-grp="' + g + '"]').length;
+      if (!n) { b.style.display = 'none'; return; }
+      tot += n;
+      var s = b.querySelector('b'); if (s) s.textContent = n;
     });
-  });
+    var all = document.querySelector('#fchips .fchip[data-grp="all"] b');
+    if (all) all.textContent = tot;
+  })();
+
+  // reflect the layout the width picked on load, and hide density until needed
+  (function () {
+    var isDesk = document.body.classList.contains('desk');
+    curView = isDesk ? 'desk' : 'list';
+    document.querySelectorAll('.ctlbtn[data-view]').forEach(function (b) {
+      b.classList.toggle('on', b.getAttribute('data-view') === curView);
+    });
+    var dens = document.getElementById('densgrp');
+    if (dens) dens.style.display = 'none';
+  })();
 })();
 
 (function () {
@@ -7017,6 +7139,7 @@ async function refreshPrices(btn) {
       if (!cards.length) return;
       var h = document.createElement('div');
       h.className = 'dl-h';
+      h.setAttribute('data-grp', g[0]);
       h.textContent = g[1] + ' · ' + cards.length;
       frag.appendChild(h);
       cards.forEach(function (c) {
@@ -7026,6 +7149,7 @@ async function refreshPrices(btn) {
         a.href = '#' + c.id;
         a.setAttribute('data-tk', c.getAttribute('data-tk') || '');
         a.setAttribute('data-sector', c.getAttribute('data-sector') || '');
+        a.setAttribute('data-grp', g[0]);
         var sc = c.getAttribute('data-score') || '', rk = c.getAttribute('data-risk');
         a.innerHTML = '<b>' + (c.getAttribute('data-tk') || '') + '</b>'
           + (rk ? '<span class="dlr">risk ' + rk + '%</span>' : '')
@@ -7099,6 +7223,29 @@ async function refreshPrices(btn) {
     }
   }
 
+  window.__desk = {
+    rebuild: function () {                 // re-read card DOM order after a sort
+      if (!built) return;
+      built = false; rows = [];
+      while (list.firstChild) list.removeChild(list.firstChild);
+      buildList();
+      if (activeId && document.getElementById(activeId)) select(activeId, false);
+    },
+    setDesk: function (on) { apply(on); },
+    // After a filter the active card can be hidden — the Desk stage then goes
+    // blank. Re-point it at the first row that survived the filter.
+    reselectVisible: function () {
+      if (!document.body.classList.contains('desk')) return;
+      var cur = deck.querySelector('.card.desk-active');
+      if (cur && !cur.classList.contains('grp-off')) return;
+      var r = null, all = list.querySelectorAll('.dl-row[data-grp]');
+      for (var i = 0; i < all.length; i++) {
+        if (!all[i].classList.contains('grp-off')) { r = all[i]; break; }
+      }
+      if (r) select(r.getAttribute('href').slice(1), false);
+    }
+  };
+
   function firstVisibleRow() {
     for (var i = 0; i < rows.length; i++) { if (rows[i].style.display !== 'none') return rows[i]; }
     return null;
@@ -7130,8 +7277,10 @@ async function refreshPrices(btn) {
       clearActive();
     }
   }
-  if (mq.addEventListener) mq.addEventListener('change', function (e) { apply(e.matches); });
-  else if (mq.addListener) mq.addListener(function (e) { apply(e.matches); });
+  // REV 10c: once the user picks a layout in the control bar, stop letting a
+  // resize yank them back into (or out of) Desk.
+  if (mq.addEventListener) mq.addEventListener('change', function (e) { if (!window.__deskManual) apply(e.matches); });
+  else if (mq.addListener) mq.addListener(function (e) { if (!window.__deskManual) apply(e.matches); });
   apply(mq.matches);
 
   document.addEventListener('keydown', function (ev) {
@@ -8768,7 +8917,16 @@ def _card_v9(m: dict, spec: dict, *, tier: str = "", grp: str = "", seen=None) -
     inner = "".join(x for x in fold_parts if x)
     fold = (f"<details class='fold'><summary><span>Details</span><span class='chev'>▸</span></summary>"
             f"<div class='foldin'>{inner}</div></details>") if inner else ""
+    # REV 10c: numeric keys so the control bar can sort cards (and the Desk
+    # list) by META/RS/ADR/1M/6M. Same normaliser the Screener uses, because
+    # sections name the same idea differently (meta_score vs _meta_score …).
+    _srt = {"meta": _scr_num(m, "meta_score", "_meta_score"),
+            "rs": _scr_num(m, "rs_rating", "rs"),
+            "adr": _scr_num(m, "adr", "_adr20"),
+            "p1m": _scr_num(m, "perf_1m"),
+            "p6m": _scr_num(m, "perf_6m")}
     attrs = (f" data-tk='{esc(tk)}' data-grp='{esc(grp)}' data-sector='{esc(m.get('sector', '') or '')}'"
+             + "".join(f" data-{k}='{v:.4f}'" for k, v in _srt.items() if v is not None)
              + (f" data-score='{esc(score)}'" if score not in (None, "") else "")
              + (f" data-risk='{risk}'" if risk not in (None, "") else ""))
     return (f"<article class='card' id='{cid}'{attrs}>"
@@ -8921,19 +9079,48 @@ def _secnav_v9(entries) -> str:
     # REV 10 (USER 2026-07-18: "make the chart has 6 months to 1y history 'i can
     # select'" + "make another grid … have a button for me to choose as well").
     # Both controls are global: they retint every chart / the whole deck at once.
+    return ("<div class='secnav' id='secnav'><div class='secnav-in'>"
+            + "".join(chips)
+            + "<button class='navchip' id='foldAll' type='button' data-open='0'>expand all ▸</button>"
+            + "</div></div>")
+
+
+def _chartctl_v9(entries) -> str:
+    """REV 10c: the chart control bar. Lives OUTSIDE #deck, because
+    `body.desk #deck > * { display:none }` hid the previous in-secnav version
+    entirely on desktop/foldable — the user saw no timeframe, grid, filter or
+    sort at all there. Section filter + sort drive the cards AND the Desk list."""
+    total = sum(int(c or 0) for _k, _l, c in entries)
+    chips = [f"<button class='fchip on' data-grp='all' type='button'>All"
+             f"<b>{total}</b></button>"]
+    for key, label, count in entries:
+        if not count:
+            continue
+        chips.append(f"<button class='fchip' data-grp='{esc(key)}' type='button'>"
+                     f"{esc(label)}<b>{count}</b></button>")
     tf = ("<span class='ctlgrp' role='group' aria-label='Chart timeframe'>"
           "<button class='ctlbtn' data-tf='63' type='button'>3M</button>"
           "<button class='ctlbtn on' data-tf='130' type='button'>6M</button>"
           "<button class='ctlbtn' data-tf='0' type='button'>1Y</button></span>")
-    gr = ("<span class='ctlgrp' role='group' aria-label='Chart grid'>"
-          "<button class='ctlbtn on' data-cols='1' type='button' title='One per row'>&#9776;</button>"
-          "<button class='ctlbtn' data-cols='2' type='button' title='2 per row'>2</button>"
-          "<button class='ctlbtn' data-cols='3' type='button' title='3 per row'>3</button>"
-          "<button class='ctlbtn' data-cols='4' type='button' title='4 per row'>4</button></span>")
-    return ("<div class='secnav' id='secnav'><div class='secnav-in'>"
-            + "".join(chips)
-            + "<button class='navchip' id='foldAll' type='button' data-open='0'>expand all ▸</button>"
-            + "</div><div class='secnav-in secnav-ctl'>" + tf + gr + "</div></div>")
+    view = ("<span class='ctlgrp' role='group' aria-label='Layout'>"
+            "<button class='ctlbtn' data-view='desk' type='button' title='Desk — list + one big chart'>&#9707;</button>"
+            "<button class='ctlbtn on' data-view='list' type='button' title='One chart per row'>&#9776;</button>"
+            "<button class='ctlbtn' data-view='grid' type='button' title='Grid of charts'>&#9638;</button></span>")
+    gr = ("<span class='ctlgrp' id='densgrp' role='group' aria-label='Grid density'>"
+          "<button class='ctlbtn on' data-cols='2' type='button'>2</button>"
+          "<button class='ctlbtn' data-cols='3' type='button'>3</button>"
+          "<button class='ctlbtn' data-cols='4' type='button'>4</button></span>")
+    srt = ("<select id='cardsort' class='ctlsel' aria-label='Sort charts'>"
+           "<option value='meta'>Sort: META</option>"
+           "<option value='rs'>Sort: RS</option>"
+           "<option value='adr'>Sort: ADR</option>"
+           "<option value='p1m'>Sort: 1M %</option>"
+           "<option value='p6m'>Sort: 6M %</option>"
+           "<option value='doc'>Sort: section order</option></select>")
+    return ("<div class='chartctl' id='chartctl'>"
+            f"<div class='ctl-row fchips' id='fchips'>{''.join(chips)}</div>"
+            f"<div class='ctl-row'><span class='ctl-lbl'>TF</span>{tf}{view}{gr}{srt}</div>"
+            "</div>")
 
 
 # ---- v9 section generators (card versions of the tabbed tables). Each does
@@ -12390,6 +12577,7 @@ def run_scanners_and_generate_html() -> str:
             "<button class='v9tab' data-pane='screener' role='tab'>Screener</button>"
             "</div>",
             "<div class='v9pane' id='pane-charts'>",
+            _chartctl_v9(_nav_entries),
             "<div id='deskwrap'><div id='deck'>",
             _secnav_v9(_nav_entries),
             f"<div id='sec-top' class='secv9'>{top_picks_html}</div>",
