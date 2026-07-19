@@ -1,5 +1,5 @@
 {
- "generated": "2026-07-18",
+ "generated": "2026-07-20",
  "window": 40,
  "win_def": "fwd close >= entry*(1+2*ADR/100)",
  "loss_def": "fwd low <= entry*0.92",
@@ -94634,16 +94634,16 @@
     "frac_Supply_Shock": 0.0,
     "frac_Risk": 0.66667
    },
-   "outcome": "open",
-   "label_2adr": null,
-   "barrier_return": null,
-   "realized_return": null,
+   "outcome": "loss",
+   "label_2adr": 0,
+   "barrier_return": -0.08,
+   "realized_return": -0.0803,
    "fwd20_return": null,
    "fwd40_return": null,
    "win_target": 90.4554,
    "loss_line": 74.7776,
-   "resolve_date": null,
-   "days_to_resolve": null,
+   "resolve_date": "2026-07-17",
+   "days_to_resolve": 7,
    "days_followed": 7
   },
   "AUPH|2026-07-08": {
@@ -95058,7 +95058,7 @@
    "loss_line": 18.5472,
    "resolve_date": null,
    "days_to_resolve": null,
-   "days_followed": 6
+   "days_followed": 7
   },
   "CRDO|2026-07-08": {
    "ticker": "CRDO",
