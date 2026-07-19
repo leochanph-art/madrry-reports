@@ -6261,6 +6261,10 @@ PAGE_CSS = """
     .navchip b { color:var(--text); font-weight:600; }
     .navchip:hover { border-color:var(--act-bd); color:var(--act); }
     .navchip:focus-visible { border-color:var(--act-bd); color:var(--act); outline:2px solid var(--act-bd); outline-offset:2px; }
+    /* scroll-spy: act cyan marks the section currently under the sticky bar
+       (the token's designated "you are here" use) */
+    .navchip.on { border-color:var(--act-bd); color:var(--act); background:var(--tint-act); }
+    .navchip.on b { color:var(--act); }
     /* REV 10c: chart control bar — outside #deck so desk mode can't hide it */
     .chartctl { position:sticky; top:0; z-index:13; background:var(--bg);
                 padding:8px 0 8px; margin:0 0 10px; border-bottom:1px solid var(--line-2); }
@@ -6286,11 +6290,17 @@ PAGE_CSS = """
     #deck article.card.grp-off, #deck .secv9.grp-empty,
     #desklist .dl-row.grp-off, #desklist .dl-h.grp-off { display:none !important; }
     /* REV 10b: top-level Charts / Screener tabs */
-    .v9tabs { display:flex; gap:4px; margin:0 0 10px; border-bottom:1px solid var(--line-2); }
+    /* 5 tabs (Charts/Screener + the 3 external scanners) overflow a phone row —
+       scroll it horizontally rather than squeezing the labels. */
+    .v9tabs { display:flex; gap:4px; margin:0 0 10px; border-bottom:1px solid var(--line-2);
+              overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+    .v9tabs::-webkit-scrollbar { display:none; }
     .v9tab { appearance:none; border:0; background:none; cursor:pointer; min-height:44px;
              padding:0 18px; font:600 13px/1 var(--mono); color:var(--text-3);
-             border-bottom:2px solid transparent; margin-bottom:-1px;
-             -webkit-tap-highlight-color:transparent; }
+             border-bottom:2px solid transparent; margin-bottom:-1px; flex:0 0 auto;
+             white-space:nowrap; -webkit-tap-highlight-color:transparent; }
+    .v9tab b { margin-left:6px; color:var(--accent); font-weight:700; }
+    .v9tab.on b { color:var(--act); }
     .v9tab:hover { color:var(--text-2); }
     .v9tab.on { color:var(--act); border-bottom-color:var(--act); }
     .v9tab:focus-visible { outline:2px solid var(--act-bd); outline-offset:-2px; }
@@ -6298,6 +6308,11 @@ PAGE_CSS = """
     /* screener table */
     .scr-head { color:var(--text-3); font-size:var(--fs-caption); margin:0 0 8px; }
     .scr-head b { color:var(--text); }
+    /* Universe line: same voice as scr-head, set apart by a rule so the
+       "what was scanned" statement reads as a qualifier on the counts above
+       rather than as more counts. */
+    .scr-univ { margin:-4px 0 10px; padding-left:8px; line-height:1.5;
+                border-left:2px solid var(--line-2); }
     .scr-wrap { max-height:none; }
     table.screener { min-width:760px; width:100%; }
     table.screener th { position:sticky; top:0; background:var(--raised); z-index:2;
@@ -6305,6 +6320,14 @@ PAGE_CSS = """
     table.screener td { padding:7px 9px; white-space:nowrap; font-size:var(--fs-caption); }
     table.screener td.tl, table.screener th.tl { text-align:left; }
     table.screener tbody tr:hover td { background:var(--hover); }
+    /* Swing-consol overlay hits: the ONLY population the detector's held-out
+       validation gives an edge to, so they get a standing highlight rather
+       than a checkmark buried in the last column. */
+    table.screener tbody tr.swx td { background:var(--tint-up); }
+    table.screener tbody tr.swx td:first-child { box-shadow:inset 3px 0 0 var(--green); }
+    table.screener tbody tr.swsep td { background:var(--raised); color:var(--text-3);
+                                       font-size:var(--fs-micro); letter-spacing:.06em;
+                                       text-align:left; white-space:normal; }
     .scr-tk { font-weight:700; color:var(--text); text-decoration:none; font-family:var(--mono); }
     .scr-tk:hover { color:var(--act); }
     .scr-sec { color:var(--text-3); font-size:var(--fs-micro); }
@@ -6589,6 +6612,14 @@ async function refreshPrices(btn) {
     function resort() {
       var body = table.tBodies[0] || table;
       var rows = Array.prototype.filter.call(body.rows, function (r) { return !r.querySelector('th'); });
+      // A grouping divider (tr.swsep) is only TRUE in the default order — it says
+      // "everything below this line is X". Once the reader sorts, that claim would
+      // label whatever rows happen to land under it, so drop the divider instead
+      // of letting it lie. Per-row tints stay valid under any order.
+      Array.prototype.slice.call(body.querySelectorAll('tr.swsep')).forEach(function (r) {
+        if (r.parentNode) r.parentNode.removeChild(r);
+      });
+      rows = rows.filter(function (r) { return r.className.indexOf('swsep') < 0; });
       // Resolve each tier's CURRENT column position fresh — columns can be reordered
       // (see the column-reorder IIFE below), so capture-time indexes would go stale.
       var tiers = keys.map(function (k) {
@@ -7309,6 +7340,48 @@ async function refreshPrices(btn) {
   }
   window.addEventListener('hashchange', gotoHash);
   gotoHash();
+})();
+
+// v9 scroll-spy: light the secnav chip for the section under the sticky bar,
+// and keep that chip scrolled into view inside the horizontal chip strip.
+(function () {
+  var nav = document.getElementById('secnav');
+  if (!nav) return;
+  var chips = Array.prototype.slice.call(nav.querySelectorAll(".navchip[href^='#sec-']"));
+  var pairs = chips.map(function (c) {
+    return { chip: c, sec: document.getElementById(c.getAttribute('href').slice(1)) };
+  }).filter(function (p) { return p.sec; });
+  if (!pairs.length) return;
+  var wrap = nav.querySelector('.secnav-in') || nav;
+  var LINE = 90;           // a section whose top crosses this line is "current"
+  var ticking = false, lastId = null;
+  function spy() {
+    ticking = false;
+    var cur = null;
+    for (var i = 0; i < pairs.length; i++) {
+      var sec = pairs[i].sec;
+      if (!sec.getClientRects().length) continue;   // hidden by search/filter/Desk
+      if (sec.getBoundingClientRect().top <= LINE) cur = pairs[i];
+      else break;                                   // sections are in document order
+    }
+    var id = cur ? cur.sec.id : null;
+    if (id === lastId) return;
+    lastId = id;
+    pairs.forEach(function (p) { p.chip.classList.toggle('on', p === cur); });
+    if (cur) {
+      var cr = cur.chip.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+      if (cr.left < wr.left) wrap.scrollLeft -= (wr.left - cr.left) + 8;
+      else if (cr.right > wr.right) wrap.scrollLeft += (cr.right - wr.right) + 8;
+    }
+  }
+  window.addEventListener('scroll', function () {
+    if (!ticking) { ticking = true; requestAnimationFrame(spy); }
+  }, { passive: true });
+  window.addEventListener('resize', spy);
+  // search/theme filtering hides whole sections — re-evaluate after it runs
+  var box = document.getElementById('search');
+  if (box) box.addEventListener('input', function () { setTimeout(spy, 0); });
+  spy();
 })();
 
 </script>
@@ -8155,6 +8228,316 @@ def _read_trilogy_rtb():
             except (OSError, ValueError) as exc2:
                 exc = exc2
         raise exc
+
+
+# ---------------------------------------------------------------------------
+# Three external scanner feeds: swing_consol / martin / qulla.
+# Contract: FEED_SCHEMAS.md. A SEPARATE earlier launchd job (com.madrry.scanfeeds,
+# ~07:00 Taipei Tue-Sat) runs the producers and writes feeds/<name>.json atomically;
+# this 08:16 report only READS them, so the report's own runtime is unchanged.
+# Same defensive shape as the Trilogy reader above: freshest READABLE copy wins,
+# every failure degrades to an inline note, never an exception.
+# ---------------------------------------------------------------------------
+SCANNER_FEED_SCHEMA = 1
+# House convention: resolve from THIS file, never a hardcoded workspace path (the
+# workspace moved once already). The ~ fallbacks only matter if the report is ever
+# executed from a copy outside the workspace.
+SCANNER_FEED_DIRS = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "feeds"),
+    os.path.expanduser("~/.openclaw/openclaw/workspace/feeds"),
+    os.path.expanduser("~/.openclaw/workspace/feeds"),
+]
+
+
+def _read_scanner_feed(name: str) -> Tuple[dict, str]:
+    """(payload, path) for the freshest READABLE feeds/<name>.json.
+
+    Generic over all three scanners — one reader, not three copy-pasted ones.
+    Ordering is by mtime so a stale-but-readable copy never beats a fresh one;
+    if the freshest copy is mid-write/unreadable we fall through to the others.
+    Raises only when NO copy anywhere is readable (callers turn that into a note).
+
+    "Readable" means the TYPE is right too, not just that json.loads() succeeded:
+    a top-level list / null / string parses fine but every consumer below does
+    feed.get(...), so it would blow up deep in a renderer with an AttributeError
+    the reader can do nothing about. Rejecting it here means a corrupt feed takes
+    the SAME path as a missing one — the _feed_miss note that names the file, the
+    producer job and the regen command — and a corrupt fresh copy still falls
+    through to a good older mirror."""
+    cands = []
+    for _d in SCANNER_FEED_DIRS:
+        _p = os.path.join(_d, f"{name}.json")
+        try:
+            cands.append((os.path.getmtime(_p), _p))
+        except OSError:
+            continue
+    if not cands:
+        raise FileNotFoundError(os.path.join(SCANNER_FEED_DIRS[0], f"{name}.json"))
+    cands.sort(reverse=True)
+    last: Optional[Exception] = None
+    for _m, _p in cands:
+        try:
+            _payload = _read_json_retry(_p)
+            if not isinstance(_payload, dict):
+                raise ValueError(
+                    f"{_p}: feed must be a JSON object, got {type(_payload).__name__}")
+            return _payload, _p
+        except (OSError, ValueError) as exc:
+            last = exc
+    raise last if last is not None else FileNotFoundError(name)
+
+
+def _last_us_session(today: Optional[date] = None) -> date:
+    """Last COMPLETED US session, weekend-walked-back — mirrors trilogy_fresh()
+    in run_madrry_morning.sh:46-58 (yesterday, then back off Sat/Sun). Holidays
+    are not modelled there either; a post-holiday morning shows a one-day-stale
+    flag, which is the safe direction to err."""
+    d = (today or date.today()) - timedelta(days=1)
+    while d.weekday() >= 5:                       # 5=Sat, 6=Sun
+        d -= timedelta(days=1)
+    return d
+
+
+_UNIV_URL_RE = re.compile(r"\s*https?://\S+")
+
+
+def _n(v) -> Optional[str]:
+    """Thousands-separated int, or None if the feed did not record it. Returning
+    None rather than '?' or 0 is deliberate: a missing count must DROP its
+    clause, never print a made-up one."""
+    try:
+        return f"{int(v):,}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _universe_line(feed: dict) -> str:
+    """One line saying WHAT WAS SCANNED — source, filter spec, how many names
+    the screen returned, how many of them this scanner actually reached, and the
+    history-depth coverage it lost.
+
+    This exists because the universe was invisible. The rewrite from a frozen
+    1,790-name local file list to a daily market-wide TradingView screen is the
+    entire substance of the change, and a reader opening the report could not
+    tell which one produced the rows — the counts lived only in JSON. A change
+    the reader cannot see has not been delivered.
+
+    Two dates are in play and they are NOT the same date: `universe.universe_asof`
+    is when the TradingView filter last ran (today), `feed.asof` is the bar the
+    scanner evaluated (the last completed session). They differ by design, and a
+    bare pair of dates is exactly the kind of thing that gets misread — so each
+    is printed with its role attached, and the bar date is tied back to the
+    `asof` on the line above.
+
+    Every clause is dropped rather than guessed when its field is absent. A
+    universe sentence that is numerically false is worse than no sentence, and
+    the counts here do NOT form an equation: swing reports 1,305 screened /
+    1,279 scanned / 18 short-history, and 1305-18 != 1279 because names also
+    drop for reasons this block does not itemise. So the numbers are stated as
+    independent facts and never joined by an arithmetic 'therefore'."""
+    u = feed.get("universe")
+    if not isinstance(u, dict) or not u:
+        return ("<div class='scr-head scr-univ'>Universe: <b>not recorded</b> by this "
+                "producer — this feed gives no way to tell which names were scanned.</div>")
+
+    bits = []
+
+    # What the screen is. `spec` is the producer's own one-line human statement
+    # and is preferred verbatim; the bare URL is stripped for width only. If it
+    # is missing, compose from the structured filters (martin names them
+    # `tv_filters`) — never invent scope the feed did not state.
+    spec = u.get("spec")
+    src = str(u.get("source") or "").strip()
+    if isinstance(spec, str) and spec.strip():
+        # `\S+` swallows the colon that separated the URL from the filter
+        # clause ("...america/scan: all US stocks"), so substitute a dash IN
+        # and then collapse any colon left stranded beside it — otherwise the
+        # line reads "TradingView all US stocks" with no break at all.
+        txt = _UNIV_URL_RE.sub(" — ", spec)
+        txt = re.sub(r"\s*—\s*:?\s*", " — ", txt).strip(" —\t\n ")
+        txt = txt.replace(">=", "≥").replace("<=", "≤")
+        bits.append(f"Universe: {esc(txt)}")
+    else:
+        f = u.get("filters")
+        if not isinstance(f, dict) or not f:
+            f = u.get("tv_filters")
+        parts = []
+        if isinstance(f, dict):
+            if f.get("min_close") is not None:
+                parts.append(f"close &ge; ${esc(f['min_close'])}")
+            _vols = [f.get(k) for k in ("min_avg_vol_30d", "min_avg_vol_60d", "min_avg_vol_90d")]
+            if all(v is not None for v in _vols) and len(set(_vols)) == 1:
+                parts.append(f"avg vol 30d/60d/90d each &ge; {_n(_vols[0])}")
+            elif any(v is not None for v in _vols):
+                for _lbl, _v in zip(("30d", "60d", "90d"), _vols):
+                    if _v is not None:
+                        parts.append(f"avg vol {_lbl} &ge; {_n(_v)}")
+            if f.get("above_sma200"):
+                parts.append("close &ge; SMA200")
+        head = f"Universe: {esc(src) or 'unspecified source'}"
+        bits.append(head + (" — " + ", ".join(parts) if parts else " — filters not recorded"))
+
+    # Size of the screen result + WHEN the screen ran.
+    size = _n(u.get("universe_size"))
+    ua = str(u.get("universe_asof") or "").strip()
+    if size:
+        bits.append(f"<b>{size}</b> names"
+                    + (f" as screened <b>{esc(ua)}</b> (screen run date)" if ua else ""))
+    elif ua:
+        bits.append(f"screened <b>{esc(ua)}</b> (screen run date)")
+
+    # How many this scanner actually reached, on which bar.
+    scanned = _n(u.get("scanned"))
+    asof = str(feed.get("asof") or "").strip()
+    if scanned:
+        bits.append(f"<b>{scanned}</b> of them scanned on the <b>{esc(asof) or '?'}</b> bar"
+                    + (" (the asof above)" if asof else ""))
+
+    # Coverage actually lost. Named gate only when the feed states min_bars —
+    # inferring the gate from a bars histogram bucket would be a guess.
+    drop = _n(u.get("dropped_short_history"))
+    if drop and str(u.get("dropped_short_history")) != "0":
+        mb = _n(u.get("min_bars"))
+        bits.append(f"<b>{drop}</b> dropped below the "
+                    + (f"{mb}-bar history gate" if mb else "history gate")
+                    + " — not scanned, not in the table")
+    failed = u.get("failed")
+    if _n(failed) and str(failed) != "0":
+        bits.append(f"<b>{_n(failed)}</b> failed to price")
+
+    origin = str(u.get("universe_origin") or "").strip()
+    if origin:
+        bits.append(f"<span class='sub'>{esc(origin)}</span>")
+
+    return f"<div class='scr-head scr-univ'>{' · '.join(bits)}</div>"
+
+
+def _feed_head(feed: dict, path: str, headline: str, legend: str,
+               shown: Optional[int] = None, skipped: int = 0) -> str:
+    """Compact header for a scanner pane: count + asof + STALE flag + the
+    scanner's headline read, then any producer warnings, then the legend.
+
+    Staleness is the whole point of this block. A feed rendered as if it were
+    today's signals when it is two sessions old is the exact failure the split
+    producer/reader design exists to prevent, so the flag is loud and sits
+    directly above the numbers it qualifies.
+
+    `shown` is the number of rows the caller ACTUALLY rendered and `skipped` the
+    number it dropped. The generators skip non-dict entries and blank tickers, so
+    len(candidates) is a promise the table may not keep — a header reading
+    "5 candidates" over a 1-row table is exactly the kind of quiet divergence
+    this report must never print. Pass both; the count reflects what is on
+    screen and anything dropped gets its own loud note."""
+    n = len(feed.get("candidates") or []) if shown is None else shown
+    asof = str(feed.get("asof") or "")
+    gen = str(feed.get("generated") or "")
+    bits = [f"<b>{n}</b> candidates", f"asof <b>{esc(asof) or '?'}</b>"]
+    stale_html = ""
+    try:
+        _last = _last_us_session()
+        _a = date.fromisoformat(asof)
+        if _a < _last:
+            _n_beh = (_last - _a).days
+            stale_html = (
+                "<div class='vnote'><div class='vnote-t'>STALE FEED</div>"
+                f"<div class='vnote-b'>These signals are from <b>{esc(asof)}</b>, but the last "
+                f"completed US session is <b>{esc(_last.isoformat())}</b> ({_n_beh} day"
+                f"{'s' if _n_beh != 1 else ''} behind). Do NOT trade these levels as if they "
+                "were today's — prices have moved since. Regenerate with "
+                "<code>bash run_scanner_feeds.sh</code>, or check "
+                "<code>/tmp/madrry_scanfeeds.log</code> for why the 07:00 producer job "
+                "did not run.</div></div>")
+    except (TypeError, ValueError):
+        stale_html = ("<div class='vnote'><div class='vnote-t'>UNKNOWN FEED DATE</div>"
+                      "<div class='vnote-b'>This feed carries no readable <code>asof</code>, "
+                      "so its freshness cannot be checked. Treat the levels as unverified.</div></div>")
+    if gen:
+        bits.append(f"generated {esc(gen)}")
+    if headline:
+        bits.append(headline)                     # caller-escaped (may carry markup)
+    bits.append(f"<span class='sub'>{esc(os.path.basename(path))}</span>")
+    warn_html = ""
+    # A bare string is ONE warning, not one per character: str is itself an
+    # iterable of str, so a plain `[w for w in ... if isinstance(w, str)]` is a
+    # no-op for exactly the type it exists to reject and "boom" renders as
+    # four bullets b/o/o/m. Normalise the container first, then filter.
+    _warns_raw = feed.get("warnings")
+    if isinstance(_warns_raw, str):
+        _warns_raw = [_warns_raw]
+    elif not isinstance(_warns_raw, (list, tuple)):
+        _warns_raw = []
+    warns = [w for w in _warns_raw if isinstance(w, str) and w.strip()]
+    if warns:
+        _items = "".join(f"<li>{esc(w)}</li>" for w in warns)
+        warn_html = ("<div class='vnote'><div class='vnote-t'>PRODUCER WARNINGS</div>"
+                     f"<div class='vnote-b'><ul style='margin:0;padding-left:18px;'>{_items}</ul>"
+                     "</div></div>")
+    if skipped:
+        _pl = "y" if skipped == 1 else "ies"
+        warn_html += ("<div class='vnote'><div class='vnote-t'>MALFORMED ENTRIES SKIPPED</div>"
+                      f"<div class='vnote-b'><b>{skipped}</b> candidate entr{_pl} in this feed "
+                      f"could not be rendered (not a JSON object, or no ticker) and {'is' if skipped == 1 else 'are'} "
+                      "NOT in the table below. The candidate count above is the number of rows "
+                      "actually shown, not the feed's own length. This is a producer bug, not a "
+                      "market read — check <code>/tmp/madrry_scanfeeds.log</code>.</div></div>")
+    ver = feed.get("schema_version")
+    if ver != SCANNER_FEED_SCHEMA:
+        warn_html += ("<div class='vnote'><div class='vnote-t'>UNKNOWN SCHEMA</div>"
+                      f"<div class='vnote-b'>Feed schema_version={esc(ver)}, this report "
+                      f"understands {SCANNER_FEED_SCHEMA}. Columns may be wrong.</div></div>")
+    legend_html = (f"<div class='vnote vnote-green'><div class='vnote-t'>WHAT THE NUMBERS MEAN</div>"
+                   f"<div class='vnote-b'>{legend}</div></div>") if legend else ""
+    return (stale_html + warn_html
+            + f"<div class='scr-head'>{' · '.join(bits)}</div>"
+            + _universe_line(feed) + legend_html)
+
+
+def _feed_miss(label: str, name: str, why: str) -> str:
+    """Total-miss / empty-feed note. Says WHY and how to regenerate — a blank
+    panel teaches the reader nothing."""
+    return _ext_empty(
+        f"{label}: {why} Expected feeds/{name}.json, written by the 07:00 Taipei "
+        f"producer job (com.madrry.scanfeeds). Regenerate by hand with: "
+        f"bash run_scanner_feeds.sh — then check /tmp/madrry_scanfeeds.log. "
+        f"Note an EMPTY candidate list is a valid result: 'nothing fired today' is "
+        f"information, not a failure.")
+
+
+def _fs_txt(v, sort=None) -> str:
+    """Left-aligned text cell with an EXPLICIT alphabetic data-sort — the sort
+    engine strips non-numerics from cell TEXT, so 'A_VCP' would otherwise sort
+    as empty and 'Stage 4' as 4 (FEED_SCHEMAS rule 2)."""
+    s = "" if v is None else str(v)
+    return f"<td class='tl' data-sort='{esc(sort if sort is not None else s)}'>{esc(s) or '—'}</td>"
+
+
+def _fs_bool(v) -> str:
+    """Real JSON bool -> yes/no with a numeric sort key. null renders as '—'."""
+    if v is None:
+        return "<td class='num' data-sort='-1'>—</td>"
+    return (f"<td class='num' data-sort='{1 if v else 0}'>"
+            f"<span class='{'val-green' if v else 'val-red'}'>{'yes' if v else 'no'}</span></td>")
+
+
+def _fs_usd(v) -> str:
+    """Dollar volume: raw number in, compact $ display out, raw value as the sort key."""
+    if not isinstance(v, (int, float)):
+        return "<td class='num' data-sort='-1'>—</td>"
+    if v >= 1e9:
+        txt = f"${v / 1e9:.1f}B"
+    elif v >= 1e6:
+        txt = f"${v / 1e6:.0f}M"
+    else:
+        txt = f"${v:,.0f}"
+    return f"<td class='num' data-sort='{v:.1f}'>{txt}</td>"
+
+
+def _fs_table(cols, rows: List[str]) -> str:
+    """Plain sortable table. The sort engine (6573+) binds to EVERY <table> on the
+    page, so this needs zero new JS."""
+    head = "".join(f"<th class='{c}'>{esc(t)}</th>" for t, c in cols)
+    return ("<div class='table-container scr-wrap'><table class='screener' data-sort-desc>"
+            f"<thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>")
 
 
 def _ext_empty(msg: str) -> str:
@@ -9394,6 +9777,537 @@ def generate_minervini_table(market_modifier: float = 1.0) -> Tuple[str, int]:
         </tr>""")
     out.append("</table></div>")
     return "".join(out), len(rows)
+
+
+# ---------------------------------------------------------------------------
+# The three external-scanner panes. Each returns (html, count) like the other
+# generators. They ONLY read feeds/*.json — no network, no price pull — so they
+# add ~0s to the report's ~153s runtime. Legends are lifted from FEED_SCHEMAS.md
+# so the tab explains its own numbers without a second document.
+# ---------------------------------------------------------------------------
+_SWING_LEGEND = (
+    "<b>Consolidation score (0&ndash;100)</b> ranks how cleanly a name is coiling: a tight, shallow "
+    "base high in its range, on drying volume, above rising averages. It answers <i>when a base "
+    "ends</i> &mdash; NOT whether the break works. <b>Fire level</b> is "
+    "<i>cumulative</i> &mdash; 20% is the loosest gate (score &ge; 68.7), 10% tighter (&ge; 76.7), 5% "
+    "the tightest (&ge; 82.9); a 5% name also satisfies 10% and 20%. These 5/10/20% labels are "
+    "FIRE-RATE quantiles of the score, and have nothing to do with any percentage of price. "
+    "<b>Trigger</b> is the signal "
+    "bar's high &mdash; a buy-stop for the NEXT session, not a market order today. "
+    "<b>20-bar low</b> (feed field <code>stop20</code> &mdash; which is NOT a 20% stop) is the "
+    "lowest low of the last 20 sessions, a structural reference level the producer reports so you "
+    "can see where the base's floor sits. <b>Trig&rarr;low %</b> (feed field <code>risk_pct</code>) "
+    "is simply the distance from Trigger down to that 20-bar low "
+    "(trigger&rarr;stop20){riskdist}. <b>Neither column is a proposed stop and neither is a trade "
+    "plan</b>: a double-digit figure is a measurement of how far away structure is, and most "
+    "traders would cut far tighter. Sizing is yours &mdash; share counts are deliberately NOT "
+    "shown, for the same "
+    "reason the Martin pane withholds them. "
+    "<b>vol5/vol20 below 1</b> means the last week traded quieter than the last month, the dry-up "
+    "that usually precedes expansion. <b>Self %ile</b> compares today's score to this same "
+    "ticker's own 60-bar history, so 95 means 'tightest this base has ever been'; a "
+    "<b>streak</b> of 15 means it has been firing for three weeks and the edge is likely stale. "
+    "<b>Fast</b> is the separate FAST momentum model's score on the same 0&ndash;100 scale, and 100 "
+    "is its ceiling rather than a rank.{fastland} <b>&#10003; / Overlay</b> marks the rows that clear BOTH models "
+    "(<code>{rule}</code>); everything else is consolidation-only.")
+
+_MARTIN_LEGEND = (
+    "Martin scans five setups. <b>BREAKOUT</b> &mdash; price clearing a defined base on expansion. "
+    "<b>FIRST_PULLBACK</b> &mdash; the first orderly rest after a breakout, the lowest-risk "
+    "continuation entry. <b>EPISODIC_PIVOT</b> &mdash; a gap on news/earnings with volume and a "
+    "strong close. <b>PARABOLIC_LONG / PARABOLIC_SHORT</b> &mdash; an extended move, long into "
+    "climax or short into exhaustion. <b>Confidence (0&ndash;100)</b> is the scanner's own composite "
+    "of trend quality, volume and location &mdash; a ranking aid, NOT a probability. "
+    "<b>RS vs SPY</b> is the relative-strength percentile against the S&amp;P 500 only, and it is "
+    "<i>universe-relative</i>: this run ranks within a TradingView cohort already filtered to names "
+    "above their 200-day average, so a 0.89 here is not comparable to a 0.89 from the old 27-name "
+    "list. <b>Entry</b> and <b>stop</b> come from the setup's own geometry; risk % is entry&rarr;stop. "
+    "<b>Target is NOT a measured objective</b> &mdash; it is a fixed R-multiple of that same "
+    "entry&rarr;stop distance, hardcoded per setup type (BREAKOUT 2.5R, FIRST_PULLBACK 3.0R, "
+    "EPISODIC_PIVOT and PARABOLIC_LONG 2.0R). It carries no information beyond entry and stop, and "
+    "because the multiple DIFFERS by setup a target price is not comparable across setups. The "
+    "<b>R:R</b> column is that multiple, derived from the published entry/stop/target &mdash; read "
+    "targets through it, and treat the level as a reference, not as a projected objective. "
+    "Position <b>share counts are deliberately NOT shown</b> &mdash; the producer sizes off a "
+    "hardcoded $100k equity that has not been confirmed as yours.")
+
+_QULLA_LEGEND = (
+    "The patterns the pinned <code>--best</code> preset fires. <b>B_HTF</b> &mdash; high tight flag: a "
+    "60%+ advance then four quiet narrow-range bars hugging the 10-EMA, then a pivot break on volume. "
+    "<b>D_MAUR</b> &mdash; moving-average undercut and reclaim: price dips below the 10/21-EMA or "
+    "50-SMA intraday but closes back above with the uptrend intact. <b>E_SURF</b> &mdash; surfing a "
+    "rising 10-EMA: 8 of the last 10 closes held above it and today's bar taps within 2% and closes "
+    "back above on an up day. <b>G_METS</b> &mdash; trendline pullback: the low touches a rising "
+    "trendline from two swing lows, closing up and above the 21-EMA. <b>I_BGU2</b> &mdash; buyable "
+    "gap-up day 2: after a 5%+ gap on 1.5&times; volume the stock holds the gap-day low, then breaks "
+    "the gap-day high within 6 bars. <b>Prior move</b> is the advance that set up the pattern &mdash; "
+    "Qullamaggie's own filter is 'only look at what already ran'. <b>Stop %</b> is your risk if you "
+    "take the entry. Note <b>rvol is always 0.0 for I_BGU2</b> (that detector never computes it) "
+    "&mdash; do not read it as 'no volume'. R / gain columns are omitted on purpose: no forward bars "
+    "exist for a same-day signal, so they would be structurally zero. Rank by pattern, prior move "
+    "and stop distance.")
+
+_SWING_COLS = [
+    ("Ticker", "tl"), ("Consol", "num"), ("Fire", "num"), ("Last", "num"),
+    # "Stop20" read as a 20% stop two columns from a legend that says "20%" three
+    # times about the fire gates. The header now says what the number IS.
+    ("Trigger", "num"), ("20-bar low", "num"), ("Trig→low %", "num"), ("ADR", "num"),
+    ("$Vol", "num"), ("Base len", "num"), ("Depth %", "num"), ("Pos in base", "num"),
+    ("Dist high %", "num"), ("vol5/20", "num"), ("Self %ile", "num"),
+    ("Streak", "num"), ("Fast", "num"), ("Overlay", "num"),
+]
+
+
+def _swing_fast_landmarks(feed: dict, cands: list) -> str:
+    """Where a Fast score actually sits — computed, never baked in.
+
+    The legend used to hardcode "a Fast of 64.6 is mid-pack and 8.9 is
+    bottom-decile". Against the scanned universe 64.6 is the ~80th percentile,
+    not mid-pack: the landmarks had been read off the EMITTED table (median
+    fast 64.2) while the sentence claimed to describe the universe. Two
+    separate bugs — wrong population, and frozen numbers that drift the moment
+    the universe changes.
+
+    So: prefer the producer's universe-wide distribution (`universe
+    .fast_score_dist`), because the renderer only holds the top-60 and cannot
+    see the universe. Fall back to the rows in hand, and when it does, SAY that
+    the numbers describe the table rather than the market. Either way every
+    figure is labelled with the population it came from, and the tie group at
+    the ceiling is reported instead of implying 100 is unique."""
+    u = feed.get("universe")
+    d = (u or {}).get("fast_score_dist") if isinstance(u, dict) else None
+
+    def _f(v):
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v else None
+
+    if isinstance(d, dict) and _f(d.get("median")) is not None and _f(d.get("n")):
+        n, med = int(d["n"]), _f(d["median"])
+        p75, p90, mx = _f(d.get("p75")), _f(d.get("p90")), _f(d.get("max"))
+        tie = d.get("n_at_max")
+        out = (f" Across all <b>{n:,}</b> names this scanner scored on this session, the median "
+               f"Fast is <b>{med:.1f}</b>")
+        if p75 is not None and p90 is not None:
+            out += f", the 75th percentile <b>{p75:.1f}</b> and the 90th <b>{p90:.1f}</b>"
+        out += " &mdash; so a mid-pack momentum name is nearer the 30s than the 60s."
+        if isinstance(tie, int) and tie > 1 and mx is not None:
+            out += (f" The scale tops out: <b>{tie}</b> of those names sit at the ceiling of "
+                    f"{mx:.0f}, so a 100 means 'saturated the model', NOT 'the single strongest "
+                    "name in the universe'.")
+        # The table is a biased sample of that universe and the reader is looking
+        # at the table, so name the gap rather than let them assume it away.
+        tf = sorted(v for v in (_scr_num(m, "fast_score") for m in cands
+                                if isinstance(m, dict))
+                    if isinstance(v, (int, float)) and v == v)
+        if tf:
+            tmed = tf[len(tf) // 2] if len(tf) % 2 else (tf[len(tf) // 2 - 1] + tf[len(tf) // 2]) / 2
+            out += (f" The {len(tf)} rows below are not a random draw from that universe: their own "
+                    f"median Fast is <b>{tmed:.1f}</b>, spanning {tf[0]:.1f} to {tf[-1]:.1f}.")
+        return out
+
+    # Producer published nothing usable — describe the table, and say so.
+    tf = sorted(v for v in (_scr_num(m, "fast_score") for m in cands
+                            if isinstance(m, dict))
+                if isinstance(v, (int, float)) and v == v)
+    if not tf:
+        return (" This feed carries no usable Fast distribution, so this legend cannot tell you "
+                "where a given Fast sits relative to the market &mdash; read the column as "
+                "rank-within-this-table only.")
+    tmed = tf[len(tf) // 2] if len(tf) % 2 else (tf[len(tf) // 2 - 1] + tf[len(tf) // 2]) / 2
+    out = (f" <b>This feed publishes no universe-wide Fast distribution</b>, so the only landmarks "
+           f"available describe THE {len(tf)} ROWS BELOW, not the market: median <b>{tmed:.1f}</b>, "
+           f"range {tf[0]:.1f} to {tf[-1]:.1f}.")
+    ceil = sum(1 for v in tf if v >= 99.99)
+    if ceil > 1:
+        out += (f" {ceil} of them sit at the 100 ceiling, so a 100 is a saturated score shared by "
+                "several names, not a unique top rank.")
+    out += (" Do not read these as universe percentiles &mdash; this table is selected for "
+            "consolidation and skews high.")
+    return out
+
+
+def _swing_overlay_note(n_inter: int, n_rows: int, rule: str, feed: dict) -> str:
+    """The detector's OWN held-out finding, at the top of the pane.
+
+    swing_consol_scan.py's docstring is explicit: measured on a RAW BROAD
+    universe the forward edge is ~1.11x, essentially nil standalone; the
+    measured value is as a timing overlay on a momentum-selected pool. The
+    table is sorted by consol_score, so without this block the #1 row is
+    whatever coiled tightest — frequently a bottom-decile-momentum name.
+
+    What this block must NOT do any more is pin the ~1.11x on the non-overlay
+    rows. That number was measured on a raw universe; this scanner no longer
+    runs on one. The daily TradingView universe is pre-filtered to close >=
+    SMA200 plus three volume floors — a trend/liquidity pre-selection that sits
+    structurally closer to the momentum-selected pool the SAME validation
+    credits (fill 47.3% -> 60.9%) than to the raw universe it rates at nil. So
+    the honest statement is a bracket, not a point estimate: the standalone
+    edge on THIS population is somewhere between the two and has not been
+    measured. The warning survives; the false precision does not."""
+    u = feed.get("universe")
+    u = u if isinstance(u, dict) else {}
+    filt = u.get("filters") if isinstance(u.get("filters"), dict) else {}
+    bits = []
+    if filt.get("above_sma200"):
+        bits.append("close &ge; its 200-day average")
+    mc = filt.get("min_close")
+    if isinstance(mc, (int, float)):
+        bits.append(f"price &ge; ${mc:g}")
+    vols = [v for k, v in filt.items()
+            if k.startswith("min_avg_vol") and isinstance(v, (int, float))]
+    if vols:
+        bits.append(f"{len(vols)} average-volume floors at {min(vols):,.0f}+ shares")
+    prefilter = (" and ".join(", ".join(bits).rsplit(", ", 1)) if bits
+                 else "a trend and liquidity pre-filter")
+    cls = "vnote vnote-green" if n_inter else "vnote"
+    return (f"<div class='{cls}'><div class='vnote-t'>READ THE OVERLAY ROWS FIRST &mdash; "
+            "THE SCORE IS NOT AN EDGE ON ITS OWN</div><div class='vnote-b'>"
+            "The consolidation detector's own held-out validation found it has "
+            "<b>essentially no standalone forward edge on a raw broad universe (~1.11&times;)</b>. "
+            "Its measured value is as a <b>TIMING OVERLAY on a momentum-selected pool</b>: layered "
+            "on FAST=100 names it lifts fill rate 47.3% &rarr; 60.9% and cuts MAE &minus;9.32% "
+            "&rarr; &minus;8.44%. What it is good at is calling <i>when a base ends</i> (53.9% "
+            "exact-bar vs a 24.1% null), not whether the break pays. "
+            f"<b>{n_inter} of {n_rows}</b> names below clear both models "
+            f"(<code>{esc(rule)}</code>); they are pinned to the top of the table, tinted, and "
+            "marked <span class='val-green'>&#10003;</span> &mdash; <b>those are the rows with "
+            "demonstrated support</b>. The rest are consolidation-only: timing information on names "
+            "the momentum model does not rank. "
+            "<b>How much edge those consolidation-only rows carry is NOT known.</b> The ~1.11&times; "
+            f"was measured on a raw universe, and this scan is not one &mdash; it runs on a universe "
+            f"already pre-filtered to {prefilter}, which is a trend/liquidity pre-selection closer in "
+            "kind to the momentum-selected pool the same validation credits than to the raw universe "
+            "it rates at nil. The true standalone figure here sits somewhere between those two "
+            "measurements and has never been measured on this population. Treat it as unquantified, "
+            "not as demonstrated. "
+            "<b>Sorting by Consol puts the tightest base on top, not "
+            "the best trade</b>; a Consol of 100 next to a single-digit Fast is a tight base in a "
+            "weak-momentum name. Clicking any column header re-sorts and discards this "
+            "grouping.</div></div>")
+
+
+def generate_swing_consol_pane() -> Tuple[str, int]:
+    """Swing consolidation scanner -> its own sortable pane."""
+    label = "Swing consolidation scanner"
+    try:
+        feed, path = _read_scanner_feed("swing_consol")
+    except (OSError, ValueError) as exc:
+        log.error("swing_consol feed unreadable: %r", exc)
+        return _feed_miss(label, "swing_consol", "the feed is missing or unreadable."), 0
+    cands = feed.get("candidates") or []
+    if not cands:
+        return (_feed_head(feed, path, "", "")
+                + _feed_miss(label, "swing_consol",
+                             f"the feed read fine (asof {esc(str(feed.get('asof')))}) but "
+                             "ZERO names cleared the consolidation gate."), 0)
+    rows, skipped = [], 0
+    for m in cands:
+        if not isinstance(m, dict):
+            skipped += 1
+            continue
+        tk = str(m.get("ticker") or "")
+        if not tk:
+            skipped += 1
+            continue
+        inter = bool(m.get("intersection"))
+        rows.append((
+            inter, _scr_num(m, "consol_score") or 0.0,
+            f"<tr class='{'swx' if inter else ''}'>" + _ext_ticker_cell(tk)
+            + _scr_cell(_scr_num(m, "consol_score"), dp=1)
+            + (f"<td class='num' data-sort='{-(_scr_num(m, 'fire_level_num') or 99)}'>"
+               f"{esc(m.get('fire_level') or '—')}</td>")
+            + _scr_cell(_scr_num(m, "close"), dp=2)
+            + _scr_cell(_scr_num(m, "trigger"), dp=2)
+            + _scr_cell(_scr_num(m, "stop20"), dp=2)
+            + _scr_cell(_scr_num(m, "risk_pct"), pct=True)
+            + _scr_cell(_scr_num(m, "adr20"), pct=True)
+            + _fs_usd(m.get("dollar_vol_20d"))
+            + _scr_cell(_scr_num(m, "base_len"), dp=0)
+            + _scr_cell(_scr_num(m, "base_depth"), pct=True)
+            + _scr_cell(_scr_num(m, "pos_in_base"), dp=2)
+            + _scr_cell(_scr_num(m, "dist_base_high"), pct=True)
+            + _scr_cell(_scr_num(m, "vol5_over_vol20"), dp=2)
+            + _scr_cell(_scr_num(m, "self_pctile"), dp=0)
+            + _scr_cell(_scr_num(m, "fire_streak"), dp=0)
+            + _scr_cell(_scr_num(m, "fast_score"), dp=1)
+            + (f"<td class='num' data-sort='{1 if inter else 0}'>"
+               + ("<span class='val-green'>&#10003;</span>" if inter else "—") + "</td>")
+            + "</tr>"))
+    if not rows:
+        return (_feed_head(feed, path, "", "", shown=0, skipped=skipped)
+                + _feed_miss(label, "swing_consol",
+                             f"all {skipped} candidate entries in the feed were malformed "
+                             "(not a JSON object, or no ticker) so NOTHING could be rendered."), 0)
+    p = feed.get("params")
+    p = p if isinstance(p, dict) else {}
+    thr = p.get("fire_thresholds")
+    thr = thr if isinstance(thr, dict) else {}
+    headline = esc(f"gates 5%≥{thr.get('5pct')} · 10%≥{thr.get('10pct')} · 20%≥{thr.get('20pct')}") \
+        if thr else ""
+    rule = str(p.get("intersection_rule") or "consolidation AND fast-momentum")
+    # Describe THIS run's risk_pct spread, never a baked-in one — the whole point
+    # of the sentence is to show the reader that these are 10%+ structural
+    # distances, and a hardcoded range would be a lie the next morning.
+    # risk_pct is NaN on zero-volume stub bars (the producer emits it rather than
+    # a divide-by-zero 0). NaN is a float, so it must be filtered explicitly or it
+    # silently poisons the min/median this sentence quotes.
+    _rk = sorted(v for v in (_scr_num(m, "risk_pct") for m in cands
+                             if isinstance(m, dict))
+                 if isinstance(v, (int, float)) and v == v)
+    if _rk:
+        _med = _rk[len(_rk) // 2] if len(_rk) % 2 else (_rk[len(_rk) // 2 - 1] + _rk[len(_rk) // 2]) / 2
+        _wide = sum(1 for v in _rk if v > 15)
+        riskdist = (f", which on this run spans {_rk[0]:.1f}% to {_rk[-1]:.1f}% with a median of "
+                    f"{_med:.1f}% and {_wide} of {len(_rk)} names wider than 15%")
+    else:
+        riskdist = ""
+    # Overlay hits LEAD. The detector is validated as an overlay on momentum, so
+    # the rows that clear both models come first regardless of consol_score;
+    # within each group the old consol-desc order is preserved. Clicking a header
+    # still re-sorts the whole table — the sort engine owns that — which is why
+    # the lead note says so out loud.
+    rows.sort(key=lambda r: (not r[0], -r[1]))
+    n_inter = sum(1 for r in rows if r[0])
+    body = [r[2] for r in rows]
+    if 0 < n_inter < len(rows):
+        body.insert(n_inter,
+                    f"<tr class='swsep'><td colspan='{len(_SWING_COLS)}'>"
+                    "&#9660; BELOW: CONSOLIDATION-ONLY &mdash; the fast momentum model does not "
+                    "rank these. The detector has no demonstrated standalone edge, and none has "
+                    "been measured on this pre-filtered universe. Timing information, not a "
+                    "trade list."
+                    "</td></tr>")
+    return (_swing_overlay_note(n_inter, len(rows), rule, feed)
+            + _feed_head(feed, path, headline,
+                         _SWING_LEGEND.replace("{rule}", esc(rule))
+                                      .replace("{riskdist}", riskdist)
+                                      .replace("{fastland}",
+                                               _swing_fast_landmarks(feed, cands)),
+                         shown=len(rows), skipped=skipped)
+            + _fs_table(_SWING_COLS, body)), len(rows)
+
+
+_MARTIN_COLS = [
+    ("Ticker", "tl"), ("Dir", "tl"), ("Setup", "tl"), ("Conf", "num"),
+    ("RS vs SPY", "num"), ("Entry", "num"), ("Stop", "num"), ("Target", "num"),
+    ("R:R", "num"), ("Risk %", "num"), ("ADR %", "num"), ("$Vol", "num"), ("EMA status", "tl"),
+    ("AVWAP", "tl"), ("Sector", "tl"), ("Why", "tl"),
+]
+
+
+def _martin_env_html(feed: dict) -> str:
+    """Martin's headline read: the market-environment block. This LEADS the tab —
+    the scanner's own gate on whether breakouts are tradeable at all outranks any
+    individual name it printed."""
+    env = feed.get("environment")
+    if not isinstance(env, dict):
+        return ("<div class='vnote'><div class='vnote-t'>NO ENVIRONMENT BLOCK</div>"
+                "<div class='vnote-b'>This feed carries no <code>environment</code>, so the "
+                "market-regime gate below the names is unknown.</div></div>")
+    score, regime = env.get("score"), env.get("regime")
+    allow = env.get("allow_breakouts")
+    breadth, dg = env.get("breadth_above_50"), env.get("downgrade_rate")
+
+    def _chip(lbl, val, cls=""):
+        return f"<span class='chip {cls}'>{esc(lbl)} <b>{esc(val)}</b></span>"
+
+    # regime.py:52 sums EXACTLY these five booleans into the score. Render all five —
+    # showing only three left a reader auditing "4/5" able to count 2, and the two
+    # hidden ones are the whole margin between ALLOWED and SUPPRESSED
+    # (allow_breakouts = score >= 3 and not deteriorating).
+    breadth_ok = isinstance(breadth, (int, float)) and breadth > 0.60
+    inputs = [("SPY >50", bool(env.get("spy_above_50"))),
+              ("SPY 50>200", bool(env.get("spy_50_above_200"))),
+              ("QQQ >50", bool(env.get("qqq_above_50"))),
+              ("QQQ 50>200", bool(env.get("qqq_50_above_200"))),
+              ("Breadth >60%", breadth_ok)]
+    counted = sum(1 for _, v in inputs if v)
+
+    chips = [_chip("Market score", f"{score}/5",
+                   "green" if isinstance(score, (int, float)) and score >= 4
+                   else ("warn" if isinstance(score, (int, float)) and score >= 2 else "red")),
+             _chip("Regime", regime or "?"),
+             _chip("Breakouts", "ALLOWED" if allow else "SUPPRESSED",
+                   "green" if allow else "red"),
+             _chip("Breadth >50MA",
+                   f"{breadth * 100:.1f}%" if isinstance(breadth, (int, float)) else "?"),
+             # null and 0.0 are DIFFERENT claims: "not measurable" vs "measured,
+             # nothing deteriorated". Never render them alike.
+             _chip("Downgrade rate",
+                   f"{dg * 100:.1f}%" if isinstance(dg, (int, float))
+                   else "UNAVAILABLE",
+                   "" if isinstance(dg, (int, float)) else "warn"),
+             _chip("Panic", "yes" if feed.get("market_panic") else "no",
+                   "red" if feed.get("market_panic") else "green")]
+    score_chips = [_chip(lbl, "yes" if v else "no", "green" if v else "red")
+                   for lbl, v in inputs]
+    # If the published score does not equal the five inputs we just rendered, the
+    # reader's audit would fail and the chips would be the wrong explanation. Say so
+    # rather than letting the strip imply a reconciliation that does not hold.
+    mismatch = ""
+    if isinstance(score, (int, float)) and not isinstance(score, bool) and int(score) != counted:
+        mismatch = (f" <b class='val-red'>These five sum to {counted}, but the feed publishes "
+                    f"{int(score)}/5 &mdash; do not treat the chips as the score's derivation "
+                    "until that is reconciled.</b>")
+    notes = str(env.get("notes") or "")
+    body = ("<div class='vnote-b'>The scanner's own market gate, computed before any name was "
+            "ranked. <b>Breakouts SUPPRESSED</b> means Martin judged the tape unfit for "
+            "breakout entries regardless of how good an individual chart looks. "
+            f"<b>Market score</b> is the plain COUNT of the five yes/no inputs on the second row "
+            f"&mdash; SPY&gt;50, SPY 50&gt;200, QQQ&gt;50, QQQ 50&gt;200 and cohort breadth over the "
+            f"0.60 gate. All five are shown so the score reconciles on screen: this run counts "
+            f"<b>{counted}</b>.{mismatch} That matters because <b>Breakouts</b> is "
+            "<code>score &ge; 3</code> and not deteriorating &mdash; the two 50&gt;200 inputs are "
+            "often the entire margin between ALLOWED and SUPPRESSED. "
+            "<b>Breadth</b> here is measured over the scanned cohort, which the TradingView "
+            "filter has already restricted to names above their 200-day average &mdash; so it "
+            "reads HIGHER than true market breadth and can inflate the score by a point. "
+            "<b>Downgrade rate</b> needs a comparable PRIOR SESSION to mean anything. It reads "
+            "<b>UNAVAILABLE</b> whenever the producer could not measure it honestly &mdash; no "
+            "prior state, the same session re-scanned, or a scanned cohort that moved between "
+            "runs. That last one matters: the RS percentile is ranked across the loaded cohort, "
+            "so changing the cohort re-bases every name and shifts bucket labels with no bar "
+            "having changed. UNAVAILABLE is <i>not</i> 0%: when it shows, breakout suppression "
+            "did not evaluate and <b>Breakouts</b> above reflects the index/breadth score alone.")
+    if notes:
+        body += f"<br>{esc(notes)}"
+    body += "</div>"
+    return ("<div class='vnote vnote-green'><div class='vnote-t'>MARKET ENVIRONMENT</div>"
+            f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 4px;'>{''.join(chips)}</div>"
+            "<div style='display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 8px;'>"
+            "<span style='opacity:.75;font-size:11px;'>SCORE INPUTS (count = score):</span>"
+            f"{''.join(score_chips)}</div>"
+            + body + "</div>")
+
+
+def generate_martin_pane() -> Tuple[str, int]:
+    """Martin scanner -> environment strip + its own sortable pane."""
+    label = "Martin scanner"
+    try:
+        feed, path = _read_scanner_feed("martin_scan")
+    except (OSError, ValueError) as exc:
+        log.error("martin feed unreadable: %r", exc)
+        return _feed_miss(label, "martin_scan", "the feed is missing or unreadable."), 0
+    env_html = _martin_env_html(feed)
+    cands = feed.get("candidates") or []
+    if not cands:
+        return (_feed_head(feed, path, "", "") + env_html
+                + _feed_miss(label, "martin_scan",
+                             f"the feed read fine (asof {esc(str(feed.get('asof')))}) but ZERO "
+                             "names passed the setup gates."), 0)
+    rows, skipped = [], 0
+    for m in cands:
+        if not isinstance(m, dict):
+            skipped += 1
+            continue
+        tk = str(m.get("ticker") or "")
+        if not tk:
+            skipped += 1
+            continue
+        d = str(m.get("direction") or "")
+        rs = m.get("rs_percentile")
+        why = " · ".join(str(r) for r in (m.get("reasons") or []) if isinstance(r, str))
+        # Target is a hardcoded R-multiple per setup, so the multiple IS the only
+        # information the target adds. Prefer the producer's derived `rr`; fall back to
+        # the setup's own raw.rr, then to arithmetic, so an older feed still renders it
+        # rather than leaving the target looking like measured chart geometry.
+        rr = _scr_num(m, "rr")
+        if rr is None and isinstance(m.get("raw"), dict):
+            rr = _scr_num(m["raw"], "rr")
+        if rr is None:
+            _e, _s, _t = _scr_num(m, "entry"), _scr_num(m, "stop"), _scr_num(m, "target")
+            if None not in (_e, _s, _t) and abs(_e - _s) > 1e-9:
+                rr = (_t - _e) / (_e - _s)
+        rr_cell = ("<td class='num' data-sort='-99999'>—</td>" if rr is None
+                   else f"<td class='num' data-sort='{rr:.4f}'>{rr:.1f}R</td>")
+        rows.append(
+            "<tr>" + _ext_ticker_cell(tk)
+            + (f"<td class='tl' data-sort='{esc(d)}'>"
+               f"<span class='{'val-green' if d == 'LONG' else 'val-red'}'>{esc(d) or '—'}</span></td>")
+            + _fs_txt(m.get("setup"))
+            + _scr_cell(_scr_num(m, "confidence"), dp=0)
+            # feed stores a 0-1 fraction; display as a percentile per FEED_SCHEMAS
+            + _scr_cell(rs * 100 if isinstance(rs, (int, float)) else None, dp=0)
+            + _scr_cell(_scr_num(m, "entry"), dp=2)
+            + _scr_cell(_scr_num(m, "stop"), dp=2)
+            + _scr_cell(_scr_num(m, "target"), dp=2)
+            + rr_cell
+            + _scr_cell(_scr_num(m, "risk_pct"), pct=True)
+            + _scr_cell(_scr_num(m, "adr_pct"), pct=True)
+            + _fs_usd(m.get("dollar_vol"))
+            + _fs_txt(m.get("ema_status"))
+            + _fs_txt(m.get("avwap_position"))
+            + _fs_txt(m.get("sector"))
+            + _fs_txt(why)
+            + "</tr>")
+    if not rows:
+        return (_feed_head(feed, path, "", "", shown=0, skipped=skipped) + env_html
+                + _feed_miss(label, "martin_scan",
+                             f"all {skipped} candidate entries in the feed were malformed "
+                             "(not a JSON object, or no ticker) so NOTHING could be rendered."), 0)
+    reg = (feed.get("environment") or {}).get("regime") if isinstance(feed.get("environment"), dict) else None
+    return (_feed_head(feed, path, esc(f"regime {reg}") if reg else "", _MARTIN_LEGEND,
+                       shown=len(rows), skipped=skipped)
+            + env_html + _fs_table(_MARTIN_COLS, rows)), len(rows)
+
+
+_QULLA_COLS = [
+    ("Ticker", "tl"), ("Pattern", "tl"), ("What it is", "tl"), ("Entry", "num"),
+    ("Close", "num"), ("Stop", "num"), ("Stop %", "num"), ("ADR", "num"),
+    ("Prior move %", "num"), ("rvol", "num"), ("Also fired", "tl"),
+    ("Capped", "num"), ("Floored", "num"),
+]
+
+
+def generate_qulla_pane() -> Tuple[str, int]:
+    """Qullamaggie scanner -> its own sortable pane."""
+    label = "Qullamaggie scanner"
+    try:
+        feed, path = _read_scanner_feed("qulla_scan")
+    except (OSError, ValueError) as exc:
+        log.error("qulla feed unreadable: %r", exc)
+        return _feed_miss(label, "qulla_scan", "the feed is missing or unreadable."), 0
+    cands = feed.get("candidates") or []
+    if not cands:
+        return (_feed_head(feed, path, "", "")
+                + _feed_miss(label, "qulla_scan",
+                             f"the feed read fine (asof {esc(str(feed.get('asof')))}) but ZERO "
+                             "patterns fired on the last bar."), 0)
+    rows, skipped = [], 0
+    for m in cands:
+        if not isinstance(m, dict):
+            skipped += 1
+            continue
+        tk = str(m.get("ticker") or "")
+        if not tk:
+            skipped += 1
+            continue
+        also = ", ".join(str(a) for a in (m.get("also_fired") or []) if isinstance(a, str))
+        rows.append(
+            "<tr>" + _ext_ticker_cell(tk)
+            + _fs_txt(m.get("pattern"))
+            + _fs_txt(m.get("pattern_label"))
+            + _scr_cell(_scr_num(m, "entry"), dp=2)
+            + _scr_cell(_scr_num(m, "signal_close"), dp=2)
+            + _scr_cell(_scr_num(m, "stop"), dp=2)
+            + _scr_cell(_scr_num(m, "stop_pct"), pct=True)
+            + _scr_cell(_scr_num(m, "adr"), pct=True)
+            + _scr_cell(_scr_num(m, "prior_move"), pct=True, dp=0)
+            + _scr_cell(_scr_num(m, "rvol"), dp=2)
+            + _fs_txt(also)
+            + _fs_bool(m.get("artifact_capped"))
+            + _fs_bool(m.get("stop_floored"))
+            + "</tr>")
+    if not rows:
+        return (_feed_head(feed, path, "", "", shown=0, skipped=skipped)
+                + _feed_miss(label, "qulla_scan",
+                             f"all {skipped} candidate entries in the feed were malformed "
+                             "(not a JSON object, or no ticker) so NOTHING could be rendered."), 0)
+    p = feed.get("params")
+    p = p if isinstance(p, dict) else {}
+    headline = esc(f"preset {p.get('preset')} · entry-mode {p.get('entry_mode')}") \
+        if p.get("preset") else ""
+    return (_feed_head(feed, path, headline, _QULLA_LEGEND, shown=len(rows), skipped=skipped)
+            + _fs_table(_QULLA_COLS, rows)), len(rows)
 
 
 def generate_trilogy_table(limit: Optional[int] = None, market_modifier: float = 1.0) -> Tuple[str, int]:
@@ -12536,6 +13450,25 @@ def run_scanners_and_generate_html() -> str:
         minervini_html, minervini_n = generate_minervini_table(market_modifier)
         trilogy_html, trilogy_n = generate_trilogy_table(market_modifier=market_modifier)
     tier_a_study_html, tier_a_study_n = generate_tier_a_study_tab()
+
+    # The three external-scanner panes. Each call is INDIVIDUALLY guarded: these
+    # read feeds written by a different launchd job, so one bad/absent feed must
+    # degrade to an inline note in ITS OWN tab and never take the report down.
+    _scanner_panes = {}
+    for _pane_key, _pane_fn, _pane_label in (
+            ("swingcon", generate_swing_consol_pane, "Swing Consol"),
+            ("martin", generate_martin_pane, "Martin"),
+            ("qulla", generate_qulla_pane, "Qullamaggie")):
+        try:
+            _scanner_panes[_pane_key] = _pane_fn()
+        except Exception as exc:                          # noqa: BLE001 - never fatal
+            log.error("%s pane failed: %r", _pane_label, exc)
+            _scanner_panes[_pane_key] = (
+                _ext_empty(f"{_pane_label}: the renderer errored ({exc!r}). The rest of the "
+                           f"report is unaffected; see /tmp/madrry_scanner.log."), 0)
+    swingcon_html, swingcon_n = _scanner_panes["swingcon"]
+    martin_html, martin_n = _scanner_panes["martin"]
+    qulla_html, qulla_n = _scanner_panes["qulla"]
     tabs_bar = (
         "<div class='tabs' role='tablist'>"
         "<button class='tab-btn active' data-tab='madrry'>MADRRY Watchlist</button>"
@@ -12575,6 +13508,11 @@ def run_scanners_and_generate_html() -> str:
             "<div class='v9tabs' role='tablist'>"
             "<button class='v9tab on' data-pane='charts' role='tab'>Charts</button>"
             "<button class='v9tab' data-pane='screener' role='tab'>Screener</button>"
+            # External scanners, one pane each. showPane() is generic
+            # (`p.hidden = (p.id !== 'pane-' + name)`) so these need zero new JS.
+            f"<button class='v9tab' data-pane='swingcon' role='tab'>Swing Consol<b>{swingcon_n}</b></button>"
+            f"<button class='v9tab' data-pane='martin' role='tab'>Martin<b>{martin_n}</b></button>"
+            f"<button class='v9tab' data-pane='qulla' role='tab'>Qullamaggie<b>{qulla_n}</b></button>"
             "</div>",
             "<div class='v9pane' id='pane-charts'>",
             _chartctl_v9(_nav_entries),
@@ -12622,6 +13560,10 @@ def run_scanners_and_generate_html() -> str:
             "<div class='v9pane' id='pane-screener' hidden>",
             build_screener_v9(),
             "</div>",
+            # External scanner panes. Ids must match the data-pane values above.
+            f"<div class='v9pane' id='pane-swingcon' hidden>{swingcon_html}</div>",
+            f"<div class='v9pane' id='pane-martin' hidden>{martin_html}</div>",
+            f"<div class='v9pane' id='pane-qulla' hidden>{qulla_html}</div>",
         ]
     else:
         section_parts = [
