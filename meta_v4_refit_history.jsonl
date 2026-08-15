@@ -5,3 +5,4 @@
 {"date": "2026-07-25", "event": "wait", "n_mature": 0, "n_tickers": 0}
 {"date": "2026-08-01", "event": "wait", "n_mature": 0, "n_tickers": 0}
 {"date": "2026-08-08", "event": "wait", "n_mature": 37, "n_tickers": 26}
+{"date": "2026-08-15", "event": "promote", "n_mature": 215, "n_tickers": 155, "cand_test": 0.2902, "inc_test": 0.2142, "version": "2026-08-15"}
