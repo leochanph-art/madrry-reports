@@ -8,3 +8,4 @@
 {"date": "2026-08-15", "event": "promote", "n_mature": 215, "n_tickers": 155, "cand_test": 0.2902, "inc_test": 0.2142, "version": "2026-08-15"}
 {"date": "2026-08-22", "event": "no_promote", "n_mature": 547, "cand_mean": 0.2143, "inc_mean": 0.3015, "wins": 1, "folds": 5}
 {"date": "2026-08-29", "event": "promote", "n_mature": 1265, "n_tickers": 936, "cand_test": 0.2525, "inc_test": 0.2024, "version": "2026-08-29"}
+{"date": "2026-09-05", "event": "no_promote", "n_mature": 1778, "cand_mean": 0.2395, "inc_mean": 0.2954, "wins": 0, "folds": 5}
