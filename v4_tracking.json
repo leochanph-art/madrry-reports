@@ -1,9 +1,9 @@
 {
- "generated": "2026-09-05",
+ "generated": "2026-09-08",
  "window": 40,
  "win_def": "fwd close >= entry*(1+2*ADR/100)",
  "loss_def": "fwd low <= entry*0.92",
- "n": 2013,
+ "n": 2016,
  "records": {
   "HUM|2026-06-09": {
    "ticker": "HUM",
@@ -12357,7 +12357,7 @@
    "resolve_date": "2026-06-24",
    "days_to_resolve": 2,
    "days_followed": 2,
-   "bars_elapsed": 52
+   "bars_elapsed": 53
   },
   "PWR|2026-06-22": {
    "ticker": "PWR",
@@ -16862,7 +16862,7 @@
    "resolve_date": "2026-07-08",
    "days_to_resolve": 9,
    "days_followed": 21,
-   "bars_elapsed": 50
+   "bars_elapsed": 51
   },
   "SNOW|2026-06-24": {
    "ticker": "SNOW",
@@ -19989,7 +19989,7 @@
    "resolve_date": "2026-06-30",
    "days_to_resolve": 4,
    "days_followed": 4,
-   "bars_elapsed": 47
+   "bars_elapsed": 51
   },
   "ALHC|2026-06-24": {
    "ticker": "ALHC",
@@ -65379,7 +65379,7 @@
    "resolve_date": null,
    "days_to_resolve": null,
    "days_followed": 40,
-   "bars_elapsed": 46
+   "bars_elapsed": 12
   },
   "CPT|2026-06-30": {
    "ticker": "CPT",
@@ -99705,7 +99705,7 @@
    "resolve_date": "2026-07-08",
    "days_to_resolve": 2,
    "days_followed": 2,
-   "bars_elapsed": 40
+   "bars_elapsed": 44
   },
   "NXPI|2026-07-06": {
    "ticker": "NXPI",
@@ -139082,43 +139082,43 @@
    "sector": "Non-Energy Minerals",
    "legacy_meta_score": 79.0,
    "entry": 204.26,
-   "adr": 3.609,
-   "v4_score": 86.1,
+   "adr": 3.672,
+   "v4_score": 84.5,
    "v4_features": {
-    "d_ema9": -1.13709,
-    "d_ema21": 1.5034,
+    "d_ema9": -1.13965,
+    "d_ema21": 1.54232,
     "d_sma10": -2.88363,
-    "d_sma20": 1.46688,
-    "d_sma50": 9.25856,
-    "d_sma200": 16.01145,
-    "slope_sma10": 9.37957,
-    "slope_sma20": 7.1373,
-    "slope_sma50": 3.03556,
+    "d_sma20": 1.50781,
+    "d_sma50": 9.70248,
+    "d_sma200": 16.99567,
+    "slope_sma10": 9.47198,
+    "slope_sma20": 7.5937,
+    "slope_sma50": 3.5519,
     "ma_align": 3.0,
     "price_above_ma": 3.0,
-    "sp_10_20": 4.4797,
-    "sp_20_50": 7.67903,
-    "sp_50_200": 6.18065,
+    "sp_10_20": 4.52184,
+    "sp_20_50": 8.07295,
+    "sp_50_200": 6.64815,
     "perf_5": -4.43977,
-    "perf_21": 9.87036,
-    "perf_63": 1.43517,
-    "perf_126": 0.0352,
-    "perf_252": 118.14616,
-    "dist_52w": 7.85538,
+    "perf_21": 5.91879,
+    "perf_63": 5.14833,
+    "perf_126": 1.02498,
+    "perf_252": 118.13062,
+    "dist_52w": 7.48256,
     "d_hi20": -7.48256,
     "d_hi60": -7.48256,
     "d_hi120": -7.48256,
     "d_lo20": 10.96262,
-    "pos_in_range60": 0.72231,
-    "adr": 3.60873,
+    "pos_in_range60": 0.73096,
+    "adr": 3.67209,
     "day_range_pct": 3.5244,
-    "rvol": 70.83801,
-    "volc_5_20": 102.96403,
-    "volc_20_50": 94.78304,
-    "ch20_slope": 0.58347,
-    "ch20_resid": -4.09726,
-    "ch60_slope": 0.27003,
-    "ch60_resid": 0.68673,
+    "rvol": 69.82977,
+    "volc_5_20": 101.49855,
+    "volc_20_50": 94.82819,
+    "ch20_slope": 0.59726,
+    "ch20_resid": -4.18855,
+    "ch60_slope": 0.29017,
+    "ch60_resid": 0.51469,
     "frac_Trend": 0.33333,
     "frac_Proximity": 0.7,
     "frac_10MA_Quality": 0.8,
@@ -139137,7 +139137,7 @@
    "realized_return": null,
    "fwd20_return": null,
    "fwd40_return": null,
-   "win_target": 219.0024,
+   "win_target": 219.2612,
    "loss_line": 187.9192,
    "resolve_date": null,
    "days_to_resolve": null,
@@ -139512,6 +139512,33 @@
    "section": "coil",
    "sector": "Energy Minerals",
    "legacy_meta_score": 29.9,
+   "outcome": "short_history"
+  },
+  "B|2026-09-07": {
+   "ticker": "B",
+   "pick_date": "2026-09-07",
+   "tier": "A+",
+   "section": "coil",
+   "sector": "Non-Energy Minerals",
+   "legacy_meta_score": 95.4,
+   "outcome": "short_history"
+  },
+  "AEM|2026-09-07": {
+   "ticker": "AEM",
+   "pick_date": "2026-09-07",
+   "tier": "A-",
+   "section": "coil",
+   "sector": "Non-Energy Minerals",
+   "legacy_meta_score": 94.3,
+   "outcome": "short_history"
+  },
+  "MGNI|2026-09-07": {
+   "ticker": "MGNI",
+   "pick_date": "2026-09-07",
+   "tier": "A-",
+   "section": "coil",
+   "sector": "Technology Services",
+   "legacy_meta_score": 17.3,
    "outcome": "short_history"
   }
  }

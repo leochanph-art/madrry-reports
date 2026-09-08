@@ -1,20 +1,20 @@
 {
- "generated": "2026-09-05",
+ "generated": "2026-09-08",
  "window": 40,
  "loss_mult": 0.92,
  "win_def": "fresh_52w_high",
  "loss_def": "entry*0.92 intraday-touch",
  "dedup": "first_appearance_per_ticker",
  "study_summary": {
-  "asof": "2026-09-04",
+  "asof": "2026-09-07",
   "overall": {
    "n": 907,
-   "w": 497,
-   "l": 410,
+   "w": 496,
+   "l": 411,
    "wr": 55,
    "open": 132,
-   "nodata": 15,
-   "total": 1054
+   "nodata": 18,
+   "total": 1057
   },
   "by_meta": [
    {
@@ -54,8 +54,8 @@
    },
    {
     "k": ">=0",
-    "w": 82,
-    "l": 144,
+    "w": 81,
+    "l": 145,
     "n": 226,
     "wr": 36
    }
@@ -70,8 +70,8 @@
    },
    {
     "k": "RS>=80",
-    "w": 121,
-    "l": 90,
+    "w": 120,
+    "l": 91,
     "n": 211,
     "wr": 57
    },
@@ -107,8 +107,8 @@
    },
    {
     "k": "A-",
-    "w": 457,
-    "l": 375,
+    "w": 456,
+    "l": 376,
     "n": 832,
     "wr": 55
    }
@@ -235,10 +235,10 @@
    },
    {
     "k": "Electronic Technology",
-    "w": 37,
-    "l": 69,
+    "w": 36,
+    "l": 70,
     "n": 106,
-    "wr": 35
+    "wr": 34
    },
    {
     "k": "Communications",
@@ -265,8 +265,8 @@
    },
    {
     "k": "non-HTF",
-    "w": 481,
-    "l": 399,
+    "w": 480,
+    "l": 400,
     "n": 880,
     "wr": 55
    }
@@ -274,8 +274,8 @@
   "by_ants": [
    {
     "k": "ANTS ok",
-    "w": 457,
-    "l": 375,
+    "w": 456,
+    "l": 376,
     "n": 832,
     "wr": 55
    },
@@ -297,8 +297,8 @@
    },
    {
     "k": "below_high",
-    "w": 464,
-    "l": 407,
+    "w": 463,
+    "l": 408,
     "n": 871,
     "wr": 53
    }
@@ -308,7 +308,7 @@
     "comp": "RS",
     "win_avg": 10.8,
     "loss_avg": 7.3,
-    "edge": 3.6
+    "edge": 3.5
    },
    {
     "comp": "Proximity",
@@ -319,7 +319,7 @@
    {
     "comp": "Risk",
     "win_avg": 10.8,
-    "loss_avg": 8.8,
+    "loss_avg": 8.7,
     "edge": 2.0
    },
    {
@@ -341,16 +341,16 @@
     "edge": 0.2
    },
    {
+    "comp": "Vol Expansion",
+    "win_avg": 0.3,
+    "loss_avg": 0.2,
+    "edge": 0.1
+   },
+   {
     "comp": "Supply Shock",
     "win_avg": 3.3,
     "loss_avg": 3.2,
     "edge": 0.1
-   },
-   {
-    "comp": "Vol Expansion",
-    "win_avg": 0.3,
-    "loss_avg": 0.2,
-    "edge": 0.0
    },
    {
     "comp": "Candle",
@@ -367,7 +367,7 @@
    {
     "comp": "Vol Contraction",
     "win_avg": 3.7,
-    "loss_avg": 4.3,
+    "loss_avg": 4.2,
     "edge": -0.6
    },
    {
@@ -383,25 +383,25 @@
      "comp": "Trend",
      "cur": 15,
      "new": 9,
-     "edge": -0.046
+     "edge": -0.047
     },
     {
      "comp": "Proximity",
      "cur": 10,
      "new": 15,
-     "edge": 0.216
+     "edge": 0.215
     },
     {
      "comp": "10MA Quality",
      "cur": 15,
      "new": 18,
-     "edge": 0.018
+     "edge": 0.017
     },
     {
      "comp": "Vol Contraction",
      "cur": 15,
      "new": 9,
-     "edge": -0.039
+     "edge": -0.038
     },
     {
      "comp": "Vol Expansion",
@@ -425,7 +425,7 @@
      "comp": "RS",
      "cur": 15,
      "new": 22,
-     "edge": 0.238
+     "edge": 0.236
     },
     {
      "comp": "Volatility",
@@ -437,13 +437,13 @@
      "comp": "Supply Shock",
      "cur": 10,
      "new": 11,
-     "edge": 0.011
+     "edge": 0.013
     },
     {
      "comp": "Risk",
      "cur": 15,
      "new": 22,
-     "edge": 0.132
+     "edge": 0.135
     }
    ],
    "denom_cur": 140,
@@ -458,10 +458,10 @@
     },
     {
      "bucket": "50-60",
-     "w": 181,
-     "l": 138,
+     "w": 180,
+     "l": 139,
      "n": 319,
-     "wr": 57
+     "wr": 56
     },
     {
      "bucket": "40-50",
@@ -495,8 +495,8 @@
     },
     {
      "bucket": "50-60",
-     "w": 144,
-     "l": 168,
+     "w": 143,
+     "l": 169,
      "n": 312,
      "wr": 46
     },
@@ -524,8 +524,8 @@
    ],
    "spread_v1": 37,
    "spread_v2": 31,
-   "corr_v1": 0.3269,
-   "corr_v2": 0.3818
+   "corr_v1": 0.3263,
+   "corr_v2": 0.3814
   }
  },
  "records": [
@@ -13902,9 +13902,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK",
     "\ud83d\udca7 Dry vs Prev Day (62%)"
    ],
-   "prior_52w_high": 221.6733,
-   "mfe_pct": 5.09,
-   "mae_pct": -16.02,
+   "prior_52w_high": 219.0447,
+   "mfe_pct": 5.34,
+   "mae_pct": -17.02,
    "days_followed": 40,
    "outcome": "loss",
    "same_bar_ambiguous": false,
@@ -24494,14 +24494,14 @@
     "\ud83c\udf00 TIGHT FLAG",
     "\ud83d\udd25 MARKET LEADER"
    ],
-   "prior_52w_high": 168.75,
-   "mfe_pct": 7.26,
-   "mae_pct": -16.08,
+   "prior_52w_high": 84.375,
+   "mfe_pct": -46.37,
+   "mae_pct": -58.04,
    "days_followed": 40,
-   "outcome": "win",
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": "2026-06-30",
-   "days_to_resolve": 4
+   "resolve_date": "2026-06-25",
+   "days_to_resolve": 1
   },
   {
    "ticker": "ALHC",
@@ -55848,9 +55848,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 133.16,
-   "mfe_pct": 1.7,
+   "mfe_pct": 1.2,
    "mae_pct": -0.03,
-   "days_followed": 40,
+   "days_followed": 12,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-02",
@@ -91343,7 +91343,7 @@
    ],
    "prior_52w_high": 17.62,
    "mfe_pct": 2.78,
-   "mae_pct": -3.29,
+   "mae_pct": -3.32,
    "days_followed": 5,
    "outcome": "open",
    "same_bar_ambiguous": false,
@@ -92565,7 +92565,7 @@
     "\ud83c\udfaf HUGGING 10MA"
    ],
    "prior_52w_high": 46.059,
-   "mfe_pct": -1.56,
+   "mfe_pct": -1.44,
    "mae_pct": -6.6,
    "days_followed": 1,
    "outcome": "open",
@@ -93303,6 +93303,247 @@
    "nh_3m": 1,
    "days_since_high": 2,
    "status_labels": [
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "B",
+   "pick_date": "2026-09-07",
+   "tier": "A+",
+   "entry": 45.49,
+   "loss_line": 41.8508,
+   "meta_score": 95.4,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 10,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Flag": {
+     "pts": 10,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 0,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 0,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 78,
+   "ind_rs": 88,
+   "rs_new_high": false,
+   "sector": "Non-Energy Minerals",
+   "theme": "Precious Metals",
+   "ind_name": "Gold",
+   "is_htf": false,
+   "power_score": 13.7,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 0,
+   "ants_3m_peak": 0,
+   "ants_rs_rising": false,
+   "adr": 3.15,
+   "adr_basis": "adrp20",
+   "dist_52w": 18.2,
+   "at_high": false,
+   "nh_1m": 0,
+   "nh_3m": 0,
+   "days_since_high": 9,
+   "status_labels": [
+    "\u26a0\ufe0f Squat (Wait for tightening)",
+    "\ud83d\udee1\ufe0f MA Cluster (Premium)",
+    "\u26a0\ufe0f EXTENDED PIVOT",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83c\udf00 TIGHT FLAG",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK",
+    "\u26a0\ufe0f Wide Stop (Size Down!)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "AEM",
+   "pick_date": "2026-09-07",
+   "tier": "A-",
+   "entry": 206.2,
+   "loss_line": 189.704,
+   "meta_score": 94.3,
+   "meta_components": {
+    "Trend": {
+     "pts": 10,
+     "max": 15
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 15,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 6,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 0,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 76,
+   "ind_rs": 88,
+   "rs_new_high": false,
+   "sector": "Non-Energy Minerals",
+   "theme": "Precious Metals",
+   "ind_name": "Gold",
+   "is_htf": false,
+   "power_score": 19.6,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 14,
+   "ants_3m_peak": 5,
+   "ants_rs_rising": false,
+   "adr": 3.8,
+   "adr_basis": "adrp20",
+   "dist_52w": 19.8,
+   "at_high": false,
+   "nh_1m": 0,
+   "nh_3m": 0,
+   "days_since_high": 9,
+   "status_labels": [
+    "\u26a0\ufe0f EXTENDED PIVOT",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udca7 VOODOO DAY",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "MGNI",
+   "pick_date": "2026-09-07",
+   "tier": "A-",
+   "entry": 24.65,
+   "loss_line": 22.678,
+   "meta_score": 17.3,
+   "meta_components": {
+    "Trend": {
+     "pts": 10,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 10,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 10,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 92,
+   "ind_rs": 40,
+   "rs_new_high": false,
+   "sector": "Technology Services",
+   "theme": "Software / SaaS",
+   "ind_name": "Advertising Agencies",
+   "is_htf": false,
+   "power_score": 39.3,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 0,
+   "ants_3m_peak": 0,
+   "ants_rs_rising": false,
+   "adr": 4.1,
+   "adr_basis": "adrp20",
+   "dist_52w": 7.8,
+   "at_high": false,
+   "nh_1m": 0,
+   "nh_3m": 0,
+   "days_since_high": 3,
+   "status_labels": [
+    "\ud83d\udee1\ufe0f MA Cluster (Premium)",
+    "\u26a1 STRONG MOMENTUM",
     "\ud83c\udfaf HUGGING 10MA",
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
