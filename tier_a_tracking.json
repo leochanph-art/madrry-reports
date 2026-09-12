@@ -1,92 +1,92 @@
 {
- "generated": "2026-09-09",
+ "generated": "2026-09-12",
  "window": 40,
  "loss_mult": 0.92,
  "win_def": "fresh_52w_high",
  "loss_def": "entry*0.92 intraday-touch",
  "dedup": "first_appearance_per_ticker",
  "study_summary": {
-  "asof": "2026-09-08",
+  "asof": "2026-09-11",
   "overall": {
-   "n": 906,
-   "w": 495,
-   "l": 411,
-   "wr": 55,
-   "open": 142,
-   "nodata": 10,
-   "total": 1058
+   "n": 920,
+   "w": 501,
+   "l": 419,
+   "wr": 54,
+   "open": 132,
+   "nodata": 13,
+   "total": 1065
   },
   "by_meta": [
    {
     "k": ">=60",
-    "w": 133,
-    "l": 48,
-    "n": 181,
+    "w": 135,
+    "l": 50,
+    "n": 185,
     "wr": 73
    },
    {
     "k": ">=50",
-    "w": 83,
-    "l": 33,
-    "n": 116,
-    "wr": 72
+    "w": 84,
+    "l": 34,
+    "n": 118,
+    "wr": 71
    },
    {
     "k": ">=40",
     "w": 79,
-    "l": 52,
-    "n": 131,
+    "l": 53,
+    "n": 132,
     "wr": 60
    },
    {
     "k": ">=30",
-    "w": 84,
-    "l": 68,
-    "n": 152,
+    "w": 85,
+    "l": 70,
+    "n": 155,
     "wr": 55
    },
    {
     "k": ">=20",
-    "w": 36,
-    "l": 64,
-    "n": 100,
+    "w": 37,
+    "l": 66,
+    "n": 103,
     "wr": 36
    },
    {
     "k": ">=0",
-    "w": 80,
+    "w": 81,
     "l": 146,
-    "n": 226,
-    "wr": 35
+    "n": 227,
+    "wr": 36
    }
   ],
   "by_rs": [
    {
     "k": "RS>=90",
-    "w": 101,
+    "w": 104,
     "l": 131,
-    "n": 232,
+    "n": 235,
     "wr": 44
    },
    {
     "k": "RS>=80",
-    "w": 119,
-    "l": 91,
-    "n": 210,
-    "wr": 57
+    "w": 122,
+    "l": 96,
+    "n": 218,
+    "wr": 56
    },
    {
     "k": "RS>=70",
     "w": 117,
-    "l": 54,
-    "n": 171,
+    "l": 55,
+    "n": 172,
     "wr": 68
    },
    {
     "k": "RS>=0",
     "w": 150,
-    "l": 122,
-    "n": 272,
+    "l": 124,
+    "n": 274,
     "wr": 55
    }
   ],
@@ -101,46 +101,46 @@
    {
     "k": "A",
     "w": 20,
-    "l": 18,
-    "n": 38,
-    "wr": 53
+    "l": 19,
+    "n": 39,
+    "wr": 51
    },
    {
     "k": "A-",
-    "w": 455,
-    "l": 376,
-    "n": 831,
+    "w": 461,
+    "l": 383,
+    "n": 844,
     "wr": 55
    }
   ],
   "by_sector": [
    {
-    "k": "Commercial Services",
-    "w": 16,
-    "l": 3,
-    "n": 19,
-    "wr": 84
-   },
-   {
     "k": "Finance",
     "w": 155,
-    "l": 34,
-    "n": 189,
-    "wr": 82
+    "l": 36,
+    "n": 191,
+    "wr": 81
+   },
+   {
+    "k": "Commercial Services",
+    "w": 16,
+    "l": 4,
+    "n": 20,
+    "wr": 80
    },
    {
     "k": "Health Services",
-    "w": 18,
-    "l": 4,
-    "n": 22,
-    "wr": 82
+    "w": 19,
+    "l": 5,
+    "n": 24,
+    "wr": 79
    },
    {
     "k": "Energy Minerals",
-    "w": 18,
+    "w": 22,
     "l": 7,
-    "n": 25,
-    "wr": 72
+    "n": 29,
+    "wr": 76
    },
    {
     "k": "Distribution Services",
@@ -159,9 +159,9 @@
    {
     "k": "Health Technology",
     "w": 65,
-    "l": 52,
-    "n": 117,
-    "wr": 56
+    "l": 53,
+    "n": 118,
+    "wr": 55
    },
    {
     "k": "Utilities",
@@ -221,9 +221,9 @@
    },
    {
     "k": "Technology Services",
-    "w": 31,
-    "l": 44,
-    "n": 75,
+    "w": 32,
+    "l": 46,
+    "n": 78,
     "wr": 41
    },
    {
@@ -250,8 +250,8 @@
    {
     "k": "Non-Energy Minerals",
     "w": 4,
-    "l": 24,
-    "n": 28,
+    "l": 25,
+    "n": 29,
     "wr": 14
    }
   ],
@@ -265,18 +265,18 @@
    },
    {
     "k": "non-HTF",
-    "w": 479,
-    "l": 400,
-    "n": 879,
+    "w": 485,
+    "l": 408,
+    "n": 893,
     "wr": 54
    }
   ],
   "by_ants": [
    {
     "k": "ANTS ok",
-    "w": 455,
-    "l": 376,
-    "n": 831,
+    "w": 461,
+    "l": 384,
+    "n": 845,
     "wr": 55
    },
    {
@@ -297,9 +297,9 @@
    },
    {
     "k": "below_high",
-    "w": 462,
-    "l": 408,
-    "n": 870,
+    "w": 468,
+    "l": 416,
+    "n": 884,
     "wr": 53
    }
   ],
@@ -307,26 +307,26 @@
    {
     "comp": "RS",
     "win_avg": 10.8,
-    "loss_avg": 7.3,
+    "loss_avg": 7.2,
     "edge": 3.6
    },
    {
     "comp": "Proximity",
     "win_avg": 8.4,
-    "loss_avg": 6.2,
+    "loss_avg": 6.1,
     "edge": 2.2
    },
    {
     "comp": "Risk",
     "win_avg": 10.8,
-    "loss_avg": 8.7,
+    "loss_avg": 8.8,
     "edge": 2.0
    },
    {
     "comp": "Volatility",
-    "win_avg": 7.4,
-    "loss_avg": 6.7,
-    "edge": 0.6
+    "win_avg": 7.3,
+    "loss_avg": 6.8,
+    "edge": 0.5
    },
    {
     "comp": "10MA Quality",
@@ -374,7 +374,7 @@
     "comp": "Trend",
     "win_avg": 6.2,
     "loss_avg": 7.0,
-    "edge": -0.8
+    "edge": -0.7
    }
   ],
   "recal": {
@@ -383,13 +383,13 @@
      "comp": "Trend",
      "cur": 15,
      "new": 9,
-     "edge": -0.049
+     "edge": -0.048
     },
     {
      "comp": "Proximity",
      "cur": 10,
      "new": 15,
-     "edge": 0.218
+     "edge": 0.221
     },
     {
      "comp": "10MA Quality",
@@ -431,19 +431,19 @@
      "comp": "Volatility",
      "cur": 10,
      "new": 15,
-     "edge": 0.064
+     "edge": 0.056
     },
     {
      "comp": "Supply Shock",
      "cur": 10,
      "new": 11,
-     "edge": 0.01
+     "edge": 0.012
     },
     {
      "comp": "Risk",
      "cur": 15,
      "new": 22,
-     "edge": 0.135
+     "edge": 0.132
     }
    ],
    "denom_cur": 140,
@@ -451,23 +451,23 @@
    "v1_buckets": [
     {
      "bucket": "60-+",
-     "w": 188,
-     "l": 70,
-     "n": 258,
-     "wr": 73
+     "w": 192,
+     "l": 74,
+     "n": 266,
+     "wr": 72
     },
     {
      "bucket": "50-60",
      "w": 180,
-     "l": 139,
-     "n": 319,
+     "l": 141,
+     "n": 321,
      "wr": 56
     },
     {
      "bucket": "40-50",
-     "w": 105,
-     "l": 138,
-     "n": 243,
+     "w": 107,
+     "l": 140,
+     "n": 247,
      "wr": 43
     },
     {
@@ -488,23 +488,23 @@
    "v2_buckets": [
     {
      "bucket": "60-+",
-     "w": 264,
-     "l": 77,
-     "n": 341,
+     "w": 268,
+     "l": 81,
+     "n": 349,
      "wr": 77
     },
     {
      "bucket": "50-60",
-     "w": 143,
-     "l": 170,
-     "n": 313,
+     "w": 144,
+     "l": 172,
+     "n": 316,
      "wr": 46
     },
     {
      "bucket": "40-50",
-     "w": 71,
-     "l": 107,
-     "n": 178,
+     "w": 72,
+     "l": 109,
+     "n": 181,
      "wr": 40
     },
     {
@@ -523,9 +523,9 @@
     }
    ],
    "spread_v1": 37,
-   "spread_v2": 31,
-   "corr_v1": 0.3235,
-   "corr_v2": 0.3809
+   "spread_v2": 30,
+   "corr_v1": 0.32,
+   "corr_v2": 0.3778
   }
  },
  "records": [
@@ -32883,7 +32883,14 @@
     "\ud83c\udf00 TIGHT FLAG",
     "\ud83d\udd25 MARKET LEADER"
    ],
-   "outcome": "nodata"
+   "prior_52w_high": 147.96,
+   "mfe_pct": -1.89,
+   "mae_pct": -14.27,
+   "days_followed": 40,
+   "outcome": "loss",
+   "same_bar_ambiguous": false,
+   "resolve_date": "2026-07-14",
+   "days_to_resolve": 12
   },
   {
    "ticker": "PHM",
@@ -55479,7 +55486,14 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK",
     "\ud83d\udca7 Dry vs Prev Day (35%)"
    ],
-   "outcome": "nodata"
+   "prior_52w_high": 148.88,
+   "mfe_pct": 16.2,
+   "mae_pct": -1.34,
+   "days_followed": 40,
+   "outcome": "win",
+   "same_bar_ambiguous": false,
+   "resolve_date": "2026-08-06",
+   "days_to_resolve": 27
   },
   {
    "ticker": "XPO",
@@ -83448,7 +83462,7 @@
    "prior_52w_high": 247.05,
    "mfe_pct": 30.23,
    "mae_pct": -5.32,
-   "days_followed": 39,
+   "days_followed": 40,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-28",
@@ -83537,7 +83551,7 @@
    "prior_52w_high": 141.1,
    "mfe_pct": 21.93,
    "mae_pct": -3.73,
-   "days_followed": 39,
+   "days_followed": 40,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-20",
@@ -83626,7 +83640,7 @@
    "prior_52w_high": 20.79,
    "mfe_pct": 7.7,
    "mae_pct": -10.33,
-   "days_followed": 39,
+   "days_followed": 40,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-28",
@@ -83713,8 +83727,8 @@
    ],
    "prior_52w_high": 17.66,
    "mfe_pct": 5.47,
-   "mae_pct": -7.31,
-   "days_followed": 38,
+   "mae_pct": -7.78,
+   "days_followed": 40,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-29",
@@ -83803,7 +83817,7 @@
    "prior_52w_high": 244.89,
    "mfe_pct": 3.17,
    "mae_pct": -21.04,
-   "days_followed": 38,
+   "days_followed": 40,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-23",
@@ -83891,7 +83905,7 @@
    "prior_52w_high": 40.87,
    "mfe_pct": 20.47,
    "mae_pct": -10.66,
-   "days_followed": 38,
+   "days_followed": 40,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-16",
@@ -83981,7 +83995,7 @@
    "prior_52w_high": 82.26,
    "mfe_pct": 46.0,
    "mae_pct": -0.79,
-   "days_followed": 38,
+   "days_followed": 40,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-24",
@@ -84070,7 +84084,7 @@
    "prior_52w_high": 58.49,
    "mfe_pct": 13.84,
    "mae_pct": -15.71,
-   "days_followed": 38,
+   "days_followed": 40,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-22",
@@ -84153,8 +84167,8 @@
    ],
    "prior_52w_high": 18.566,
    "mfe_pct": 20.95,
-   "mae_pct": -13.79,
-   "days_followed": 38,
+   "mae_pct": -17.54,
+   "days_followed": 40,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-17",
@@ -84238,7 +84252,7 @@
    "prior_52w_high": 211.0,
    "mfe_pct": 7.68,
    "mae_pct": -12.96,
-   "days_followed": 37,
+   "days_followed": 40,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-03",
@@ -84325,9 +84339,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 10.79,
-   "mfe_pct": 7.6,
+   "mfe_pct": 9.12,
    "mae_pct": -7.88,
-   "days_followed": 37,
+   "days_followed": 40,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-05",
@@ -84416,7 +84430,7 @@
    "prior_52w_high": 237.86,
    "mfe_pct": 31.17,
    "mae_pct": -7.71,
-   "days_followed": 37,
+   "days_followed": 40,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-23",
@@ -84501,7 +84515,7 @@
    "prior_52w_high": 643.99,
    "mfe_pct": 19.35,
    "mae_pct": -8.68,
-   "days_followed": 36,
+   "days_followed": 39,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-21",
@@ -84586,7 +84600,7 @@
    "prior_52w_high": 49.85,
    "mfe_pct": 81.57,
    "mae_pct": -13.6,
-   "days_followed": 36,
+   "days_followed": 39,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-21",
@@ -84672,8 +84686,8 @@
    ],
    "prior_52w_high": 48.75,
    "mfe_pct": 4.94,
-   "mae_pct": -17.57,
-   "days_followed": 35,
+   "mae_pct": -20.53,
+   "days_followed": 38,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-30",
@@ -84761,7 +84775,7 @@
    "prior_52w_high": 435.0,
    "mfe_pct": 3.17,
    "mae_pct": -11.06,
-   "days_followed": 34,
+   "days_followed": 37,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-28",
@@ -84849,7 +84863,7 @@
    "prior_52w_high": 21.4,
    "mfe_pct": 23.07,
    "mae_pct": -11.0,
-   "days_followed": 34,
+   "days_followed": 37,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-23",
@@ -84938,7 +84952,7 @@
    "prior_52w_high": 161.53,
    "mfe_pct": 22.87,
    "mae_pct": -6.52,
-   "days_followed": 33,
+   "days_followed": 36,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-29",
@@ -85027,7 +85041,7 @@
    "prior_52w_high": 167.22,
    "mfe_pct": 1.54,
    "mae_pct": -8.54,
-   "days_followed": 33,
+   "days_followed": 36,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-01",
@@ -85114,7 +85128,7 @@
    "prior_52w_high": 107.99,
    "mfe_pct": 10.52,
    "mae_pct": -6.24,
-   "days_followed": 33,
+   "days_followed": 36,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-30",
@@ -85198,8 +85212,8 @@
    ],
    "prior_52w_high": 24.28,
    "mfe_pct": 2.46,
-   "mae_pct": -21.25,
-   "days_followed": 33,
+   "mae_pct": -22.8,
+   "days_followed": 36,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-28",
@@ -85288,7 +85302,7 @@
    "prior_52w_high": 25.77,
    "mfe_pct": 1.0,
    "mae_pct": -45.17,
-   "days_followed": 33,
+   "days_followed": 36,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-28",
@@ -85376,7 +85390,7 @@
    "prior_52w_high": 150.33,
    "mfe_pct": 4.89,
    "mae_pct": -16.94,
-   "days_followed": 32,
+   "days_followed": 35,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-31",
@@ -85467,7 +85481,7 @@
    "prior_52w_high": 63.91,
    "mfe_pct": 2.85,
    "mae_pct": -4.74,
-   "days_followed": 31,
+   "days_followed": 34,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-03",
@@ -85556,7 +85570,7 @@
    "prior_52w_high": 11.7409,
    "mfe_pct": 8.7,
    "mae_pct": -4.8,
-   "days_followed": 30,
+   "days_followed": 33,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-13",
@@ -85644,7 +85658,7 @@
    "prior_52w_high": 43.93,
    "mfe_pct": 18.47,
    "mae_pct": -14.48,
-   "days_followed": 30,
+   "days_followed": 33,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-31",
@@ -85733,7 +85747,7 @@
    "prior_52w_high": 108.92,
    "mfe_pct": 3.56,
    "mae_pct": -4.35,
-   "days_followed": 28,
+   "days_followed": 31,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -85824,8 +85838,8 @@
    ],
    "prior_52w_high": 66.66,
    "mfe_pct": 9.3,
-   "mae_pct": -11.53,
-   "days_followed": 27,
+   "mae_pct": -12.1,
+   "days_followed": 30,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-07-31",
@@ -85914,7 +85928,7 @@
    "prior_52w_high": 44.38,
    "mfe_pct": -0.8,
    "mae_pct": -8.16,
-   "days_followed": 27,
+   "days_followed": 30,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-17",
@@ -86003,7 +86017,7 @@
    "prior_52w_high": 62.56,
    "mfe_pct": 10.68,
    "mae_pct": -4.68,
-   "days_followed": 27,
+   "days_followed": 30,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-21",
@@ -86091,9 +86105,9 @@
     "\u26a0\ufe0f Wide Stop (Size Down!)"
    ],
    "prior_52w_high": 141.96,
-   "mfe_pct": 11.48,
+   "mfe_pct": 11.79,
    "mae_pct": -13.64,
-   "days_followed": 27,
+   "days_followed": 30,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-04",
@@ -86181,8 +86195,8 @@
    ],
    "prior_52w_high": 55.6667,
    "mfe_pct": -31.29,
-   "mae_pct": -40.61,
-   "days_followed": 26,
+   "mae_pct": -40.8,
+   "days_followed": 29,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-03",
@@ -86272,7 +86286,7 @@
    "prior_52w_high": 139.44,
    "mfe_pct": 8.32,
    "mae_pct": -4.26,
-   "days_followed": 25,
+   "days_followed": 28,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -86357,9 +86371,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 22.24,
-   "mfe_pct": 10.04,
+   "mfe_pct": 11.75,
    "mae_pct": -9.21,
-   "days_followed": 25,
+   "days_followed": 28,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-12",
@@ -86446,9 +86460,9 @@
     "\u26a0\ufe0f Wide Stop (Size Down!)"
    ],
    "prior_52w_high": 43.46,
-   "mfe_pct": 7.75,
+   "mfe_pct": 10.72,
    "mae_pct": -7.46,
-   "days_followed": 25,
+   "days_followed": 28,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-01",
@@ -86536,8 +86550,8 @@
    ],
    "prior_52w_high": 45.28,
    "mfe_pct": 2.43,
-   "mae_pct": -12.4,
-   "days_followed": 25,
+   "mae_pct": -12.48,
+   "days_followed": 28,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-06",
@@ -86629,7 +86643,7 @@
    "prior_52w_high": 263.6,
    "mfe_pct": 8.14,
    "mae_pct": -3.14,
-   "days_followed": 23,
+   "days_followed": 26,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-06",
@@ -86718,8 +86732,8 @@
    ],
    "prior_52w_high": 27.64,
    "mfe_pct": -0.24,
-   "mae_pct": -9.43,
-   "days_followed": 22,
+   "mae_pct": -9.72,
+   "days_followed": 25,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-02",
@@ -86805,8 +86819,8 @@
    ],
    "prior_52w_high": 18.691,
    "mfe_pct": -1.99,
-   "mae_pct": -14.73,
-   "days_followed": 22,
+   "mae_pct": -16.38,
+   "days_followed": 25,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-07",
@@ -86891,7 +86905,7 @@
    "prior_52w_high": 15.93,
    "mfe_pct": 11.87,
    "mae_pct": -4.23,
-   "days_followed": 22,
+   "days_followed": 25,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -86977,7 +86991,7 @@
    "prior_52w_high": 93.03,
    "mfe_pct": 4.52,
    "mae_pct": -22.15,
-   "days_followed": 21,
+   "days_followed": 24,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-18",
@@ -87063,9 +87077,9 @@
     "\u26a0\ufe0f Wide Stop (Size Down!)"
    ],
    "prior_52w_high": 137.99,
-   "mfe_pct": 5.19,
+   "mfe_pct": 5.2,
    "mae_pct": -3.7,
-   "days_followed": 20,
+   "days_followed": 23,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-02",
@@ -87150,8 +87164,8 @@
    ],
    "prior_52w_high": 34.79,
    "mfe_pct": 8.81,
-   "mae_pct": -5.18,
-   "days_followed": 20,
+   "mae_pct": -7.38,
+   "days_followed": 23,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -87242,8 +87256,8 @@
    ],
    "prior_52w_high": 385.11,
    "mfe_pct": 0.83,
-   "mae_pct": -10.73,
-   "days_followed": 19,
+   "mae_pct": -12.18,
+   "days_followed": 22,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-12",
@@ -87331,7 +87345,7 @@
    "prior_52w_high": 35.72,
    "mfe_pct": 3.9,
    "mae_pct": -5.67,
-   "days_followed": 19,
+   "days_followed": 22,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-13",
@@ -87422,8 +87436,8 @@
    ],
    "prior_52w_high": 201.54,
    "mfe_pct": 5.11,
-   "mae_pct": -11.56,
-   "days_followed": 18,
+   "mae_pct": -20.32,
+   "days_followed": 21,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-02",
@@ -87515,7 +87529,7 @@
    "prior_52w_high": 45.31,
    "mfe_pct": 5.97,
    "mae_pct": -14.15,
-   "days_followed": 18,
+   "days_followed": 21,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-27",
@@ -87603,8 +87617,8 @@
    ],
    "prior_52w_high": 30.0,
    "mfe_pct": -0.29,
-   "mae_pct": -10.41,
-   "days_followed": 18,
+   "mae_pct": -14.04,
+   "days_followed": 21,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-01",
@@ -87693,8 +87707,8 @@
    ],
    "prior_52w_high": 57.94,
    "mfe_pct": 12.9,
-   "mae_pct": -0.19,
-   "days_followed": 18,
+   "mae_pct": -2.83,
+   "days_followed": 21,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-13",
@@ -87780,7 +87794,7 @@
    "prior_52w_high": 119.98,
    "mfe_pct": 4.43,
    "mae_pct": -10.01,
-   "days_followed": 18,
+   "days_followed": 21,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-01",
@@ -87865,8 +87879,8 @@
    ],
    "prior_52w_high": 34.58,
    "mfe_pct": 9.15,
-   "mae_pct": -4.87,
-   "days_followed": 18,
+   "mae_pct": -6.61,
+   "days_followed": 21,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-27",
@@ -87958,7 +87972,7 @@
    "prior_52w_high": 52.15,
    "mfe_pct": 5.83,
    "mae_pct": -12.16,
-   "days_followed": 17,
+   "days_followed": 20,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-31",
@@ -88046,7 +88060,7 @@
    "prior_52w_high": 493.57,
    "mfe_pct": 6.38,
    "mae_pct": -1.74,
-   "days_followed": 17,
+   "days_followed": 20,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-01",
@@ -88137,9 +88151,9 @@
     "\ud83d\udd25 MARKET LEADER"
    ],
    "prior_52w_high": 33.41,
-   "mfe_pct": 7.54,
+   "mfe_pct": 11.02,
    "mae_pct": -5.13,
-   "days_followed": 16,
+   "days_followed": 19,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-20",
@@ -88230,7 +88244,7 @@
    "prior_52w_high": 184.0,
    "mfe_pct": 22.43,
    "mae_pct": -3.5,
-   "days_followed": 16,
+   "days_followed": 19,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-27",
@@ -88319,8 +88333,8 @@
    ],
    "prior_52w_high": 382.34,
    "mfe_pct": 0.97,
-   "mae_pct": -12.66,
-   "days_followed": 16,
+   "mae_pct": -15.58,
+   "days_followed": 19,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-31",
@@ -88409,8 +88423,8 @@
    ],
    "prior_52w_high": 213.8,
    "mfe_pct": 3.01,
-   "mae_pct": -5.03,
-   "days_followed": 16,
+   "mae_pct": -7.6,
+   "days_followed": 19,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -88496,8 +88510,8 @@
    ],
    "prior_52w_high": 352.79,
    "mfe_pct": 4.84,
-   "mae_pct": -3.17,
-   "days_followed": 16,
+   "mae_pct": -7.1,
+   "days_followed": 19,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -88580,9 +88594,9 @@
     "\ud83d\udca7 Dry vs Prev Day (52%)"
    ],
    "prior_52w_high": 133.11,
-   "mfe_pct": 40.48,
+   "mfe_pct": 41.06,
    "mae_pct": -8.73,
-   "days_followed": 16,
+   "days_followed": 19,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-18",
@@ -88671,7 +88685,7 @@
    "prior_52w_high": 34.82,
    "mfe_pct": 3.79,
    "mae_pct": -31.96,
-   "days_followed": 15,
+   "days_followed": 18,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-18",
@@ -88758,7 +88772,7 @@
    "prior_52w_high": 251.63,
    "mfe_pct": 6.96,
    "mae_pct": -4.93,
-   "days_followed": 15,
+   "days_followed": 18,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-24",
@@ -88847,8 +88861,8 @@
    ],
    "prior_52w_high": 91.96,
    "mfe_pct": 2.88,
-   "mae_pct": -6.4,
-   "days_followed": 15,
+   "mae_pct": -8.57,
+   "days_followed": 18,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-21",
@@ -88929,7 +88943,14 @@
     "\ud83c\udfaf HUGGING 10MA",
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
-   "outcome": "nodata"
+   "prior_52w_high": 182.19,
+   "mfe_pct": 2.01,
+   "mae_pct": -19.15,
+   "days_followed": 18,
+   "outcome": "loss",
+   "same_bar_ambiguous": false,
+   "resolve_date": "2026-09-01",
+   "days_to_resolve": 11
   },
   {
    "ticker": "ZETA",
@@ -89013,7 +89034,7 @@
    "prior_52w_high": 29.89,
    "mfe_pct": 12.21,
    "mae_pct": -7.28,
-   "days_followed": 14,
+   "days_followed": 17,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-27",
@@ -89100,8 +89121,8 @@
    ],
    "prior_52w_high": 35.0,
    "mfe_pct": -0.03,
-   "mae_pct": -24.61,
-   "days_followed": 14,
+   "mae_pct": -26.04,
+   "days_followed": 17,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-27",
@@ -89190,7 +89211,7 @@
    "prior_52w_high": 19.05,
    "mfe_pct": 1.91,
    "mae_pct": -10.23,
-   "days_followed": 14,
+   "days_followed": 17,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-19",
@@ -89277,8 +89298,8 @@
    ],
    "prior_52w_high": 29.99,
    "mfe_pct": 3.76,
-   "mae_pct": -12.35,
-   "days_followed": 14,
+   "mae_pct": -34.01,
+   "days_followed": 17,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-27",
@@ -89369,8 +89390,8 @@
    ],
    "prior_52w_high": 12.15,
    "mfe_pct": 4.75,
-   "mae_pct": -13.07,
-   "days_followed": 13,
+   "mae_pct": -14.07,
+   "days_followed": 16,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-24",
@@ -89462,8 +89483,8 @@
    ],
    "prior_52w_high": 234.6,
    "mfe_pct": 8.05,
-   "mae_pct": -3.78,
-   "days_followed": 12,
+   "mae_pct": -5.76,
+   "days_followed": 15,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-27",
@@ -89553,7 +89574,7 @@
    "prior_52w_high": 55.66,
    "mfe_pct": 5.74,
    "mae_pct": -2.9,
-   "days_followed": 12,
+   "days_followed": 15,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-21",
@@ -89642,7 +89663,7 @@
    "prior_52w_high": 28.23,
    "mfe_pct": -0.61,
    "mae_pct": -9.83,
-   "days_followed": 12,
+   "days_followed": 15,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-31",
@@ -89734,7 +89755,7 @@
    "prior_52w_high": 96.07,
    "mfe_pct": 25.67,
    "mae_pct": -8.32,
-   "days_followed": 11,
+   "days_followed": 14,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-26",
@@ -89823,8 +89844,8 @@
    ],
    "prior_52w_high": 52.79,
    "mfe_pct": 1.78,
-   "mae_pct": -4.61,
-   "days_followed": 11,
+   "mae_pct": -6.85,
+   "days_followed": 14,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -89910,7 +89931,7 @@
    "prior_52w_high": 40.22,
    "mfe_pct": 3.26,
    "mae_pct": -12.12,
-   "days_followed": 11,
+   "days_followed": 14,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-01",
@@ -89999,7 +90020,7 @@
    "prior_52w_high": 847.0,
    "mfe_pct": 2.94,
    "mae_pct": -6.67,
-   "days_followed": 10,
+   "days_followed": 13,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-02",
@@ -90083,7 +90104,7 @@
    "prior_52w_high": 52.38,
    "mfe_pct": 29.97,
    "mae_pct": -6.08,
-   "days_followed": 10,
+   "days_followed": 13,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-02",
@@ -90172,7 +90193,7 @@
    "prior_52w_high": 17.08,
    "mfe_pct": 16.92,
    "mae_pct": -3.14,
-   "days_followed": 10,
+   "days_followed": 13,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-26",
@@ -90260,8 +90281,8 @@
    ],
    "prior_52w_high": 13.96,
    "mfe_pct": 4.95,
-   "mae_pct": -9.94,
-   "days_followed": 9,
+   "mae_pct": -12.2,
+   "days_followed": 12,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-28",
@@ -90346,7 +90367,7 @@
    "prior_52w_high": 82.42,
    "mfe_pct": 9.99,
    "mae_pct": -4.23,
-   "days_followed": 9,
+   "days_followed": 12,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -90432,13 +90453,13 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 45.66,
-   "mfe_pct": 3.82,
+   "mfe_pct": 6.05,
    "mae_pct": -6.92,
-   "days_followed": 9,
-   "outcome": "open",
+   "days_followed": 12,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-09-10",
+   "days_to_resolve": 11
   },
   {
    "ticker": "CRGY",
@@ -90519,9 +90540,9 @@
     "\u26a0\ufe0f Wide Stop (Size Down!)"
    ],
    "prior_52w_high": 14.29,
-   "mfe_pct": 5.79,
+   "mfe_pct": 6.77,
    "mae_pct": -4.87,
-   "days_followed": 9,
+   "days_followed": 12,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-02",
@@ -90608,9 +90629,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 98.39,
-   "mfe_pct": 14.49,
+   "mfe_pct": 16.84,
    "mae_pct": -4.76,
-   "days_followed": 9,
+   "days_followed": 12,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-27",
@@ -90700,8 +90721,8 @@
    ],
    "prior_52w_high": 58.67,
    "mfe_pct": -0.24,
-   "mae_pct": -14.69,
-   "days_followed": 9,
+   "mae_pct": -17.56,
+   "days_followed": 12,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-04",
@@ -90792,8 +90813,8 @@
    ],
    "prior_52w_high": 41.14,
    "mfe_pct": 3.1,
-   "mae_pct": -11.06,
-   "days_followed": 8,
+   "mae_pct": -15.4,
+   "days_followed": 11,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-31",
@@ -90882,12 +90903,12 @@
    ],
    "prior_52w_high": 242.8,
    "mfe_pct": 0.75,
-   "mae_pct": -6.84,
-   "days_followed": 8,
-   "outcome": "open",
+   "mae_pct": -8.2,
+   "days_followed": 11,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-09-11",
+   "days_to_resolve": 11
   },
   {
    "ticker": "FRPT",
@@ -90971,8 +90992,8 @@
    ],
    "prior_52w_high": 86.0,
    "mfe_pct": -2.28,
-   "mae_pct": -11.31,
-   "days_followed": 8,
+   "mae_pct": -16.35,
+   "days_followed": 11,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-08-31",
@@ -91059,12 +91080,12 @@
    ],
    "prior_52w_high": 85.84,
    "mfe_pct": -1.05,
-   "mae_pct": -7.67,
-   "days_followed": 7,
-   "outcome": "open",
+   "mae_pct": -9.91,
+   "days_followed": 10,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-09-09",
+   "days_to_resolve": 8
   },
   {
    "ticker": "XOM",
@@ -91146,9 +91167,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 176.41,
-   "mfe_pct": 2.81,
+   "mfe_pct": 3.87,
    "mae_pct": -3.61,
-   "days_followed": 7,
+   "days_followed": 10,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -91236,13 +91257,13 @@
     "\ud83d\udca7 Dry vs Prev Day (60%)"
    ],
    "prior_52w_high": 14.0,
-   "mfe_pct": -0.36,
+   "mfe_pct": 3.86,
    "mae_pct": -7.36,
-   "days_followed": 6,
-   "outcome": "open",
+   "days_followed": 9,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-09-09",
+   "days_to_resolve": 7
   },
   {
    "ticker": "VG",
@@ -91321,9 +91342,9 @@
     "\ud83d\udca7 VOODOO DAY"
    ],
    "prior_52w_high": 17.62,
-   "mfe_pct": 2.78,
+   "mfe_pct": 8.41,
    "mae_pct": -3.32,
-   "days_followed": 6,
+   "days_followed": 9,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -91408,8 +91429,8 @@
    ],
    "prior_52w_high": 30.62,
    "mfe_pct": 8.03,
-   "mae_pct": -4.14,
-   "days_followed": 6,
+   "mae_pct": -10.27,
+   "days_followed": 9,
    "outcome": "win",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-02",
@@ -91491,9 +91512,9 @@
     "\u26a0\ufe0f Wide Stop (Size Down!)"
    ],
    "prior_52w_high": 38.77,
-   "mfe_pct": -4.27,
+   "mfe_pct": -4.17,
    "mae_pct": -14.06,
-   "days_followed": 5,
+   "days_followed": 8,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-01",
@@ -91580,9 +91601,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 285.67,
-   "mfe_pct": 1.85,
+   "mfe_pct": 1.9,
    "mae_pct": -4.6,
-   "days_followed": 5,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -91670,12 +91691,12 @@
    ],
    "prior_52w_high": 129.14,
    "mfe_pct": -1.59,
-   "mae_pct": -6.12,
-   "days_followed": 5,
-   "outcome": "open",
+   "mae_pct": -10.36,
+   "days_followed": 8,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-09-10",
+   "days_to_resolve": 7
   },
   {
    "ticker": "IAG",
@@ -91756,7 +91777,7 @@
    "prior_52w_high": 24.87,
    "mfe_pct": 1.5,
    "mae_pct": -6.96,
-   "days_followed": 5,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -91843,7 +91864,7 @@
    "prior_52w_high": 13.85,
    "mfe_pct": 3.96,
    "mae_pct": -6.47,
-   "days_followed": 5,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -91925,8 +91946,8 @@
    ],
    "prior_52w_high": 124.0,
    "mfe_pct": 2.29,
-   "mae_pct": -4.77,
-   "days_followed": 5,
+   "mae_pct": -7.03,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -92011,9 +92032,9 @@
     "\ud83c\udf00 TIGHT FLAG"
    ],
    "prior_52w_high": 51.16,
-   "mfe_pct": -2.31,
+   "mfe_pct": -0.22,
    "mae_pct": -7.94,
-   "days_followed": 5,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -92100,9 +92121,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 306.25,
-   "mfe_pct": 0.88,
-   "mae_pct": -4.14,
-   "days_followed": 5,
+   "mfe_pct": 1.57,
+   "mae_pct": -4.7,
+   "days_followed": 8,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -92185,8 +92206,8 @@
    ],
    "prior_52w_high": 285.5,
    "mfe_pct": -2.32,
-   "mae_pct": -16.25,
-   "days_followed": 5,
+   "mae_pct": -19.57,
+   "days_followed": 8,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-04",
@@ -92275,8 +92296,8 @@
    ],
    "prior_52w_high": 94.75,
    "mfe_pct": 0.88,
-   "mae_pct": -5.11,
-   "days_followed": 4,
+   "mae_pct": -6.77,
+   "days_followed": 7,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -92365,8 +92386,8 @@
    ],
    "prior_52w_high": 37.327,
    "mfe_pct": 1.86,
-   "mae_pct": -12.56,
-   "days_followed": 3,
+   "mae_pct": -31.09,
+   "days_followed": 6,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-08",
@@ -92456,13 +92477,13 @@
     "\u26a0\ufe0f Wide Stop (Size Down!)"
    ],
    "prior_52w_high": 153.0,
-   "mfe_pct": -0.43,
+   "mfe_pct": 1.94,
    "mae_pct": -4.28,
-   "days_followed": 2,
-   "outcome": "open",
+   "days_followed": 5,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-09-10",
+   "days_to_resolve": 4
   },
   {
    "ticker": "APPN",
@@ -92545,8 +92566,8 @@
    ],
    "prior_52w_high": 46.059,
    "mfe_pct": -1.44,
-   "mae_pct": -16.78,
-   "days_followed": 2,
+   "mae_pct": -18.81,
+   "days_followed": 5,
    "outcome": "loss",
    "same_bar_ambiguous": false,
    "resolve_date": "2026-09-08",
@@ -92634,13 +92655,13 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 214.71,
-   "mfe_pct": 1.59,
+   "mfe_pct": 3.54,
    "mae_pct": -0.37,
-   "days_followed": 1,
-   "outcome": "open",
+   "days_followed": 4,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-09-09",
+   "days_to_resolve": 2
   },
   {
    "ticker": "NEM",
@@ -92722,9 +92743,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 135.29,
-   "mfe_pct": 0.83,
-   "mae_pct": -2.07,
-   "days_followed": 1,
+   "mfe_pct": 1.18,
+   "mae_pct": -4.05,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -92810,9 +92831,9 @@
     "\ud83d\udca7 Dry vs Prev Day (53%)"
    ],
    "prior_52w_high": 38.94,
-   "mfe_pct": 3.25,
+   "mfe_pct": 4.43,
    "mae_pct": 0.11,
-   "days_followed": 1,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -92899,9 +92920,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 23.29,
-   "mfe_pct": 0.29,
-   "mae_pct": -2.41,
-   "days_followed": 1,
+   "mfe_pct": 2.24,
+   "mae_pct": -5.89,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -92989,9 +93010,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 43.62,
-   "mfe_pct": -0.34,
-   "mae_pct": -2.37,
-   "days_followed": 1,
+   "mfe_pct": 0.13,
+   "mae_pct": -5.36,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -93077,13 +93098,13 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 310.5,
-   "mfe_pct": -4.81,
-   "mae_pct": -7.4,
-   "days_followed": 1,
-   "outcome": "open",
+   "mfe_pct": -4.76,
+   "mae_pct": -9.48,
+   "days_followed": 4,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-09-09",
+   "days_to_resolve": 2
   },
   {
    "ticker": "AR",
@@ -93166,8 +93187,8 @@
    ],
    "prior_52w_high": 45.75,
    "mfe_pct": 0.58,
-   "mae_pct": -2.18,
-   "days_followed": 1,
+   "mae_pct": -4.13,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -93255,13 +93276,13 @@
     "\ud83d\udca7 Dry vs Prev Day (54%)"
    ],
    "prior_52w_high": 16.78,
-   "mfe_pct": -1.9,
-   "mae_pct": -5.46,
-   "days_followed": 1,
-   "outcome": "open",
+   "mfe_pct": -1.52,
+   "mae_pct": -8.76,
+   "days_followed": 4,
+   "outcome": "loss",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-09-10",
+   "days_to_resolve": 3
   },
   {
    "ticker": "PTEN",
@@ -93342,13 +93363,13 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 13.31,
-   "mfe_pct": 3.7,
+   "mfe_pct": 6.44,
    "mae_pct": 0.4,
-   "days_followed": 1,
-   "outcome": "open",
+   "days_followed": 4,
+   "outcome": "win",
    "same_bar_ambiguous": false,
-   "resolve_date": null,
-   "days_to_resolve": null
+   "resolve_date": "2026-09-10",
+   "days_to_resolve": 3
   },
   {
    "ticker": "B",
@@ -93430,9 +93451,9 @@
     "\u26a0\ufe0f Wide Stop (Size Down!)"
    ],
    "prior_52w_high": 54.69,
-   "mfe_pct": -1.3,
-   "mae_pct": -3.11,
-   "days_followed": 1,
+   "mfe_pct": -0.22,
+   "mae_pct": -5.32,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -93515,9 +93536,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 255.24,
-   "mfe_pct": 0.69,
-   "mae_pct": -2.23,
-   "days_followed": 1,
+   "mfe_pct": 1.18,
+   "mae_pct": -5.43,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -93604,9 +93625,9 @@
     "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
    ],
    "prior_52w_high": 26.19,
-   "mfe_pct": -2.27,
-   "mae_pct": -4.83,
-   "days_followed": 1,
+   "mfe_pct": -2.14,
+   "mae_pct": -6.49,
+   "days_followed": 4,
    "outcome": "open",
    "same_bar_ambiguous": false,
    "resolve_date": null,
@@ -93687,6 +93708,578 @@
     "\u26a0\ufe0f EXTENDED PIVOT",
     "\ud83c\udfaf HUGGING 10MA",
     "\ud83c\udf00 TIGHT FLAG",
+    "\u26a0\ufe0f Wide Stop (Size Down!)"
+   ],
+   "prior_52w_high": 18.98,
+   "mfe_pct": -3.02,
+   "mae_pct": -9.3,
+   "days_followed": 3,
+   "outcome": "loss",
+   "same_bar_ambiguous": false,
+   "resolve_date": "2026-09-11",
+   "days_to_resolve": 3
+  },
+  {
+   "ticker": "NE",
+   "pick_date": "2026-09-11",
+   "tier": "A-",
+   "entry": 45.76,
+   "loss_line": 42.0992,
+   "meta_score": 83.5,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 0,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 78,
+   "ind_rs": 85,
+   "rs_new_high": false,
+   "sector": "Industrial Services",
+   "theme": "Contract Drilling",
+   "ind_name": "Oil & Gas Drilling",
+   "is_htf": false,
+   "power_score": 5.7,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 3,
+   "ants_3m_peak": 1,
+   "ants_rs_rising": false,
+   "adr": 3.46,
+   "adr_basis": "adrp20",
+   "dist_52w": 17.6,
+   "at_high": false,
+   "nh_1m": 0,
+   "nh_3m": 0,
+   "days_since_high": 6,
+   "status_labels": [
+    "\ud83d\udee1\ufe0f MA Cluster (Premium)",
+    "\u26a0\ufe0f EXTENDED PIVOT",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "EMBJ",
+   "pick_date": "2026-09-11",
+   "tier": "A-",
+   "entry": 76.61,
+   "loss_line": 70.4812,
+   "meta_score": 74.7,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 10,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 82,
+   "ind_rs": 20,
+   "rs_new_high": false,
+   "sector": "Electronic Technology",
+   "theme": "Aerospace & Defense",
+   "ind_name": "Aerospace & Defense",
+   "is_htf": false,
+   "power_score": 21.0,
+   "ants_label": "MOM",
+   "ants_level": 1,
+   "ants_ok": true,
+   "ants_3m_days": 1,
+   "ants_3m_peak": 1,
+   "ants_rs_rising": true,
+   "adr": 2.44,
+   "adr_basis": "adrp20",
+   "dist_52w": 6.5,
+   "at_high": false,
+   "nh_1m": 0,
+   "nh_3m": 0,
+   "days_since_high": 16,
+   "status_labels": [
+    "\ud83d\udee1\ufe0f MA Cluster (Premium)",
+    "\u26a1 STRONG MOMENTUM",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK",
+    "\ud83d\udca7 Dry vs Prev Day (50%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "NTR",
+   "pick_date": "2026-09-11",
+   "tier": "A-",
+   "entry": 79.75,
+   "loss_line": 73.37,
+   "meta_score": 72.2,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 0,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 83,
+   "ind_rs": 46,
+   "rs_new_high": false,
+   "sector": "Process Industries",
+   "theme": "Chemicals: Agricultural",
+   "ind_name": "Agricultural Inputs",
+   "is_htf": false,
+   "power_score": 15.2,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 2,
+   "ants_3m_peak": 1,
+   "ants_rs_rising": true,
+   "adr": 2.68,
+   "adr_basis": "adrp20",
+   "dist_52w": 8.1,
+   "at_high": false,
+   "nh_1m": 0,
+   "nh_3m": 0,
+   "days_since_high": 5,
+   "status_labels": [
+    "\u26a0\ufe0f Squat (Wait for tightening)",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "SDRL",
+   "pick_date": "2026-09-11",
+   "tier": "A-",
+   "entry": 49.22,
+   "loss_line": 45.2824,
+   "meta_score": 71.1,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 3,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 0,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 82,
+   "ind_rs": 85,
+   "rs_new_high": false,
+   "sector": "Industrial Services",
+   "theme": "Contract Drilling",
+   "ind_name": "Oil & Gas Drilling",
+   "is_htf": false,
+   "power_score": 11.8,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 0,
+   "ants_3m_peak": 0,
+   "ants_rs_rising": true,
+   "adr": 3.4,
+   "adr_basis": "adrp20",
+   "dist_52w": 13.6,
+   "at_high": false,
+   "nh_1m": 0,
+   "nh_3m": 0,
+   "days_since_high": 6,
+   "status_labels": [
+    "\ud83d\udee1\ufe0f MA Cluster (Premium)",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "OXY",
+   "pick_date": "2026-09-11",
+   "tier": "A-",
+   "entry": 61.59,
+   "loss_line": 56.6628,
+   "meta_score": 68.6,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 0,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 15,
+     "max": 15
+    }
+   },
+   "rs_rating": 79,
+   "ind_rs": 83,
+   "rs_new_high": false,
+   "sector": "Energy Minerals",
+   "theme": "Integrated Oil",
+   "ind_name": "Oil & Gas E&P",
+   "is_htf": false,
+   "power_score": 10.5,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 0,
+   "ants_3m_peak": 0,
+   "ants_rs_rising": true,
+   "adr": 2.08,
+   "adr_basis": "adrp20",
+   "dist_52w": 8.9,
+   "at_high": false,
+   "nh_1m": 0,
+   "nh_3m": 0,
+   "days_since_high": 15,
+   "status_labels": [
+    "\ud83d\udee1\ufe0f MA Cluster (Premium)",
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udee1\ufe0f ASYMMETRIC RISK"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "VET",
+   "pick_date": "2026-09-11",
+   "tier": "A-",
+   "entry": 13.38,
+   "loss_line": 12.3096,
+   "meta_score": 56.0,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 3,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 10,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 10,
+     "max": 15
+    }
+   },
+   "rs_rating": 88,
+   "ind_rs": 83,
+   "rs_new_high": false,
+   "sector": "Energy Minerals",
+   "theme": "Oil & Gas Production",
+   "ind_name": "Oil & Gas E&P",
+   "is_htf": false,
+   "power_score": 23.4,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 0,
+   "ants_3m_peak": 0,
+   "ants_rs_rising": true,
+   "adr": 2.99,
+   "adr_basis": "adrp20",
+   "dist_52w": 10.7,
+   "at_high": false,
+   "nh_1m": 0,
+   "nh_3m": 0,
+   "days_since_high": 1,
+   "status_labels": [
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udca7 Dry vs Prev Day (62%)"
+   ],
+   "outcome": "nodata"
+  },
+  {
+   "ticker": "VIST",
+   "pick_date": "2026-09-11",
+   "tier": "A-",
+   "entry": 78.5,
+   "loss_line": 72.22,
+   "meta_score": 36.7,
+   "meta_components": {
+    "Trend": {
+     "pts": 5,
+     "max": 15
+    },
+    "Proximity": {
+     "pts": 7,
+     "max": 10
+    },
+    "10MA Quality": {
+     "pts": 12,
+     "max": 15
+    },
+    "Vol Contraction": {
+     "pts": 0,
+     "max": 15
+    },
+    "Vol Expansion": {
+     "pts": 0,
+     "max": 10
+    },
+    "Candle": {
+     "pts": 0,
+     "max": 10
+    },
+    "Base Quality": {
+     "pts": 15,
+     "max": 15
+    },
+    "RS": {
+     "pts": 5,
+     "max": 15
+    },
+    "Volatility": {
+     "pts": 0,
+     "max": 10
+    },
+    "Supply Shock": {
+     "pts": 5,
+     "max": 10
+    },
+    "Risk": {
+     "pts": 10,
+     "max": 15
+    }
+   },
+   "rs_rating": 88,
+   "ind_rs": 83,
+   "rs_new_high": false,
+   "sector": "Energy Minerals",
+   "theme": "Oil & Gas Production",
+   "ind_name": "Oil & Gas E&P",
+   "is_htf": false,
+   "power_score": 23.0,
+   "ants_label": "NONE",
+   "ants_level": 0,
+   "ants_ok": true,
+   "ants_3m_days": 0,
+   "ants_3m_peak": 0,
+   "ants_rs_rising": true,
+   "adr": 3.76,
+   "adr_basis": "adrp20",
+   "dist_52w": 6.3,
+   "at_high": false,
+   "nh_1m": 0,
+   "nh_3m": 0,
+   "days_since_high": 1,
+   "status_labels": [
+    "\ud83c\udfaf HUGGING 10MA",
+    "\ud83d\udca7 Dry vs Prev Day (49%)",
     "\u26a0\ufe0f Wide Stop (Size Down!)"
    ],
    "outcome": "nodata"
