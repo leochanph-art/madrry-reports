@@ -340,21 +340,39 @@ function etParts() {
     mins: hh * 60 + mm, hh: hh, mm: mm, ss: parseInt(p.second, 10) || 0 };
 }
 var OPEN_M = 9 * 60 + 30, CLOSE_M = 16 * 60; // 09:30–16:00 ET
-function inRTH(p) { p = p || etParts(); return p.dow >= 1 && p.dow <= 5 && p.mins >= OPEN_M && p.mins < CLOSE_M; }
-function elapsedRTH(p) { p = p || etParts(); return inRTH(p) ? p.mins - OPEN_M : (p.dow >= 1 && p.dow <= 5 && p.mins >= CLOSE_M ? 390 : 0); }
+function marketCalendar() { return (typeof S !== 'undefined' && S.data && S.data.calendar) || null; }
+function calendarCovered(day) {
+  var c = marketCalendar();
+  return !c || c.covered_years.indexOf(+day.slice(0, 4)) >= 0;
+}
+function tradingDate(day) {
+  var d = new Date(day + 'T00:00:00Z'), c = marketCalendar();
+  return calendarCovered(day) && d.getUTCDay() > 0 && d.getUTCDay() < 6 &&
+    (!c || c.holidays.indexOf(day) < 0);
+}
+function closeMinute(day) { var c = marketCalendar(); return c && c.early_closes.indexOf(day) >= 0 ? 13 * 60 : CLOSE_M; }
+function shiftDate(day, n) { var d = new Date(day + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function inRTH(p) { p = p || etParts(); return tradingDate(p.date) && p.mins >= OPEN_M && p.mins < closeMinute(p.date); }
+function elapsedRTH(p) { p = p || etParts(); return tradingDate(p.date) ? Math.max(0, Math.min(p.mins, closeMinute(p.date)) - OPEN_M) : 0; }
 function fmtDur(m) { var h = Math.floor(m / 60), mm = m % 60; return h > 0 ? h + 'h ' + mm + 'm' : mm + 'm'; }
 function nextOpenTxt(p) {
   p = p || etParts();
-  if (p.dow >= 1 && p.dow <= 5 && p.mins < OPEN_M) return fmtDur(OPEN_M - p.mins);
-  var d = 1; while (true) { var nd = (p.dow + d) % 7; if (nd >= 1 && nd <= 5) break; d++; if (d > 7) break; }
-  return fmtDur(d * 1440 - p.mins + OPEN_M);
+  if (tradingDate(p.date) && p.mins < OPEN_M) return fmtDur(OPEN_M - p.mins);
+  for (var n = 1; n <= 14; n++) {
+    var day = shiftDate(p.date, n);
+    if (!calendarCovered(day)) return 'calendar unavailable';
+    if (tradingDate(day)) return fmtDur(n * 1440 - p.mins + OPEN_M);
+  }
+  return 'calendar unavailable';
 }
-function lastUSWeekday() { // most recent US weekday, as YYYY-MM-DD in ET
-  var p = etParts();
-  var dt = new Date(Date.UTC(+p.date.slice(0, 4), +p.date.slice(5, 7) - 1, +p.date.slice(8, 10)));
-  var back = p.dow === 0 ? 2 : (p.dow === 6 ? 1 : 0);
-  dt.setUTCDate(dt.getUTCDate() - back);
-  return dt.toISOString().slice(0, 10);
+function lastUSWeekday() { // latest COMPLETED US trading session
+  var p = etParts(), day = p.date;
+  if (p.mins < closeMinute(day)) day = shiftDate(day, -1);
+  for (var i = 0; i < 14; i++, day = shiftDate(day, -1)) {
+    if (!calendarCovered(day)) return '';
+    if (tradingDate(day)) return day;
+  }
+  return '';
 }
 function etClockStr(p) { p = p || etParts();
   function z(n) { return (n < 10 ? '0' : '') + n; }
@@ -493,9 +511,10 @@ function normTicker(raw) {
 }
 function loadData() {
   fetchJSON('monitor_data.json', 15000).then(function (j) {
-    if (!j || Object.prototype.toString.call(j.tickers) !== '[object Array]' || !j.tickers.length)
-      throw new Error('monitor_data.json has no tickers');
+    if (!j || Object.prototype.toString.call(j.tickers) !== '[object Array]')
+      throw new Error('monitor_data.json has an invalid tickers list');
     var seen = {}, out = [];
+    S.byT = {};
     j.tickers.forEach(function (raw) {
       var d = normTicker(raw);
       if (d && !seen[d.t]) { seen[d.t] = 1; out.push(d); S.byT[d.t] = d; }
@@ -510,22 +529,26 @@ function loadData() {
     $('#dataErr').classList.add('hidden');
     renderStale(); renderScope(); renderStatus(); renderList(); renderFeed();
     schedulePoll(0); // immediate first poll if session allows
+    clearTimeout(S.dataTimer);
+    S.dataTimer = setTimeout(loadData, 300000); // keep an overnight-open page current
   }).catch(function (e) {
     var el = $('#dataErr');
     el.textContent = 'Could not load monitor_data.json (' + (e && e.message ? e.message : 'fetch failed') +
       '). It is exported by the morning pipeline — retrying in 60 s.';
     el.classList.remove('hidden');
-    setTimeout(loadData, 60000);
+    clearTimeout(S.dataTimer);
+    S.dataTimer = setTimeout(loadData, 60000);
   });
 }
 function renderStale() {
   var el = $('#staleBanner');
   if (!S.data) { el.classList.add('hidden'); return; }
   var asof = typeof S.data.asof === 'string' ? S.data.asof : '';
-  S.dataStale = !!asof && asof < lastUSWeekday();
+  var expected = lastUSWeekday();
+  S.dataStale = !asof || !expected || asof !== expected;
   if (S.dataStale) {
     el.innerHTML = '<b>DATA STALE</b> — setups are from <span class="mono">' + esc(asof) +
-      '</span> but the most recent US weekday is <span class="mono">' + lastUSWeekday() +
+      '</span> but the latest completed US trading session is <span class="mono">' + lastUSWeekday() +
       '</span>. Entries/stops may be outdated; the morning pipeline may not have run.';
     el.classList.remove('hidden');
   } else el.classList.add('hidden');
