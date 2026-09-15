@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "asof": "2026-09-14",
+  "generated_at": "2026-09-15T12:18:18.743244+00:00",
+  "sha256": "6ff2fce9e5a0e261f1fb0bb865489eed0b3c8de2740ee482f4dbf5a183a6bcf3",
+  "errors": 0,
+  "warnings": 0,
+  "market_asofs": {
+    "^IXIC": "2026-09-14",
+    "^NDX": "2026-09-14",
+    "^GSPC": "2026-09-14",
+    "IWM": "2026-09-14"
+  }
+}
