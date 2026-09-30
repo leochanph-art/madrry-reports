@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "asof": "2026-09-29",
-  "generated_at": "2026-09-30T03:30:33.565472+00:00",
-  "sha256": "41b76eac39cbaf6ce2f8de424fc6490372832e4d174c3761d5882336933f350d",
+  "generated_at": "2026-09-30T08:35:53.765853+00:00",
+  "sha256": "6bc5b4676a7a864b7c1b1fc2a482cdea6d123beb50685fb8d7994ccd7ac2344c",
   "errors": 0,
-  "warnings": 1,
+  "warnings": 0,
   "market_asofs": {
     "^IXIC": "2026-09-29",
     "^NDX": "2026-09-29",
