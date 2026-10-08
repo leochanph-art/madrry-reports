@@ -1,24 +1,14 @@
 {
   "schema_version": 1,
-  "asof": "2026-10-06",
-  "generated_at": "2026-10-07T00:21:50.697618+00:00",
-  "sha256": "d4c2daffc55b33bec6a7306b309dee175f1df47aae13877323d4ad02e04138cf",
+  "asof": "2026-10-07",
+  "generated_at": "2026-10-08T00:22:47.121954+00:00",
+  "sha256": "484d4767c73fac5a9a92dbd0b00bfc9cdb68084e58526c6e15c1dd30931c1295",
   "errors": 0,
   "warnings": 0,
   "market_asofs": {
-    "^IXIC": "2026-10-06",
-    "^NDX": "2026-10-06",
-    "^GSPC": "2026-10-06",
-    "IWM": "2026-10-06"
-  },
-  "feed_refreshed_at": "2026-10-07T22:09:33.194385+00:00",
-  "feed_asofs": {
-    "swing_consol": "2026-10-06",
-    "martin_scan": "2026-10-06",
-    "qulla_scan": "2026-10-06",
-    "ep_scan": "2026-10-06",
-    "vcp_scan": "2026-10-06",
-    "tighten_scan": "2026-10-06",
-    "trilogy_ready_to_buy": "2026-10-06"
+    "^IXIC": "2026-10-07",
+    "^NDX": "2026-10-07",
+    "^GSPC": "2026-10-07",
+    "IWM": "2026-10-07"
   }
 }
