@@ -2,7 +2,7 @@
   "schema_version": 1,
   "asof": "2026-10-26",
   "generated_at": "2026-10-27T00:22:44.684051+00:00",
-  "sha256": "beab22b11559e3b3dcae4b5d90421bcea69c50015e6dda64d915c7ce83985271",
+  "sha256": "1462ae4e55858ccccd84ad71747cad0c7da3a3110c81ebbf1c13b36dca793187",
   "errors": 0,
   "warnings": 0,
   "market_asofs": {
@@ -11,7 +11,7 @@
     "^GSPC": "2026-10-26",
     "IWM": "2026-10-26"
   },
-  "feed_refreshed_at": "2026-10-27T18:46:03.872322+00:00",
+  "feed_refreshed_at": "2026-10-27T20:41:34.499011+00:00",
   "feed_asofs": {
     "swing_consol": "2026-10-26",
     "martin_scan": "2026-10-26",
