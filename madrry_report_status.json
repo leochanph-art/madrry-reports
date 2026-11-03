@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
-  "asof": "2026-10-30",
-  "generated_at": "2026-10-31T00:24:57.352230+00:00",
-  "sha256": "9d73f99759b86ccec7c1382cd33a7278c198206d08ac10a570f02f506c0028bf",
+  "asof": "2026-11-02",
+  "generated_at": "2026-11-03T00:25:49.491070+00:00",
+  "sha256": "2e7cb75483632eb496e40d7c67d1cdc3ef860b234427dd32d0dd856a9debe4da",
   "errors": 0,
   "warnings": 0,
   "market_asofs": {
-    "^IXIC": "2026-10-30",
-    "^NDX": "2026-10-30",
-    "^GSPC": "2026-10-30",
-    "IWM": "2026-10-30"
+    "^IXIC": "2026-11-02",
+    "^NDX": "2026-11-02",
+    "^GSPC": "2026-11-02",
+    "IWM": "2026-11-02"
   },
-  "feed_refreshed_at": "2026-11-02T22:27:23.635921+00:00",
+  "feed_refreshed_at": "2026-11-03T02:59:41.986295+00:00",
   "feed_asofs": {
-    "swing_consol": "2026-10-30",
-    "martin_scan": "2026-10-30",
-    "qulla_scan": "2026-10-30",
-    "ep_scan": "2026-10-30",
-    "vcp_scan": "2026-10-30",
-    "tighten_scan": "2026-10-30",
-    "trilogy_ready_to_buy": "2026-10-30"
+    "swing_consol": "2026-11-02",
+    "martin_scan": "2026-11-02",
+    "qulla_scan": "2026-11-02",
+    "ep_scan": "2026-11-02",
+    "vcp_scan": "2026-11-02",
+    "tighten_scan": "2026-11-02",
+    "trilogy_ready_to_buy": "2026-11-02"
   }
 }
